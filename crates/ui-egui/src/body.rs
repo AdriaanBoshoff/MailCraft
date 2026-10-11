@@ -4,7 +4,8 @@
 //! drawn only when the message carries it, as an attachment or written into the body, and it
 //! could be decoded ([`Pictures`]); any other picture is an empty frame of the size it asks for,
 //! or a labelled placeholder when it asks for none. A picture stands in the line of text it is
-//! written in, or at one side of its paragraph when it asks to. Text is drawn in the font it
+//! written in, or at one side when it asks to, with what follows beside it until it ends. A
+//! border a style asks for is drawn round its paragraphs, its table or its cell. Text is drawn in the font it
 //! names when that font, or an open one of the same measures, is installed ([`Faces`]). Colours
 //! a message asks for are kept only where they stay readable on what is behind them. Sizes follow what Outlook Classic
 //! was seen to do with the same message (`docs/ui-parity.md`, "Message bodies").
@@ -15,8 +16,11 @@ use crate::theme::Tokens;
 use crate::{bold, font};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
-use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Shape, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
-use mailcraft_formats::rich::{self, Block, Doc, Float, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign};
+use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
+use mailcraft_formats::rich::{
+    self, Block, Doc, Edges, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
+};
+use std::sync::Arc;
 
 /// Size of text the message gives no size for: 12 points.
 const BODY_PX: f32 = 16.0;
@@ -51,6 +55,11 @@ const FLOAT_GAP: f32 = 8.0;
 const MIN_BESIDE: f32 = 120.0;
 /// Runs of a paragraph looked through for a picture that stands at one side.
 const MAX_FLOAT_SEARCH: usize = 256;
+/// Widest border line drawn, and most dashes drawn along one side of a border.
+const MAX_EDGE: u8 = 12;
+const MAX_DASHES: usize = 2048;
+/// A border colour this close to what is behind it is drawn in the reader's own.
+const EDGE_CONTRAST: f32 = 1.3;
 
 /// What drawing needs besides the document: the theme, the decoded pictures, and the colour
 /// behind the text being drawn (the pane, or a filled table cell).
@@ -74,19 +83,185 @@ pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, face
     blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface }, 0);
 }
 
+/// A picture standing at one side, with room beside it still to fill.
+#[derive(Clone, Copy)]
+struct Aside {
+    left: bool,
+    /// Room the picture takes at its side, with the gap to what stands beside it.
+    width: f32,
+    bottom: f32,
+}
+
+/// Paragraphs that follow one another inside one border: the border and how many they are.
+type Group<'a> = Option<(&'a Arc<Frame>, usize)>;
+
 fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
-    for (i, block) in list.iter().enumerate() {
-        match block {
-            Block::Para(p) => para(ui, p, look, i > 0),
-            Block::Rule => {
-                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 13.0), Sense::hover());
-                ui.painter().hline(rect.x_range(), rect.center().y, (1.0, look.t.text_faint));
-            }
-            Block::Table(table) => {
-                if i > 0 {
-                    ui.add_space(6.0);
+    let mut aside: Option<Aside> = None;
+    let mut i = 0usize;
+    while let Some(block) = list.get(i) {
+        let group: Group = match block {
+            Block::Para(p) => p.frame.as_ref().map(|frame| {
+                let same = |b: &Block| matches!(b, Block::Para(q) if q.frame.as_ref().is_some_and(|f| Arc::ptr_eq(f, frame)));
+                (frame, 1 + list.get(i + 1..).unwrap_or_default().iter().take_while(|b| same(b)).count())
+            }),
+            _ => None,
+        };
+        // A picture at the side ends where it ends, or where a paragraph asks to start below it.
+        if let Some(a) = aside
+            && (ui.cursor().top() >= a.bottom || matches!(block, Block::Para(p) if p.clear))
+        {
+            ui.add_space((a.bottom - ui.cursor().top()).max(0.0));
+            aside = None;
+        }
+        match aside {
+            None => aside = one(ui, list, i, group, look, depth, None).0,
+            Some(a) => {
+                // What follows the picture's paragraph stands beside the picture too.
+                let top = ui.cursor().top();
+                let full = ui.available_rect_before_wrap();
+                let (left, right) = if a.left { (full.left() + a.width, full.right()) } else { (full.left(), full.right() - a.width) };
+                let room = Rect::from_min_max(pos2(left, top), pos2(right.max(left + 8.0), top));
+                let mut child = ui.new_child(UiBuilder::new().id_salt(("beside", i)).max_rect(room));
+                child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                let (_, under) = one(&mut child, list, i, group, look, depth, Some(a.bottom));
+                ui.allocate_rect(Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(top))), Sense::hover());
+                // The lines of a paragraph that start below the picture go under it.
+                if let (Some(under), Block::Para(p)) = (under, block) {
+                    let (_, width) = self::room(ui, p);
+                    piece(ui, p, &under, look, Spot { left: 0.0, width, min_height: 0.0, marker: false });
+                    aside = None;
                 }
-                self::table(ui, table, look, depth);
+            }
+        }
+        i += group.map_or(1, |(_, count)| count.max(1));
+    }
+    if let Some(a) = aside {
+        ui.add_space((a.bottom - ui.cursor().top()).max(0.0));
+    }
+}
+
+/// Draw the block at `i`, or the paragraphs that share its border. `until` is where a picture
+/// standing at the side ends. Returns a picture this block leaves standing, and the runs of a
+/// paragraph that go under the picture it stood beside.
+fn one(ui: &mut Ui, list: &[Block], i: usize, group: Group, look: Look, depth: usize, until: Option<f32>) -> (Option<Aside>, Option<Vec<Run>>) {
+    match (list.get(i), group) {
+        (Some(Block::Para(_)), Some((frame, count))) => {
+            framed(ui, list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, look, i);
+            (None, None)
+        }
+        (Some(Block::Para(p)), None) => para(ui, p, look, i > 0, until),
+        (Some(Block::Rule), _) => {
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 13.0), Sense::hover());
+            ui.painter().hline(rect.x_range(), rect.center().y, (1.0, look.t.text_faint));
+            (None, None)
+        }
+        (Some(Block::Table(table)), _) => {
+            if i > 0 {
+                ui.add_space(6.0);
+            }
+            self::table(ui, table, look, depth);
+            (None, None)
+        }
+        (None, _) => (None, None),
+    }
+}
+
+/// Room a border takes inside its box: left and top, then right and bottom.
+fn frame_room(frame: &Frame) -> (Vec2, Vec2) {
+    let side = |i: usize| frame.edges.get(i).map_or(0.0, |e| f32::from(e.width.min(MAX_EDGE)));
+    let pad = vec2(f32::from(frame.padding.1.min(MAX_CELL_ROOM)), f32::from(frame.padding.0.min(MAX_CELL_ROOM)));
+    // Text does not touch a line beside it.
+    let clear = |w: f32, pad: f32| if w > 0.0 { w + pad.max(2.0) } else { pad };
+    (vec2(clear(side(3), pad.x), side(0) + pad.y), vec2(clear(side(1), pad.x), side(2) + pad.y))
+}
+
+/// Paragraphs inside one border.
+fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
+    if at > 0 && matches!(paras.first(), Some(Block::Para(p)) if p.gap) {
+        ui.add_space(9.0);
+    }
+    let top = ui.cursor().top();
+    let full = ui.available_rect_before_wrap();
+    let (near, far) = frame_room(frame);
+    let left = (full.left() + near.x).min(full.right());
+    let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0), top + near.y));
+    let mut child = ui.new_child(UiBuilder::new().id_salt(("framed", at)).max_rect(inside));
+    child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    for (k, block) in paras.iter().enumerate() {
+        if let Block::Para(p) = block {
+            // A picture at the side stays inside the border.
+            if let (Some(aside), _) = para(&mut child, p, look, k > 0, None) {
+                child.add_space((aside.bottom - child.cursor().top()).max(0.0));
+            }
+        }
+    }
+    let rect = Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(inside.top()) + far.y));
+    ui.allocate_rect(rect, Sense::hover());
+    edges(ui, rect, &frame.edges, look, look.text());
+}
+
+/// The lines of a border, drawn just inside `rect`. A side that names no colour, or one that
+/// would not be seen on what is behind it, is drawn in `unset`.
+fn edges(ui: &Ui, rect: Rect, edges: &Edges, look: Look, unset: Color32) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let seen = ui.clip_rect();
+    let painter = ui.painter();
+    for (side, edge) in edges.iter().enumerate() {
+        let w = f32::from(edge.width.min(MAX_EDGE)).min(rect.width()).min(rect.height());
+        if w <= 0.0 {
+            continue;
+        }
+        let color = edge.color.map(|c| Color32::from_rgb(c[0], c[1], c[2])).filter(|c| contrast(*c, look.on) >= EDGE_CONTRAST).unwrap_or(unset);
+        // The strip the line fills, and whether it runs across.
+        let (strip, across) = match side {
+            0 => (Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + w)), true),
+            1 => (Rect::from_min_max(pos2(rect.right() - w, rect.top()), rect.max), false),
+            2 => (Rect::from_min_max(pos2(rect.left(), rect.bottom() - w), rect.max), true),
+            _ => (Rect::from_min_max(rect.min, pos2(rect.left() + w, rect.bottom())), false),
+        };
+        match edge.line {
+            Line::Double if w >= 3.0 => {
+                // Two lines with as much room between them.
+                let thin = (w / 3.0).floor().max(1.0);
+                let (first, second) = if across {
+                    (
+                        Rect::from_min_max(strip.min, pos2(strip.right(), strip.top() + thin)),
+                        Rect::from_min_max(pos2(strip.left(), strip.bottom() - thin), strip.max),
+                    )
+                } else {
+                    (
+                        Rect::from_min_max(strip.min, pos2(strip.left() + thin, strip.bottom())),
+                        Rect::from_min_max(pos2(strip.right() - thin, strip.top()), strip.max),
+                    )
+                };
+                painter.rect_filled(first, 0.0, color);
+                painter.rect_filled(second, 0.0, color);
+            }
+            Line::Dashed | Line::Dotted => {
+                let mark = if edge.line == Line::Dashed { w * 3.0 } else { w };
+                let step = mark * 2.0;
+                let (start, end) = if across { (strip.left(), strip.right()) } else { (strip.top(), strip.bottom()) };
+                let (from, to) = if across { (seen.left(), seen.right()) } else { (seen.top(), seen.bottom()) };
+                // Only the marks that can be seen, keeping their places along the line.
+                let skipped = ((from - start) / step).floor().max(0.0);
+                let mut at = start + skipped * step;
+                let mut drawn = 0usize;
+                while at < end.min(to) && drawn < MAX_DASHES && step > 0.0 {
+                    let upto = (at + mark).min(end);
+                    let dash = if across {
+                        Rect::from_min_max(pos2(at, strip.top()), pos2(upto, strip.bottom()))
+                    } else {
+                        Rect::from_min_max(pos2(strip.left(), at), pos2(strip.right(), upto))
+                    };
+                    painter.rect_filled(dash, 0.0, color);
+                    at += step;
+                    drawn += 1;
+                }
+            }
+            Line::Solid | Line::Double => {
+                painter.rect_filled(strip, 0.0, color);
             }
         }
     }
@@ -159,11 +334,30 @@ fn frame(ui: &Ui, run: &Run, at: Rect, look: Look) {
     painter.galley(at.min + vec2(28.0, 5.0), galley, color);
 }
 
-fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool) {
+/// Draw a paragraph. `until` is where a picture already standing at the side ends: lines that
+/// start below it are not drawn but handed back, to go under the picture. A picture of the
+/// paragraph's own that is left standing past its text is handed back too.
+fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool, until: Option<f32>) -> (Option<Aside>, Option<Vec<Run>>) {
     if para.gap && after_another {
         ui.add_space(if matches!(para.kind, ParaKind::Heading(_)) { 12.0 } else { 9.0 });
     }
     let (_, width) = room(ui, para);
+    let whole = Spot { left: 0.0, width, min_height: 0.0, marker: true };
+    if let Some(until) = until {
+        let (job, ends, _) = job(ui, &para.runs, look, width, para.align);
+        let galley = ui.painter().layout_job(job);
+        return match lines_beside(&galley, until - ui.cursor().top()) {
+            Some(chars) => {
+                let (head, tail) = split(&para.runs, &ends, chars);
+                piece(ui, para, &head, look, whole);
+                (None, Some(tail))
+            }
+            None => {
+                piece(ui, para, &para.runs, look, whole);
+                (None, None)
+            }
+        };
+    }
     // The first picture that asks to stand at one side does, when there is room beside it.
     let aside = para.runs.iter().take(MAX_FLOAT_SEARCH).enumerate().find_map(|(i, run)| {
         let stand = (run.float != Float::None).then(|| shown(run, look.pictures)).flatten()?;
@@ -171,18 +365,33 @@ fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool) {
         (width - size.x - FLOAT_GAP >= MIN_BESIDE).then_some((i, stand, size))
     });
     match aside {
-        Some((at, stand, size)) => beside(ui, para, at, stand, size, look),
+        Some((at, stand, size)) => (beside(ui, para, at, stand, size, look), None),
         None => {
-            piece(ui, para, &para.runs, look, Spot { left: 0.0, width, min_height: 0.0, marker: true });
+            piece(ui, para, &para.runs, look, whole);
+            (None, None)
         }
     }
 }
 
+/// How many characters of a laid-out text stand in lines that start above `tall`; `None` when
+/// all of them do. The first line always does.
+fn lines_beside(galley: &egui::Galley, tall: f32) -> Option<usize> {
+    let mut chars = 0usize;
+    for (i, row) in galley.rows.iter().enumerate() {
+        if i > 0 && row.pos.y >= tall {
+            return Some(chars);
+        }
+        chars = chars.saturating_add(row.glyphs.len()).saturating_add(usize::from(row.ends_with_newline));
+    }
+    None
+}
+
 /// A paragraph with a picture at one side: the text stands beside the picture for as many lines
-/// as the picture is tall, and under it from there on.
-fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: Look) {
+/// as the picture is tall, and under it from there on. A picture taller than the paragraph's
+/// text is handed back as still standing: what follows the paragraph stands beside it too.
+fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: Look) -> Option<Aside> {
     let (inset, width) = room(ui, para);
-    let Some(run) = para.runs.get(at) else { return };
+    let run = para.runs.get(at)?;
     let rest: Vec<Run> = para.runs.iter().enumerate().filter(|(i, _)| *i != at).map(|(_, r)| r.clone()).collect();
     let narrow = width - size.x - FLOAT_GAP;
     let left = if run.float == Float::Left { size.x + FLOAT_GAP } else { 0.0 };
@@ -190,36 +399,30 @@ fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: L
     // Lay the text out beside the picture to learn where the picture ends.
     let (job, ends, _) = job(ui, &rest, look, narrow, para.align);
     let galley = ui.painter().layout_job(job);
-    let mut chars = 0usize;
-    let mut under = false;
-    for (i, row) in galley.rows.iter().enumerate() {
-        if i > 0 && row.pos.y >= size.y {
-            under = true;
-            break;
+    let rect = match lines_beside(&galley, size.y) {
+        Some(chars) => {
+            let (head, tail) = split(&rest, &ends, chars);
+            let rect = piece(ui, para, &head, look, Spot { left, width: narrow, min_height: size.y, marker: true });
+            piece(ui, para, &tail, look, Spot { left: 0.0, width, min_height: 0.0, marker: false });
+            rect
         }
-        chars = chars.saturating_add(row.glyphs.len()).saturating_add(usize::from(row.ends_with_newline));
-    }
-    let rect = if under {
-        let (head, tail) = split(&rest, &ends, chars);
-        let rect = piece(ui, para, &head, look, Spot { left, width: narrow, min_height: size.y, marker: true });
-        piece(ui, para, &tail, look, Spot { left: 0.0, width, min_height: 0.0, marker: false });
-        rect
-    } else {
-        piece(ui, para, &rest, look, Spot { left, width: narrow, min_height: size.y + FLOAT_GAP / 2.0, marker: true })
+        None => piece(ui, para, &rest, look, Spot { left, width: narrow, min_height: 0.0, marker: true }),
     };
+    let bottom = rect.top() + size.y + FLOAT_GAP / 2.0;
+    let standing = (bottom > ui.cursor().top()).then_some(Aside { left: run.float == Float::Left, width: inset + size.x + FLOAT_GAP, bottom });
 
     let x = rect.left() + inset + if run.float == Float::Right { width - size.x } else { 0.0 };
     let spot = Rect::from_min_size(pos2(x.round(), rect.top().round()), size);
-    if !ui.is_rect_visible(spot) {
-        return;
+    if ui.is_rect_visible(spot) {
+        picture(ui, run, stand, spot, look);
+        let id = ui.id().with(("aside", at, spot.min.x.to_bits(), spot.min.y.to_bits()));
+        let tip = tip(run, stand);
+        let response = ui.interact(spot, id, Sense::hover());
+        if !tip.is_empty() {
+            response.on_hover_text_at_pointer(tip);
+        }
     }
-    picture(ui, run, stand, spot, look);
-    let id = ui.id().with(("aside", at, spot.min.x.to_bits(), spot.min.y.to_bits()));
-    let tip = tip(run, stand);
-    let response = ui.interact(spot, id, Sense::hover());
-    if !tip.is_empty() {
-        response.on_hover_text_at_pointer(tip);
-    }
+    standing
 }
 
 /// Runs cut in two after `chars` characters of the text they are drawn as; `ends` is where each
@@ -480,14 +683,15 @@ fn section(run: &Run, look: Look) -> (String, TextFormat) {
         }
     }
     // The font the run names, when it is installed; otherwise the reader's own.
-    let named = s.family.as_deref().and_then(|list| look.faces.pick(list, s.bold));
+    let named = s.family.as_deref().and_then(|list| look.faces.pick(list, s.bold, s.italic));
+    // A font's own italic face is drawn as it is; without one, the upright face is slanted.
+    format.italics = named.as_ref().map_or(s.italic, |picked| picked.slant);
     format.font_id = match (named, s.mono, s.bold) {
-        (Some(family), ..) => FontId::new(px, family),
+        (Some(picked), ..) => FontId::new(px, picked.family),
         (None, true, _) => FontId::new(px, FontFamily::Monospace),
         (None, false, true) => bold(px),
         (None, false, false) => font(px),
     };
-    format.italics = s.italic;
     let (color, background) = colors(s.color, s.background, look);
     format.color = color;
     format.background = background;
@@ -559,7 +763,11 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
         let width = match block {
             Block::Para(p) => {
                 let (job, ..) = job(ui, &p.runs, look, f32::INFINITY, rich::Align::Left);
-                inset(p) + ui.painter().layout_job(job).size().x + 2.0
+                let border = p.frame.as_ref().map_or(0.0, |frame| {
+                    let (near, far) = frame_room(frame);
+                    near.x + far.x
+                });
+                inset(p) + ui.painter().layout_job(job).size().x + 2.0 + border
             }
             Block::Rule => 0.0,
             Block::Table(t) => match t.width {
@@ -567,7 +775,7 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
                 TableWidth::Percent(_) | TableWidth::Fill => UNMEASURED,
                 _ if depth < MAX_TABLE_DEPTH && t.columns() <= MAX_COLUMNS => {
                     let columns = natural_columns(ui, t, look, depth);
-                    columns.iter().sum::<f32>() + spacing(t) * (columns.len() as f32 + 1.0)
+                    columns.iter().sum::<f32>() + spacing(t) * (columns.len() as f32 + 1.0) + rim(t) * 2.0
                 }
                 _ => UNMEASURED,
             },
@@ -585,6 +793,11 @@ fn padding(table: &Table, cell: &rich::Cell) -> Vec2 {
     vec2(f32::from(horizontal.min(MAX_CELL_ROOM)), f32::from(vertical.min(MAX_CELL_ROOM)))
 }
 
+/// Room a table's own border takes on each side when it is thicker than a hair line.
+fn rim(table: &Table) -> f32 {
+    (table.frame.iter().map(|e| f32::from(e.width.min(MAX_EDGE))).fold(0.0, f32::max) - 1.0).max(0.0)
+}
+
 /// Room between the cells of a table.
 fn spacing(table: &Table) -> f32 {
     f32::from(table.spacing.min(MAX_CELL_ROOM))
@@ -594,15 +807,14 @@ fn spacing(table: &Table) -> f32 {
 /// room that is left to the others.
 fn shares(table: &Table, widths: &mut [f32], room: f32) {
     let mut asked = vec![0.0f32; widths.len()];
-    for row in table.rows.iter().take(MEASURED_ROWS) {
-        let mut col = 0usize;
-        for cell in row {
+    let places = table.places();
+    for (row, starts) in table.rows.iter().zip(&places).take(MEASURED_ROWS) {
+        for (cell, col) in row.iter().zip(starts) {
             if cell.span <= 1
-                && let Some(a) = asked.get_mut(col)
+                && let Some(a) = asked.get_mut(*col)
             {
                 *a = a.max(f32::from(cell.share.min(100)) / 100.0);
             }
-            col = col.saturating_add(usize::from(cell.span.max(1)));
         }
     }
     let claimed: f32 = asked.iter().sum();
@@ -633,9 +845,10 @@ fn natural_columns(ui: &Ui, table: &Table, look: Look, depth: usize) -> Vec<f32>
     let mut asked = vec![0.0f32; columns];
     let mut wanted = vec![MIN_COLUMN; columns];
     let mut wide: Vec<(usize, usize, f32)> = Vec::new();
-    for row in table.rows.iter().take(MEASURED_ROWS) {
-        let mut col = 0usize;
-        for cell in row {
+    let places = table.places();
+    for (row, starts) in table.rows.iter().zip(&places).take(MEASURED_ROWS) {
+        for (cell, col) in row.iter().zip(starts) {
+            let col = *col;
             let span = usize::from(cell.span.max(1));
             let on = cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
             let want = natural_width(ui, &cell.blocks, Look { on, ..look }, depth + 1) + padding(table, cell).x * 2.0;
@@ -649,7 +862,6 @@ fn natural_columns(ui: &Ui, table: &Table, look: Look, depth: usize) -> Vec<f32>
             } else {
                 wide.push((col, span, want.max(f32::from(cell.width))));
             }
-            col = col.saturating_add(span);
         }
     }
     if table.rows.len() > MEASURED_ROWS {
@@ -679,19 +891,22 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         return;
     }
     // A table is as wide as it asks to be, or as what it holds, and never wider than the room.
-    // Its cells stand apart by the table's spacing, which also runs round the outside.
+    // Its cells stand apart by the table's spacing, which also runs round the outside, inside
+    // the table's own border.
     let mut widths = natural_columns(ui, table, look, depth);
     let total: f32 = widths.iter().sum();
     let gaps = columns as f32 + 1.0;
+    let rim = rim(table);
     let target = match table.width {
         TableWidth::Pixels(w) => f32::from(w).min(available),
         TableWidth::Percent(share) => available * f32::from(share.clamp(1, 100)) / 100.0,
         TableWidth::Fill => available,
-        TableWidth::Content => (total + spacing(table) * gaps).min(available),
+        TableWidth::Content => (total + spacing(table) * gaps + rim * 2.0).min(available),
     };
+    let rim = rim.min(target / 4.0);
     // Spacing never takes more than half the table.
-    let gap = spacing(table).min(target / gaps / 2.0).max(0.0);
-    let cells = (target - gap * gaps).max(0.0);
+    let gap = spacing(table).min((target - rim * 2.0) / gaps / 2.0).max(0.0);
+    let cells = (target - rim * 2.0 - gap * gaps).max(0.0);
     if total > 0.0 && total.is_finite() {
         widths.iter_mut().for_each(|w| *w *= cells / total);
     } else {
@@ -705,74 +920,121 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         rich::Align::Center => ((available - target) / 2.0).max(0.0),
         rich::Align::Right => (available - target).max(0.0),
     };
-
-    let left = ui.cursor().left();
+    let room_left = ui.cursor().left();
+    let left = room_left + shift;
     let table_top = ui.cursor().top();
-    ui.add_space(gap);
-    for (r, row) in table.rows.iter().enumerate() {
-        let top = ui.cursor().top();
-        // Where each cell stands: its number, left edge, width and padding.
-        let mut placed: Vec<(usize, &rich::Cell, f32, f32, Vec2)> = Vec::with_capacity(row.len());
-        let mut x = left + shift + gap;
-        let mut col = 0usize;
-        for (c, cell) in row.iter().enumerate() {
-            let span = usize::from(cell.span.max(1));
-            let covered = widths.iter().skip(col).take(span);
+    let mut lefts: Vec<f32> = Vec::with_capacity(columns);
+    let mut x = left + rim + gap;
+    for w in &widths {
+        lefts.push(x);
+        x += w + gap;
+    }
+
+    // Where each cell stands: a cell may cover several columns, and several rows.
+    struct Slot<'a> {
+        row: usize,
+        /// The last row the cell covers.
+        upto: usize,
+        number: usize,
+        cell: &'a rich::Cell,
+        x: f32,
+        w: f32,
+        pad: Vec2,
+        /// How tall the cell is with what it holds.
+        tall: f32,
+    }
+    let count = table.rows.len();
+    let places = table.places();
+    let mut slots: Vec<Slot> = Vec::new();
+    for (r, (row, starts)) in table.rows.iter().zip(&places).enumerate() {
+        for (c, (cell, col)) in row.iter().zip(starts).enumerate() {
+            let Some(x) = lefts.get(*col).copied() else { continue };
+            let covered = widths.iter().skip(*col).take(usize::from(cell.span.max(1)));
             let w: f32 = covered.clone().sum::<f32>() + gap * (covered.count().max(1) - 1) as f32;
-            col = col.saturating_add(span);
             if w <= 0.0 {
                 continue;
             }
-            placed.push((c, cell, x, w, padding(table, cell)));
-            x += w + gap;
+            let upto = r.saturating_add(usize::from(cell.rows.max(1)) - 1).min(count.saturating_sub(1));
+            slots.push(Slot { row: r, upto, number: c, cell, x, w, pad: padding(table, cell), tall: 0.0 });
         }
-        let on = |cell: &rich::Cell| cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
-        let inside =
-            |x: f32, w: f32, pad: Vec2, down: f32| Rect::from_min_size(pos2(x + pad.x, top + pad.y + down), vec2((w - pad.x * 2.0).max(8.0), 0.0));
-        // Cells that do not start at the top are laid out once unseen, to learn how tall each is.
-        // Inside such an unseen pass nothing is seen anyway, so nothing is measured again.
-        let settle = ui.is_visible() && placed.len() > 1 && placed.iter().any(|(_, cell, ..)| cell.valign != VAlign::Top);
-        let mut tall: Vec<f32> = Vec::new();
-        if settle {
-            for (c, cell, x, w, pad) in &placed {
-                let mut child = ui.new_child(UiBuilder::new().id_salt(("cell size", r, *c)).max_rect(inside(*x, *w, *pad, 0.0)).invisible());
-                child.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                blocks(&mut child, &cell.blocks, Look { on: on(cell), ..look }, depth + 1);
-                tall.push(child.min_rect().height() + pad.y * 2.0);
+    }
+    let on = |cell: &rich::Cell| cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
+    let inside =
+        |slot: &Slot, top: f32| Rect::from_min_size(pos2(slot.x + slot.pad.x, top + slot.pad.y), vec2((slot.w - slot.pad.x * 2.0).max(8.0), 0.0));
+
+    // Every cell is laid out once unseen, to learn how tall it is: a row is as tall as its
+    // tallest cell, and a cell over several rows makes the last of them tall enough for it.
+    for slot in &mut slots {
+        let mut child = ui.new_child(UiBuilder::new().id_salt(("cell size", slot.row, slot.number)).max_rect(inside(slot, table_top)).invisible());
+        child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        blocks(&mut child, &slot.cell.blocks, Look { on: on(slot.cell), ..look }, depth + 1);
+        slot.tall = child.min_rect().height() + slot.pad.y * 2.0;
+    }
+    let mut heights = vec![0.0f32; count];
+    for slot in slots.iter().filter(|s| s.upto == s.row) {
+        if let Some(h) = heights.get_mut(slot.row) {
+            *h = h.max(slot.tall);
+        }
+    }
+    let mut reaching: Vec<&Slot> = slots.iter().filter(|s| s.upto > s.row).collect();
+    reaching.sort_by_key(|s| s.upto);
+    let mut reaching = reaching.into_iter().peekable();
+    // Where each row starts, below the first one's top.
+    let mut tops = vec![0.0f32; count];
+    let mut y = 0.0f32;
+    for r in 0..count {
+        if let Some(top) = tops.get_mut(r) {
+            *top = y;
+        }
+        while let Some(slot) = reaching.next_if(|s| s.upto <= r) {
+            let start = tops.get(slot.row).copied().unwrap_or(y);
+            if let Some(h) = heights.get_mut(r) {
+                *h = h.max(slot.tall - (y - start));
             }
         }
-        let tallest = tall.iter().copied().fold(0.0f32, f32::max);
-        let mut bottom = top + tallest;
-        // Each cell's left edge and width, and where its fill goes once the row's height is known.
-        let mut edges: Vec<(f32, f32, Option<(egui::layers::ShapeIdx, Color32)>)> = Vec::with_capacity(row.len());
-        for (i, (c, cell, x, w, pad)) in placed.iter().enumerate() {
-            let spare = tall.get(i).map_or(0.0, |own| (tallest - own).max(0.0));
-            let down = match cell.valign {
+        y += heights.get(r).copied().unwrap_or(0.0) + gap;
+    }
+    let first = table_top + rim + gap;
+    let bottom = first + y + rim;
+
+    let whole = Rect::from_min_max(pos2(room_left, table_top), pos2(room_left + available, bottom));
+    if ui.is_visible() && ui.is_rect_visible(whole) {
+        let lines =
+            table.line.map(|c| Color32::from_rgb(c[0], c[1], c[2])).filter(|c| contrast(*c, look.on) >= EDGE_CONTRAST).unwrap_or(look.t.text_faint);
+        for slot in &slots {
+            let top = first + tops.get(slot.row).copied().unwrap_or(0.0);
+            let end = first + tops.get(slot.upto).copied().unwrap_or(0.0) + heights.get(slot.upto).copied().unwrap_or(0.0);
+            let rect = Rect::from_min_max(pos2(slot.x, top), pos2(slot.x + slot.w, end.max(top)));
+            if !ui.is_rect_visible(rect) {
+                continue;
+            }
+            let within = Look { on: on(slot.cell), ..look };
+            if slot.cell.background.is_some() {
+                ui.painter().rect_filled(rect, 0.0, within.on);
+            }
+            let spare = (rect.height() - slot.tall).max(0.0);
+            let down = match slot.cell.valign {
                 VAlign::Top => 0.0,
                 VAlign::Middle => (spare / 2.0).floor(),
                 VAlign::Bottom => spare,
             };
-            let fill = cell.background.map(|c| (ui.painter().add(Shape::Noop), Color32::from_rgb(c[0], c[1], c[2])));
-            let mut child = ui.new_child(UiBuilder::new().id_salt(("cell", r, *c)).max_rect(inside(*x, *w, *pad, down)));
+            let mut child = ui.new_child(UiBuilder::new().id_salt(("cell", slot.row, slot.number)).max_rect(inside(slot, top + down)));
             child.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            blocks(&mut child, &cell.blocks, Look { on: on(cell), ..look }, depth + 1);
-            bottom = bottom.max(child.min_rect().bottom() + pad.y);
-            edges.push((*x, *w, fill));
-        }
-        ui.allocate_rect(Rect::from_min_max(pos2(left, top), pos2(left + available, bottom + gap)), Sense::hover());
-        for (x, w, fill) in edges {
-            let cell = Rect::from_min_max(pos2(x, top), pos2(x + w, bottom));
-            if let Some((slot, color)) = fill {
-                ui.painter().set(slot, Shape::rect_filled(cell, 0.0, color));
-            }
-            if table.border {
-                ui.painter().rect_stroke(cell, 0.0, (1.0, look.t.text_faint), egui::StrokeKind::Middle);
+            blocks(&mut child, &slot.cell.blocks, within, depth + 1);
+            match &slot.cell.edges {
+                Some(own) => edges(ui, rect, own, within, within.text()),
+                None if table.border => {
+                    ui.painter().rect_stroke(rect, 0.0, (1.0, lines), egui::StrokeKind::Middle);
+                }
+                None => {}
             }
         }
+        // The table's own border: seen round cells that stand apart, or when it is a border of
+        // its own making.
+        if any_edge(&table.frame) && (gap > 0.0 || rim > 0.0 || !table.border) {
+            let outer = Rect::from_min_max(pos2(left, table_top), pos2(left + target, bottom));
+            edges(ui, outer, &table.frame, look, if table.border { lines } else { look.text() });
+        }
     }
-    // Cells that stand apart leave the table's own border to be seen round them.
-    if table.border && gap > 0.0 {
-        let outer = Rect::from_min_max(pos2(left + shift, table_top), pos2(left + shift + target, ui.cursor().top()));
-        ui.painter().rect_stroke(outer, 0.0, (1.0, look.t.text_faint), egui::StrokeKind::Middle);
-    }
+    ui.allocate_rect(whole, Sense::hover());
 }

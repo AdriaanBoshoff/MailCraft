@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 9 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 10 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 96, all passing |
+| Tests | 102, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -47,8 +47,9 @@
 6. Done: pictures stand in the line of text or at its side with text beside them, text is drawn
    in the fonts the message names (installed ones only; nothing is bundled), and pictures written
    into the body (`data:`) are shown.
-7. Next: real italic faces, text beside a picture across paragraphs, borders set in styles, cells
-   that span rows, RTF pictures; then printing.
+7. Done: italic faces of named fonts, what follows a picture at the side standing beside it,
+   borders set in styles, cells that span rows.
+8. Next: RTF pictures and RTF borders per cell edge; then printing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -100,3 +101,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   words; `<img align=left|right>` puts one at the side with the text beside and then under it
   (a `float` style does not, as in Outlook). Pictures written into the body as `data:` addresses
   are decoded under the same caps as attached ones. RTF text takes its fonts from the font table.
+- **2026-10-11** - M2.7: borders, cells over several rows and text beside pictures, checked against
+  Outlook with a fifth probe message of our own. Italic and bold-italic text in a named font is
+  drawn in the font's own italic face when it is installed (slanted only when it is not). The
+  paragraphs, tables and lists after a picture at the side stand beside it until it ends, and
+  `<br clear>` or a `clear` style starts below it. A `border` style is drawn round its paragraphs
+  (once round all the paragraphs of one block), its table or its cell, per side, solid, dashed,
+  dotted or double, with its padding; `bordercolor` colours a table's lines and a `border` wider
+  than 1 draws a thick line round the table. `rowspan` is followed: cells under a cell that
+  reaches down move aside (HTML 4.01 11.2.6.1) and rows grow to hold a tall one. Border widths,
+  spans and padding are capped where they are read.

@@ -11,7 +11,9 @@
 //! A picture written into the body (a `data:` address, RFC 2397, in base64, RFC 4648 section 4)
 //! is kept as bytes for the reader to decode; nothing else about it is trusted.
 
-use crate::rich::{Align, Block, Cell, Doc, Float, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth, VAlign};
+use crate::rich::{
+    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth, VAlign, any_edge,
+};
 use mailcraft_model::html::entity;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +52,9 @@ const MAX_MATCHES: usize = 64;
 const MAX_CELL_ROOM: f32 = 64.0;
 /// Cell padding and spacing of a table that sets none (HTML 15.3.10, tables).
 const CELL_PADDING: u16 = 1;
+/// Widest border line kept, in pixels, and most rows one cell may cover.
+const MAX_EDGE: f32 = 12.0;
+const MAX_ROW_SPAN: u16 = 1000;
 const CELL_SPACING: u16 = 2;
 
 /// Elements whose content is dropped without being read.
@@ -164,6 +169,8 @@ struct Fmt {
     heading: u8,
     pre: bool,
     hidden: bool,
+    /// The border the paragraphs here stand inside.
+    frame: Option<Arc<Frame>>,
 }
 
 struct Open {
@@ -182,6 +189,8 @@ struct TableBuild {
     align: Align,
     padding: u16,
     spacing: u16,
+    frame: Edges,
+    line: Option<Rgb>,
     /// Background of the row being read; its cells start from it.
     row_fill: Option<Rgb>,
     row_valign: Option<VAlign>,
@@ -200,6 +209,8 @@ struct CellBuild {
     padding: Option<(u16, u16)>,
     share: u8,
     valign: VAlign,
+    rows: u16,
+    edges: Option<Edges>,
 }
 
 struct ParaHead {
@@ -208,6 +219,8 @@ struct ParaHead {
     indent: u8,
     quote: u8,
     gap: bool,
+    frame: Option<Arc<Frame>>,
+    clear: bool,
 }
 
 #[derive(Default)]
@@ -231,6 +244,11 @@ struct Builder {
     bytes: usize,
     written_bytes: usize,
     full: bool,
+    /// The next paragraph starts below any picture standing at a side.
+    clear: bool,
+    /// The border and the padding the element being opened asks for in its style.
+    css_border: Option<Edges>,
+    css_padding: Option<(u16, u16)>,
 }
 
 impl Builder {
@@ -282,8 +300,15 @@ impl Builder {
             None if self.fmt.pre => ParaKind::Pre,
             None => ParaKind::Body,
         };
-        self.head =
-            Some(ParaHead { kind, align: self.fmt.align, indent: self.fmt.indent, quote: self.fmt.quote, gap: std::mem::take(&mut self.gap) });
+        self.head = Some(ParaHead {
+            kind,
+            align: self.fmt.align,
+            indent: self.fmt.indent,
+            quote: self.fmt.quote,
+            gap: std::mem::take(&mut self.gap),
+            frame: self.fmt.frame.clone(),
+            clear: std::mem::take(&mut self.clear),
+        });
         self.last_space = true;
     }
 
@@ -317,7 +342,16 @@ impl Builder {
             // Only a line break: an empty line.
             runs.push(Run { text: "\u{a0}".to_string(), ..Run::default() });
         }
-        self.push_block(Block::Para(Para { runs, kind: head.kind, align: head.align, indent: head.indent, quote: head.quote, gap: head.gap }));
+        self.push_block(Block::Para(Para {
+            runs,
+            kind: head.kind,
+            align: head.align,
+            indent: head.indent,
+            quote: head.quote,
+            gap: head.gap,
+            frame: head.frame,
+            clear: head.clear,
+        }));
     }
 
     fn text(&mut self, raw: &str) {
@@ -463,7 +497,18 @@ impl Builder {
 
     fn open_tag(&mut self, name: &str, attrs: &[(String, String)], self_closing: bool) {
         match name {
-            "br" => return self.line_break(),
+            "br" => {
+                // A break that clears ends the paragraph: what follows starts below any picture
+                // standing at a side (HTML 4.01 section 15.1.3.1).
+                if attr(attrs, "clear").is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "all" | "left" | "right" | "both"))
+                    && !self.fmt.hidden
+                {
+                    self.end_para();
+                    self.clear = true;
+                    return;
+                }
+                return self.line_break();
+            }
             "hr" => {
                 self.end_para();
                 if !self.fmt.hidden && !self.tables.last().is_some_and(|t| t.cell.is_none()) {
@@ -504,6 +549,12 @@ impl Builder {
                 let row_fill = self.tables.last().and_then(|t| t.row_fill);
                 let row_valign = self.tables.last().and_then(|t| t.row_valign);
                 let span = attr(attrs, "colspan").and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(1).clamp(1, 64);
+                // `rowspan=0` reaches to the table's last row (HTML 4.01 section 11.2.6).
+                let rows = match attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()) {
+                    Some(0) => MAX_ROW_SPAN,
+                    Some(n) => u16::try_from(n).unwrap_or(MAX_ROW_SPAN).min(MAX_ROW_SPAN),
+                    None => 1,
+                };
                 self.open_cell(name == "th", span);
                 if name == "th" {
                     self.fmt.style.bold = true;
@@ -520,7 +571,10 @@ impl Builder {
                 let padding = css_value(&css, "padding").and_then(|v| cell_padding(&v));
                 // What a cell holds stands in the middle of it unless the cell or its row says otherwise.
                 let place = css_value(&css, "vertical-align").as_deref().and_then(valign).or_else(|| attr(attrs, "valign").and_then(valign));
+                let edges = self.css_border.take().filter(any_edge);
                 if let Some(cell) = self.tables.last_mut().and_then(|t| t.cell.as_mut()) {
+                    cell.rows = rows;
+                    cell.edges = edges;
                     cell.background = background;
                     cell.width = pixels(asked).unwrap_or(0);
                     cell.share = percent(asked).unwrap_or(0);
@@ -644,6 +698,14 @@ impl Builder {
             _ => {}
         }
         let margin = self.common(name, attrs);
+        // A border on a block is drawn round the paragraphs in it. On a quotation, the line at
+        // its left is the quotation's bar.
+        if let Some(edges) = self.css_border.take().filter(any_edge)
+            && block
+            && !matches!(name, "body" | "html" | "blockquote")
+        {
+            self.fmt.frame = Some(Arc::new(Frame { edges, padding: self.css_padding.unwrap_or((0, 0)) }));
+        }
         // Word-processor paragraphs ("MsoNormal" and friends) are written with no margins.
         if margin == Some(false) || (name == "p" && attr(attrs, "class").is_some_and(|c| c.trim_start().to_ascii_lowercase().starts_with("mso"))) {
             gap = false;
@@ -673,6 +735,8 @@ impl Builder {
         if attr(attrs, "hidden").is_some() {
             self.fmt.hidden = true;
         }
+        self.css_border = None;
+        self.css_padding = None;
         let css = self.sheet.declarations(name, attrs);
         if css.is_empty() { None } else { self.css(&css) }
     }
@@ -681,6 +745,7 @@ impl Builder {
     fn css(&mut self, css: &str) -> Option<bool> {
         let mut zero_top = None;
         let mut zero_bottom = None;
+        let mut edges: Option<Edges> = None;
         for decl in css.split(';').take(MAX_DECLARATIONS) {
             let Some((prop, value)) = decl.split_once(':') else { continue };
             let prop = prop.trim().to_ascii_lowercase();
@@ -752,8 +817,24 @@ impl Builder {
                 }
                 "margin-top" => zero_top = Some(is_zero(v)),
                 "margin-bottom" => zero_bottom = Some(is_zero(v)),
+                // Borders (CSS 2.1 section 8.5): all four sides, or one of them.
+                "border" => edges = Some([edge(v); 4]),
+                "border-top" | "border-right" | "border-bottom" | "border-left" => {
+                    let side = ["border-top", "border-right", "border-bottom", "border-left"].iter().position(|p| *p == prop).unwrap_or(0);
+                    if let Some(e) = edges.get_or_insert_with(Edges::default).get_mut(side) {
+                        *e = edge(v);
+                    }
+                }
+                "padding" => self.css_padding = cell_padding(v),
+                "clear" if matches!(v, "both" | "left" | "right" | "all") => {
+                    self.end_para();
+                    self.clear = true;
+                }
                 _ => {}
             }
+        }
+        if edges.is_some() {
+            self.css_border = edges;
         }
         match (zero_top, zero_bottom) {
             (Some(true), Some(true)) => Some(false),
@@ -829,8 +910,17 @@ impl Builder {
         self.open.push(Open { name: "table".to_string(), saved: self.fmt.clone(), list: false, gap: false });
         // Alignment of the table itself is not inherited by its text.
         self.fmt.align = Align::Left;
-        let border = attr(attrs, "border").is_some_and(|v| v.trim().trim_end_matches("px").parse::<f32>().is_ok_and(|n| n > 0.0));
+        let thick = attr(attrs, "border").and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0);
+        let border = thick.is_some();
+        // What stands outside the table does not put its border round the table's paragraphs.
+        self.fmt.frame = None;
         self.common("table", attrs);
+        let line = attr(attrs, "bordercolor").and_then(color);
+        // The table's own border: its style's, or as thick as `border` says.
+        let frame = self.css_border.take().filter(any_edge).unwrap_or_else(|| {
+            let width = thick.map_or(0, |n| n.round().clamp(1.0, MAX_EDGE) as u8);
+            [Edge { width, color: line, line: Line::Solid }; 4]
+        });
         let css = self.sheet.declarations("table", attrs);
         let auto = |prop: &str| css_value(&css, prop).is_some_and(|v| v.split_whitespace().any(|part| part == "auto"));
         let room = |name: &str, unset: u16| attr(attrs, name).and_then(cell_room).unwrap_or(unset);
@@ -848,6 +938,8 @@ impl Builder {
             align: table_align,
             padding: room("cellpadding", CELL_PADDING),
             spacing: if collapsed { 0 } else { room("cellspacing", CELL_SPACING) },
+            frame,
+            line,
             row_fill: None,
             row_valign: None,
             open_len: self.open.len(),
@@ -863,7 +955,19 @@ impl Builder {
         if t.rows.is_empty() {
             t.rows.push(Vec::new());
         }
-        t.cell = Some(CellBuild { saved, open_len, header, span, background: None, width: 0, padding: None, share: 0, valign: VAlign::Middle });
+        t.cell = Some(CellBuild {
+            saved,
+            open_len,
+            header,
+            span,
+            background: None,
+            width: 0,
+            padding: None,
+            share: 0,
+            valign: VAlign::Middle,
+            rows: 1,
+            edges: None,
+        });
         self.sinks.push(Vec::new());
         self.gap = false;
     }
@@ -887,6 +991,8 @@ impl Builder {
                 padding: cell.padding,
                 share: cell.share,
                 valign: cell.valign,
+                rows: cell.rows,
+                edges: cell.edges,
             });
         }
     }
@@ -895,7 +1001,12 @@ impl Builder {
         self.close_cell();
         let Some(t) = self.tables.pop() else { return };
         self.pop_to(t.open_len.saturating_sub(1));
-        let mut rows: Vec<Vec<Cell>> = t.rows.into_iter().filter(|r| r.iter().any(|c| !c.blocks.is_empty())).collect();
+        // An empty row is dropped, unless cells that cover several rows count on it.
+        let reaches = t.rows.iter().flatten().any(|c| c.rows > 1);
+        let mut rows: Vec<Vec<Cell>> = t.rows.into_iter().filter(|r| reaches || r.iter().any(|c| !c.blocks.is_empty())).collect();
+        if rows.iter().flatten().all(|c| c.blocks.is_empty()) {
+            return;
+        }
         if rows.is_empty() {
             return;
         }
@@ -903,7 +1014,8 @@ impl Builder {
         // a table with one column is only layout, and its content reads as ordinary blocks.
         let shaped = matches!(t.width, TableWidth::Pixels(_) | TableWidth::Percent(_))
             || t.align != Align::Left
-            || rows.iter().flatten().any(|c| c.background.is_some());
+            || any_edge(&t.frame)
+            || rows.iter().flatten().any(|c| c.background.is_some() || c.edges.is_some());
         if !shaped && rows.iter().all(|r| r.iter().filter(|c| !c.blocks.is_empty()).count() <= 1) {
             for cell in rows.drain(..).flatten() {
                 for block in cell.blocks {
@@ -911,7 +1023,16 @@ impl Builder {
                 }
             }
         } else {
-            self.push_block(Block::Table(Table { rows, border: t.border, width: t.width, align: t.align, padding: t.padding, spacing: t.spacing }));
+            self.push_block(Block::Table(Table {
+                rows,
+                border: t.border,
+                width: t.width,
+                align: t.align,
+                padding: t.padding,
+                spacing: t.spacing,
+                frame: t.frame,
+                line: t.line,
+            }));
         }
         self.gap = true;
     }
@@ -1096,6 +1217,47 @@ fn valign(v: &str) -> Option<VAlign> {
         "bottom" | "text-bottom" => Some(VAlign::Bottom),
         _ => None,
     }
+}
+
+/// One side of a border as a style gives it: a width, a kind of line and a colour, in any order
+/// (CSS 2.1 section 8.5.4). Without a kind of line there is no line.
+fn edge(v: &str) -> Edge {
+    let (mut width, mut line, mut colour) = (None, None, None);
+    // A colour written as a function has spaces of its own.
+    let mut rest = v.to_string();
+    if let Some(start) = rest.find("rgb")
+        && let Some(len) = rest.get(start..).and_then(|r| r.find(')'))
+    {
+        colour = rest.get(start..=start + len).and_then(color);
+        rest.replace_range(start..=start + len, " ");
+    }
+    for part in rest.split_whitespace().take(8) {
+        match part {
+            "none" | "hidden" => line = Some(None),
+            "solid" | "groove" | "ridge" | "inset" | "outset" => line = Some(Some(Line::Solid)),
+            "dashed" => line = Some(Some(Line::Dashed)),
+            "dotted" => line = Some(Some(Line::Dotted)),
+            "double" => line = Some(Some(Line::Double)),
+            "thin" => width = Some(1.0),
+            "medium" => width = Some(3.0),
+            "thick" => width = Some(5.0),
+            _ => {
+                let (number, scale) = match part.strip_suffix("pt") {
+                    Some(points) => (points, 4.0 / 3.0),
+                    None => (part.trim_end_matches("px"), 1.0),
+                };
+                match number.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0) {
+                    Some(n) => width = Some(n * scale),
+                    None => colour = colour.or_else(|| color(part)),
+                }
+            }
+        }
+    }
+    let Some(Some(line)) = line else { return Edge::default() };
+    let width = width.unwrap_or(3.0);
+    // A line thinner than a pixel is still a line.
+    let width = if width <= 0.0 { 0 } else { width.round().clamp(1.0, MAX_EDGE) as u8 };
+    Edge { width, color: colour, line }
 }
 
 /// Cell padding or spacing as a table's attribute gives it, in pixels.

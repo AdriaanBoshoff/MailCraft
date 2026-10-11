@@ -124,10 +124,15 @@ impl Library {
         self.fonts.is_empty()
     }
 
-    /// The upright face of `family`, or its bold one. `None` when the family is not installed,
-    /// when bold is asked for and the family has none, or when the file is too large or cannot
-    /// be read as a font.
-    pub fn face(&self, family: &str, bold: bool) -> Option<Face> {
+    /// Whether a family of this name is installed, in any letter case.
+    pub fn has(&self, family: &str) -> bool {
+        !family.is_empty() && family.len() <= MAX_NAME_LEN * 4 && self.spelled.contains_key(&family.to_lowercase())
+    }
+
+    /// One face of `family`: upright or italic, regular or bold. `None` when the family is not
+    /// installed, when it has no such face (a bold or an italic one is never made up from
+    /// another), or when the file is too large or cannot be read as a font.
+    pub fn face(&self, family: &str, bold: bool, italic: bool) -> Option<Face> {
         if family.is_empty() || family.len() > MAX_NAME_LEN * 4 {
             return None;
         }
@@ -136,11 +141,13 @@ impl Library {
             families: &[Family::Name(family)],
             weight: if bold { Weight::BOLD } else { Weight::NORMAL },
             stretch: Stretch::Normal,
-            style: Style::Normal,
+            style: if italic { Style::Italic } else { Style::Normal },
         };
         let id = self.fonts.query(&query)?;
-        // The nearest face is found whatever its weight; a light one is not a bold one.
-        if bold && self.fonts.face(id)?.weight.0 < 600 {
+        // The nearest face is found whatever it is; a light one is not a bold one, and an
+        // upright one is not an italic one.
+        let found = self.fonts.face(id)?;
+        if (found.weight.0 >= 600) != bold || (found.style != Style::Normal) != italic {
             return None;
         }
         self.fonts
@@ -196,18 +203,26 @@ mod tests {
     fn faces_come_only_from_the_library() {
         let none = Library::empty();
         assert!(none.is_empty());
-        assert_eq!(none.face("Arial", false), None);
+        assert_eq!(none.face("Arial", false, false), None);
+        assert!(!none.has("Arial"));
 
         // Whatever this machine has installed: a name is only ever looked up, never opened as a path.
         let system = Library::system();
         for name in ["", "No Such Font At All 7f3a", "..\\..\\Windows\\win.ini", "C:\\Windows\\Fonts\\arial.ttf", &"y".repeat(10_000)] {
-            assert_eq!(system.face(name, false), None, "{name:?}");
-            assert_eq!(system.face(name, true), None);
+            assert!(!system.has(name));
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                assert_eq!(system.face(name, bold, italic), None, "{name:?}");
+            }
         }
         for name in SERIF.iter().chain(SANS) {
-            for bold in [false, true] {
-                if let Some(face) = system.face(name, bold) {
+            let mut faces = Vec::new();
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                if let Some(face) = system.face(name, bold, italic) {
+                    assert!(system.has(name) && system.has(&name.to_uppercase()));
                     assert!(face.data.len() <= MAX_FACE_BYTES && readable(&face.data, face.index));
+                    // One face is never handed out as another.
+                    assert!(!faces.contains(&face), "{name} {bold} {italic}");
+                    faces.push(face);
                 }
             }
         }

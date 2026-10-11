@@ -127,7 +127,7 @@ fn tables_keep_cells_and_layout_tables_flatten() {
 #[test]
 fn nothing_active_survives_and_remote_content_is_only_counted() {
     let doc = parse(
-        "<p onclick=\"evil()\">Text<script>alert('x')</script><style>p{}</style><iframe src=\"https://x.example/\">frame</iframe>\
+        "<p onclick=\"evil()\">Text<script>alert('x')</script><style>p{}</style><iframe src=\"https://x.example/\">within</iframe>\
          <object data=x>obj</object><img src=\"https://t.example/pixel.gif\" width=1 height=1><img src=\"https://x.example/a.png\" alt=\"Logo\">\
          <img src=\"cid:part1@example\" alt=chart><img src=\"data:image/png;base64,AAAA\"><span style=\"display:none\">hidden preheader</span>\
          <span style=\"font-size:0\">also hidden</span><!-- comment <b>not text</b> --><![if !mso]>shown<![endif]></p>\
@@ -139,7 +139,7 @@ fn nothing_active_survives_and_remote_content_is_only_counted() {
     let pictures: Vec<&Picture> = p[0].runs.iter().filter_map(|r| r.picture.as_ref()).collect();
     assert_eq!(pictures, [&Picture::Remote, &Picture::Attached("part1@example".to_string()), &Picture::Inline(Some(0))]);
     let all = format!("{doc:?}");
-    for gone in ["evil", "alert", "frame", "obj", "hidden", "comment", "AAAA"] {
+    for gone in ["evil", "alert", "within", "obj", "hidden", "comment", "AAAA"] {
         assert!(!all.contains(gone), "{gone} must not be in the document");
     }
 }
@@ -526,4 +526,132 @@ fn rtf_text_has_the_fonts_its_font_table_names() {
     for run in paras(&doc).iter().flat_map(|p| &p.runs) {
         assert!(run.style.family.as_deref().is_none_or(|n| n.chars().count() <= 64 && !n.chars().any(char::is_control)));
     }
+}
+
+fn tables(doc: &Doc) -> Vec<&crate::rich::Table> {
+    doc.blocks.iter().filter_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).collect()
+}
+
+#[test]
+fn cells_that_reach_down_push_the_cells_under_them_aside() {
+    use crate::rich::any_edge;
+    // HTML 4.01 section 11.2.6.1: a cell stands in the first column no cell from above covers.
+    let doc = parse(
+        "<table border=1><tr><td rowspan=2>a<td>b<td>c<tr><td>d<td rowspan=2>e<tr><td>f<td>g</table>\
+         <table border=1><tr><td rowspan=3 colspan=2>a<td>b<tr><td>c<tr><td>d<tr><td>e<td>f<td>g</table>",
+    );
+    let t = tables(&doc);
+    assert_eq!(t[0].places(), [vec![0, 1, 2], vec![1, 2], vec![0, 1]]);
+    assert_eq!(t[0].columns(), 3);
+    assert_eq!(t[0].rows[0][0].rows, 2);
+    assert_eq!(t[1].places(), [vec![0, 2], vec![2], vec![2], vec![0, 1, 2]]);
+    assert_eq!(t[1].columns(), 3);
+    assert!(t[0].border && any_edge(&t[0].frame), "a border attribute frames the table");
+
+    // Spans without end, of nothing, and of what is not a number: every cell still has a place
+    // in a table of bounded width.
+    let mut html = String::from("<table><tr><td rowspan=0>a<td rowspan=99999999999 colspan=60000>b<td rowspan=-4>c<td rowspan=x>d");
+    for _ in 0..300 {
+        html.push_str("<tr><td rowspan=1000 colspan=900>e<td>f");
+    }
+    html.push_str("</table>");
+    let doc = parse(&html);
+    for table in tables(&doc) {
+        let places = table.places();
+        assert_eq!(places.len(), table.rows.len());
+        for (row, starts) in table.rows.iter().zip(&places) {
+            assert_eq!(row.len(), starts.len());
+            assert!(row.iter().all(|c| c.rows <= 1000));
+            assert!(starts.windows(2).all(|w| w[0] <= w[1]), "cells keep their order: {starts:?}");
+        }
+        assert!(table.columns() <= 1024 + 60000);
+    }
+}
+
+#[test]
+fn borders_set_in_styles_are_kept_for_paragraphs_tables_and_cells() {
+    use crate::rich::{Line, any_edge};
+    let doc = parse(
+        "<p style=\"border:2px solid #cc0000\">a</p>\
+         <p style=\"border-left:4px solid rgb(31,78,121); padding-left:8px\">b</p>\
+         <div style=\"border:1px dashed #2e7d32; padding:10px\">c<p>d</p></div>\
+         <p style=\"border-bottom:3px double #000000\">e</p>\
+         <p style=\"border:none\">f</p><p style=\"border:5px\">g</p><p>h</p>",
+    );
+    let p = paras(&doc);
+    let frame = |i: usize| p[i].frame.as_deref();
+    let a = frame(0).expect("a border");
+    assert!(a.edges.iter().all(|e| e.width == 2 && e.color == Some([0xcc, 0, 0]) && e.line == Line::Solid));
+    let b = frame(1).expect("a border at the left");
+    assert_eq!(b.edges.iter().map(|e| e.width).collect::<Vec<_>>(), [0, 0, 0, 4]);
+    assert_eq!(b.edges[3].color, Some([31, 78, 121]));
+    // Paragraphs inside one bordered block share its border, so that it is drawn round them once.
+    let (c, d) = (p[2].frame.as_ref().expect("c"), p[3].frame.as_ref().expect("d"));
+    assert!(std::sync::Arc::ptr_eq(c, d));
+    assert_eq!((c.edges[0].line, c.padding), (Line::Dashed, (10, 10)));
+    assert!(!std::sync::Arc::ptr_eq(p[0].frame.as_ref().expect("a"), p[1].frame.as_ref().expect("b")));
+    let e = frame(4).expect("a line under");
+    assert_eq!((e.edges[2].width, e.edges[2].line, e.edges[0].width), (3, Line::Double, 0));
+    // No kind of line is no line.
+    assert!(frame(5).is_none() && frame(6).is_none() && frame(7).is_none());
+
+    let doc = parse(
+        "<div style=\"border:1px solid red\"><table style=\"border:3px solid #cc0000\"><tr><td>a<td>b</table></div>\
+         <table><tr><td style=\"border:1px solid #1f4e79\">c<td style=\"border-bottom:2px solid #2e7d32\">d<td>e</table>\
+         <table border=1 bordercolor=\"#cc0000\"><tr><td>f</table>\
+         <table border=4 cellspacing=0><tr><td>g</table>",
+    );
+    let t = tables(&doc);
+    assert!(t[0].frame.iter().all(|e| e.width == 3 && e.color == Some([0xcc, 0, 0])) && !t[0].border);
+    // A border round a table is not a border round each paragraph in it.
+    assert!(t[0].rows.iter().flatten().flat_map(|c| &c.blocks).all(|b| !matches!(b, Block::Para(p) if p.frame.is_some())));
+    let row = &t[1].rows[0];
+    assert!(row[0].edges.is_some_and(|e| e.iter().all(|e| e.width == 1)));
+    assert_eq!(row[1].edges.map(|e| [e[0].width, e[1].width, e[2].width, e[3].width]), Some([0, 0, 2, 0]));
+    assert!(row[2].edges.is_none() && !any_edge(&t[1].frame));
+    assert_eq!(t[2].line, Some([0xcc, 0, 0]));
+    assert!(t[3].frame.iter().all(|e| e.width == 4));
+}
+
+#[test]
+fn a_break_that_clears_starts_below_a_picture_at_the_side() {
+    let doc = parse("<p><img src=cid:a align=left>a</p><p>b</p><br clear=all><p>c</p><p style=\"clear:both\">d</p><p>e<br clear=none>f</p>");
+    let clear: Vec<(String, bool)> = paras(&doc).iter().map(|p| (p.runs.iter().map(|r| r.text.as_str()).collect::<String>(), p.clear)).collect();
+    let of = |text: &str| clear.iter().find(|(t, _)| t.contains(text)).map(|(_, c)| *c);
+    assert_eq!((of("a"), of("b"), of("c"), of("d")), (Some(false), Some(false), Some(true), Some(true)));
+    assert_eq!(of("e"), Some(false), "a break that clears nothing is a line break: {clear:?}");
+}
+
+#[test]
+fn hostile_borders_are_capped() {
+    let mut html = String::from(
+        "<p style=\"border:99999px solid; padding:99999px\">a</p><p style=\"border:-5px dashed #zzz; padding:-1px\">b</p>\
+         <p style=\"border:1e39pt double rgb(999,-1,x)\">c</p><table border=99999 bordercolor=nothing style=\"border:NaNpx solid\"><tr><td style=\"border:inf solid\">d</table>\
+         <br clear=\"\u{202e}\">",
+    );
+    html.push_str(&"<div style=\"border:1px solid red;padding:4000px\">".repeat(400));
+    html.push_str("deep");
+    let doc = parse(&html);
+    fn check(blocks: &[Block], depth: usize) {
+        assert!(depth < 64);
+        for block in blocks {
+            match block {
+                Block::Para(p) => {
+                    if let Some(frame) = &p.frame {
+                        assert!(frame.edges.iter().all(|e| e.width <= 12), "{:?}", frame.edges);
+                    }
+                }
+                Block::Table(t) => {
+                    assert!(t.frame.iter().all(|e| e.width <= 12));
+                    for cell in t.rows.iter().flatten() {
+                        assert!(cell.edges.is_none_or(|e| e.iter().all(|e| e.width <= 12)));
+                        check(&cell.blocks, depth + 1);
+                    }
+                }
+                Block::Rule => {}
+            }
+        }
+    }
+    check(&doc.blocks, 0);
+    assert!(doc.text().contains("deep"));
 }

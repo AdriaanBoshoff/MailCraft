@@ -3,7 +3,8 @@
 //! Nothing is bundled and nothing is fetched: a name is looked up among the installed fonts
 //! (`mailcraft-fonts`), with open fonts of the same measures standing in for proprietary ones
 //! that are not installed. A name the message gives is hostile input and is only ever compared
-//! with installed names. How many fonts and how many bytes of them are loaded is capped; past
+//! with installed names. Only the faces a message uses are loaded (bold and italic text have
+//! faces of their own), and how many fonts and how many bytes of them are loaded is capped; past
 //! the caps, and for a name nothing answers to, text is drawn in the reader's own font.
 
 use std::collections::HashMap;
@@ -11,24 +12,28 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use egui::{Context, FontData, FontDefinitions, FontFamily};
-use mailcraft_fonts::{Face, Library};
+use mailcraft_fonts::Library;
 use mailcraft_formats::rich::{Block, Doc};
 
 /// Font files and bytes of them loaded while the window is open.
-const MAX_FACES: usize = 24;
+const MAX_FACES: usize = 32;
 const MAX_BYTES: usize = 64 << 20;
-/// Lists of names, and family names, that are remembered.
+/// Lists of names, and faces, that are remembered.
 const MAX_LISTS: usize = 512;
-const MAX_FAMILIES: usize = 512;
-/// Lists looked up for one message.
-const MAX_LISTS_PER_MESSAGE: usize = 64;
+const MAX_KNOWN: usize = 1024;
+/// Lists looked up for one message, each as regular, bold, italic or both.
+const MAX_ASKED_PER_MESSAGE: usize = 128;
 const MAX_DEPTH: usize = 64;
 
-/// The faces one installed family is drawn with.
-#[derive(Clone, Default)]
-struct Family {
-    regular: Option<FontFamily>,
-    bold: Option<FontFamily>,
+/// One face of a family: its name in lower case, bold, italic.
+type Which = (String, bool, bool);
+
+/// What a run is drawn with.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Picked {
+    pub(crate) family: FontFamily,
+    /// The family has no italic face of this weight: the upright one is drawn slanted.
+    pub(crate) slant: bool,
 }
 
 #[derive(Default)]
@@ -40,8 +45,10 @@ pub(crate) struct Faces {
     defs: FontDefinitions,
     /// The message whose lists were last looked up.
     key: Option<u64>,
-    by_list: HashMap<Arc<str>, Family>,
-    by_family: HashMap<String, Family>,
+    /// The installed family a list of names comes to, in lower case. `None` is the reader's own.
+    by_list: HashMap<Arc<str>, Option<String>>,
+    /// Faces asked for so far, and what egui knows each as. `None` is a face the family lacks.
+    known: HashMap<Which, Option<FontFamily>>,
     /// The families egui can draw with in this frame. One given to it is ready a frame later.
     ready: Vec<FontFamily>,
     faces: usize,
@@ -55,11 +62,18 @@ impl Faces {
         Self { listing, defs, ..Self::default() }
     }
 
-    /// The family to draw text with that asks for the fonts in `list`. `None` is the reader's own.
-    pub(crate) fn pick(&self, list: &str, bold: bool) -> Option<FontFamily> {
-        let family = self.by_list.get(list)?;
-        let face = if bold { family.bold.as_ref() } else { family.regular.as_ref() }?;
-        self.ready.contains(face).then(|| face.clone())
+    /// What to draw text with that asks for the fonts in `list`. `None` is the reader's own.
+    pub(crate) fn pick(&self, list: &str, bold: bool, italic: bool) -> Option<Picked> {
+        let family = self.by_list.get(list)?.as_ref()?;
+        let ready = |italic: bool| {
+            let face = self.known.get(&(family.clone(), bold, italic))?.as_ref()?;
+            self.ready.contains(face).then(|| face.clone())
+        };
+        if italic && let Some(family) = ready(true) {
+            return Some(Picked { family, slant: false });
+        }
+        // Bold text is never drawn in a face that is not bold: the reader's own bold is used.
+        ready(false).map(|family| Picked { family, slant: italic })
     }
 
     /// Look up the fonts `doc` names, once per message. `key` names the message's body. Call
@@ -70,21 +84,17 @@ impl Faces {
             return;
         }
         self.key = Some(key);
-        let mut lists: Vec<&Arc<str>> = Vec::new();
-        named(&doc.blocks, &mut lists, 0);
+        let mut asked: Vec<(&Arc<str>, bool, bool)> = Vec::new();
+        named(&doc.blocks, &mut asked, 0);
         let mut added = false;
-        for list in lists {
-            if self.by_list.len() >= MAX_LISTS || self.by_list.contains_key(list) {
+        for (list, bold, italic) in asked {
+            let Some(family) = self.family(list) else { continue };
+            // The upright face too: it is what italic text is slanted from where there is no
+            // italic one.
+            if italic && self.face(&family, bold, true, &mut added).is_some() {
                 continue;
             }
-            let mut found = Family::default();
-            for name in mailcraft_fonts::wanted(list) {
-                found = self.family(&name, &mut added);
-                if found.regular.is_some() {
-                    break;
-                }
-            }
-            self.by_list.insert(list.clone(), found);
+            self.face(&family, bold, false, &mut added);
         }
         if added {
             ctx.set_fonts(self.defs.clone());
@@ -92,55 +102,71 @@ impl Faces {
         }
     }
 
-    /// The faces of one installed family, loaded the first time it is asked for.
-    fn family(&mut self, name: &str, added: &mut bool) -> Family {
-        let key = name.to_lowercase();
-        if let Some(known) = self.by_family.get(&key) {
-            return known.clone();
-        }
-        if self.by_family.len() >= MAX_FAMILIES {
-            return Family::default();
-        }
-        let library = self.library.get_or_insert_with(|| match self.listing.take() {
+    /// The installed fonts, listed by now or listed here.
+    fn library(&mut self) -> &Library {
+        self.library.get_or_insert_with(|| match self.listing.take() {
             // A listing that failed leaves no fonts to find; the reader's own are used.
             Some(listing) => listing.join().unwrap_or_default(),
             None => Library::system(),
-        });
-        let (regular, bold) = (library.face(name, false), library.face(name, true));
-        let family = Family { regular: regular.and_then(|face| self.give(face, added)), bold: bold.and_then(|face| self.give(face, added)) };
-        self.by_family.insert(key, family.clone());
-        family
+        })
     }
 
-    /// Hand one face to egui, under a name of our own, with the interface fonts behind it for
-    /// the characters it lacks.
-    fn give(&mut self, face: Face, added: &mut bool) -> Option<FontFamily> {
-        if self.faces >= MAX_FACES || self.bytes.saturating_add(face.data.len()) > MAX_BYTES {
+    /// The installed family a list of names comes to.
+    fn family(&mut self, list: &Arc<str>) -> Option<String> {
+        if let Some(known) = self.by_list.get(list) {
+            return known.clone();
+        }
+        if self.by_list.len() >= MAX_LISTS {
             return None;
         }
-        self.faces += 1;
-        self.bytes += face.data.len();
-        let name = format!("message-{}", self.faces);
-        let mut data = FontData::from_owned(face.data);
-        data.index = face.index;
-        self.defs.font_data.insert(name.clone(), Arc::new(data));
-        let mut fonts = vec![name.clone()];
-        fonts.extend(self.defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
-        let family = FontFamily::Name(name.into());
-        self.defs.families.insert(family.clone(), fonts);
-        *added = true;
-        Some(family)
+        let library = self.library();
+        let found = mailcraft_fonts::wanted(list).into_iter().find(|name| library.has(name)).map(|name| name.to_lowercase());
+        self.by_list.insert(list.clone(), found.clone());
+        found
+    }
+
+    /// One face of an installed family, handed to egui the first time it is asked for under a
+    /// name of our own, with the interface fonts behind it for the characters it lacks.
+    fn face(&mut self, family: &str, bold: bool, italic: bool, added: &mut bool) -> Option<FontFamily> {
+        let which = (family.to_string(), bold, italic);
+        if let Some(known) = self.known.get(&which) {
+            return known.clone();
+        }
+        if self.known.len() >= MAX_KNOWN || self.faces >= MAX_FACES {
+            return None;
+        }
+        let face = self.library().face(family, bold, italic).filter(|face| self.bytes.saturating_add(face.data.len()) <= MAX_BYTES);
+        let given = face.map(|face| {
+            self.faces += 1;
+            self.bytes += face.data.len();
+            let name = format!("message-{}", self.faces);
+            let mut data = FontData::from_owned(face.data);
+            data.index = face.index;
+            self.defs.font_data.insert(name.clone(), Arc::new(data));
+            let mut fonts = vec![name.clone()];
+            fonts.extend(self.defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
+            let family = FontFamily::Name(name.into());
+            self.defs.families.insert(family.clone(), fonts);
+            *added = true;
+            family
+        });
+        self.known.insert(which, given.clone());
+        given
     }
 }
 
-/// The lists of font names in `blocks`, each once.
-fn named<'a>(blocks: &'a [Block], out: &mut Vec<&'a Arc<str>>, depth: usize) {
+/// The lists of font names in `blocks` with the faces asked of each, each once.
+fn named<'a>(blocks: &'a [Block], out: &mut Vec<(&'a Arc<str>, bool, bool)>, depth: usize) {
     for block in blocks {
         match block {
             Block::Para(p) => {
-                for list in p.runs.iter().filter_map(|r| r.style.family.as_ref()) {
-                    if out.len() < MAX_LISTS_PER_MESSAGE && !out.iter().any(|known| Arc::ptr_eq(known, list) || known == &list) {
-                        out.push(list);
+                for run in &p.runs {
+                    let Some(list) = run.style.family.as_ref() else { continue };
+                    let asked = (list, run.style.bold, run.style.italic);
+                    if out.len() < MAX_ASKED_PER_MESSAGE
+                        && !out.iter().any(|known| (Arc::ptr_eq(known.0, list) || known.0 == list) && (known.1, known.2) == (asked.1, asked.2))
+                    {
+                        out.push(asked);
                     }
                 }
             }

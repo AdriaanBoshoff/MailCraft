@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 8 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 9 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -11,14 +11,15 @@
 3. **Formatted bodies are partly drawn.** HTML bodies show text styles, colours, headings, lists,
    quotations, rules and tables, and pictures the message carries as attachments (`cid:`) or
    writes into itself (`data:`; PNG, JPEG, GIF first frame, BMP) at the size the body asks for, in
-   the line of text or at its side (`align`) with text beside them. Text is drawn in the fonts the
-   message names when they are installed, with open fonts of the same measures standing in; no font
-   is bundled. Not yet: other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a labelled
-   placeholder; italic and bold-italic faces of named fonts (italics are slanted upright faces);
-   text beside a picture past the end of its paragraph; several pictures at the sides of one
-   paragraph; animation; a backing for see-through pictures on the dark pane; backgrounds on blocks
-   other than cells and rows; borders set in styles; cells that span rows; padding that differs
-   left from right; and opening a link (its address is shown on hover). Style sheets
+   the line of text or at its side (`align`) with what follows beside them until they end or a
+   break clears them. Text is drawn in the fonts the message names when they are installed, in
+   their own bold and italic faces, with open fonts of the same measures standing in; no font is
+   bundled. Borders set in styles are drawn round paragraphs, tables and cells, and cells span
+   rows as well as columns. Not yet: other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a
+   labelled placeholder; several pictures at the sides of one paragraph, or a second one while the
+   first still stands; animation; a backing for see-through pictures on the dark pane; backgrounds
+   on blocks other than cells and rows; borders on text within a line and rounded corners; padding
+   that differs left from right; and opening a link (its address is shown on hover). Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
    their width, place, cell fills, padding, spacing and the vertical place of what cells hold; a
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
@@ -61,6 +62,7 @@
 
 ## Revision history
 
+- 9 · 2026-10-11 — italic faces, text beside a picture across blocks, borders set in styles and cells that span rows done (item 3).
 - 8 · 2026-10-11 — fonts by name, pictures in the line of text and at its side, and pictures written into the body done (item 3).
 - 7 · 2026-10-11 — style sheets, cell padding and spacing, row fills, vertical places, percentage widths and picture frames done (item 3).
 - 6 · 2026-10-11 — bodies compared with Outlook's; table widths, placement and cell fills done (item 3).

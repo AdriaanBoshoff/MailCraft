@@ -38,6 +38,46 @@ pub struct Para {
     pub quote: u8,
     /// The paragraph has a margin above it.
     pub gap: bool,
+    /// The border the paragraph stands inside. Paragraphs that follow one another and share one
+    /// frame stand inside one border.
+    pub frame: Option<Arc<Frame>>,
+    /// The paragraph starts below any picture standing at a side.
+    pub clear: bool,
+}
+
+/// One side of a border.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Edge {
+    /// Pixels; 0 is no line.
+    pub width: u8,
+    /// `None` is the colour of the text.
+    pub color: Option<Rgb>,
+    pub line: Line,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Line {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+}
+
+/// The four sides of a border: top, right, bottom, left.
+pub type Edges = [Edge; 4];
+
+/// Whether any side has a line.
+pub fn any_edge(edges: &Edges) -> bool {
+    edges.iter().any(|e| e.width > 0)
+}
+
+/// A border round one or more paragraphs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    pub edges: Edges,
+    /// Room between the border and what it holds: above and below, then left and right.
+    pub padding: (u16, u16),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -130,6 +170,10 @@ pub struct Table {
     pub padding: u16,
     /// Room between cells, and between the cells and the table's edge, in pixels.
     pub spacing: u16,
+    /// The table's own border, round all its cells.
+    pub frame: Edges,
+    /// The colour of the lines `border` asks for; `None` is the reader's.
+    pub line: Option<Rgb>,
 }
 
 /// How wide a table asks to be.
@@ -169,6 +213,10 @@ pub struct Cell {
     /// Width the cell asks for as hundredths of the table's, 1 to 100; 0 where it gives none.
     pub share: u8,
     pub valign: VAlign,
+    /// Rows the cell covers, at least 1.
+    pub rows: u16,
+    /// The cell's own border; `None` is what the table gives its cells.
+    pub edges: Option<Edges>,
 }
 
 impl Doc {
@@ -191,9 +239,70 @@ impl Para {
 }
 
 impl Table {
-    /// Columns in the widest row, counting spans.
+    /// Columns in the widest row, counting spans and the cells that reach down from rows above.
     pub fn columns(&self) -> usize {
-        self.rows.iter().map(|r| r.iter().map(|c| usize::from(c.span.max(1))).sum::<usize>()).max().unwrap_or(0)
+        if !self.reaches_down() {
+            return self.rows.iter().map(|r| r.iter().map(|c| usize::from(c.span.max(1))).sum::<usize>()).max().unwrap_or(0);
+        }
+        self.walk(|_, _, _| {})
+    }
+
+    /// The column each cell starts in, row by row. A cell that covers several rows takes its
+    /// columns in the rows below it too, and the cells of those rows stand after it
+    /// (HTML 4.01 section 11.2.6.1).
+    pub fn places(&self) -> Vec<Vec<usize>> {
+        let mut places: Vec<Vec<usize>> = self.rows.iter().map(|row| Vec::with_capacity(row.len())).collect();
+        self.walk(|row, _, column| {
+            if let Some(known) = places.get_mut(row) {
+                known.push(column);
+            }
+        });
+        places
+    }
+
+    fn reaches_down(&self) -> bool {
+        self.rows.iter().flatten().any(|c| c.rows > 1)
+    }
+
+    /// Go through the cells in order, telling `place` each one's row, number in the row and
+    /// column. Returns the number of columns.
+    fn walk(&self, mut place: impl FnMut(usize, usize, usize)) -> usize {
+        // Rows each column is still covered for from above. Columns past the limit are not
+        // tracked: a cell there covers its own row only.
+        const TRACKED: usize = 1024;
+        let mut down: Vec<u16> = Vec::new();
+        let mut live = 0usize;
+        let mut columns = 0usize;
+        for (r, row) in self.rows.iter().enumerate() {
+            let mut col = 0usize;
+            for (i, cell) in row.iter().enumerate() {
+                while down.get(col).is_some_and(|rows| *rows > 0) {
+                    col += 1;
+                }
+                place(r, i, col);
+                let span = usize::from(cell.span.max(1));
+                if cell.rows > 1 {
+                    for k in col..col.saturating_add(span).min(TRACKED) {
+                        if down.len() <= k {
+                            down.resize(k + 1, 0);
+                        }
+                        if let Some(rows) = down.get_mut(k) {
+                            live += usize::from(*rows == 0);
+                            *rows = cell.rows;
+                        }
+                    }
+                }
+                col = col.saturating_add(span);
+            }
+            columns = columns.max(col);
+            if live > 0 {
+                for rows in down.iter_mut().filter(|rows| **rows > 0) {
+                    *rows -= 1;
+                    live -= usize::from(*rows == 0);
+                }
+            }
+        }
+        columns.max(down.len())
     }
 }
 

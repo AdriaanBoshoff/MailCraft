@@ -289,7 +289,7 @@ impl Builder {
             }
             runs.push(text_run("\u{a0}", Style::default()));
         }
-        let para = Block::Para(Para { runs, kind: ParaKind::Body, align: cur.align, indent: cur.indent, quote: 0, gap: false });
+        let para = Block::Para(Para { runs, kind: ParaKind::Body, align: cur.align, indent: cur.indent, ..Para::default() });
         if in_table {
             self.cell.push(para);
         } else {

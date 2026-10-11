@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 8 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at six message bodies; layout only.
+**Status:** revision 9 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at seven message bodies; layout only.
 
 How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -36,7 +36,7 @@ and only the ribbon panel's height and contents change. MailCraft follows that.
 
 ## Message bodies
 
-Two messages from MailCraft's own sample mailbox and four probe messages (all synthetic, written by
+Two messages from MailCraft's own sample mailbox and five probe messages (all synthetic, written by
 us) were saved as `.msg` and opened in an Outlook Classic message window, one at a time, then closed
 without saving. The window was compared with MailCraft's reading pane showing the same message.
 Nothing from the owner's mailbox was involved.
@@ -53,11 +53,23 @@ Nothing from the owner's mailbox was involved.
 | Picture sent with the message (`cid:`) | drawn at the size the body asks for | the same | same |
 | Picture on a server, not loaded, with a size | an empty box of the size asked for, with a mark, a notice and the alternative text, standing in the line of text | an empty frame of that size with our own mark, a notice and the alternative text, standing in the line of text | close |
 | Picture in a paragraph | stands in the line of text with its bottom on the baseline; without a size, at its own size; several wrap like words | the same | same |
-| `<img align=left>` and `align=right` | the picture stands at that side; text runs beside it and then under it | the same within the picture's own paragraph; the next paragraph starts under the picture | close |
+| `<img align=left>` and `align=right` | the picture stands at that side; text runs beside it and then under it | the same | same |
+| Paragraphs after a picture at the side | stand beside it for as long as they start above its end, then under it | the same | same |
+| A table after a picture at the right | stands at the left beside the picture | the same | same |
+| `<br clear="all">` | what follows starts below the picture | the same; a `clear` style does too | same |
+| `border` in a style on a paragraph | a box as wide as the room, close round the text, in the width and colour asked for | the same, with 2 px between line and text | close |
+| A border on one side only (`border-left`, `border-bottom`) | only that line; a left line stands out in the margin and the text stays where it was | only that line; a left line stands inside the room and the text moves in by its width | close |
+| `border` and `padding` on a block of several lines or paragraphs | one box round them all, the text set in by the padding | the same | same |
+| `dashed`, `dotted` and `double` lines | drawn as such | the same; a double line under 3 px is one line | same |
+| `border` in a style on a table | a line round the table, none round its cells | the same | same |
+| `border` in a style on a cell | lines round that cell, each side as asked | the same | same |
+| `bordercolor` on a table | the table's lines in that colour | the same | same |
+| `border` wider than 1 on a table | a line that wide round the table, lines 1 px wide round the cells | the same, in one colour instead of a raised edge | close |
+| `rowspan` | the cell covers the rows; cells under it move aside; its fill covers it all and its text stands in the middle | the same | same |
 | `float` in a style on a picture | not followed: the picture stays in the line of text | the same | same |
 | Picture written into the body (`data:` in base64) | shown, sized or at its own size | the same, for the picture kinds MailCraft decodes | same |
 | Font named by `<font face>` or `font-family` | drawn in that font when it is installed, with its own bold | the same; an open font of the same measures stands in for a missing proprietary one | same |
-| Italic text in a named font | the font's italic face | the upright face, slanted | close |
+| Italic text in a named font | the font's italic face | the same; the upright face slanted when the font has no italic face installed | same |
 | A font that is not installed | the next in the list; `sans-serif` and `serif` are followed; with nothing left, a serif | the same | same |
 | Text that names no font | a sans-serif of Outlook's own choosing | MailCraft's interface font | differs |
 | Picture on a server, not loaded, without a size | a small box with a mark only | a line of text with the alternative text | differs (ours says what the picture is) |
@@ -75,10 +87,9 @@ Nothing from the owner's mailbox was involved.
 | RTF highlight | a bright marker colour from a fixed palette | the colour the RTF's colour table gives | differs |
 | Message window type | an RTF-only `.msg` is shown as rich text only when it is marked as in sync (see [file-format-parity.md](file-format-parity.md)) | written so | same |
 
-Not followed yet, in order of how much they show: borders set in styles and RTF borders per cell
-edge; the space Outlook leaves between a paragraph and a table; cells that span rows; italic faces
-of named fonts; text beside a picture past the end of its paragraph. They are in
-[gaps.md](gaps.md), item 3.
+Not followed yet, in order of how much they show: RTF borders per cell edge; the space Outlook
+leaves between a paragraph and a table; a left border standing out in the margin; lines shared by
+neighbouring cells (`border-collapse`). They are in [gaps.md](gaps.md), item 3.
 
 ## Behaviour seen
 
@@ -95,6 +106,7 @@ of named fonts; text beside a picture past the end of its paragraph. They are in
 
 ## Revision history
 
+- 9 · 2026-10-11 — a fifth probe message compared: what follows a picture at the side, breaks that clear, borders set in styles, table border widths and colours, cells that span rows.
 - 8 · 2026-10-11 — a fourth probe message compared: fonts by name and their fallbacks, pictures in the line of text and at its side, pictures written into the body.
 - 7 · 2026-10-11 — three probe messages compared: picture frames, cell padding and spacing, row fills, vertical places, percentage widths, style sheets, link colour.
 - 6 · 2026-10-11 — two message bodies compared with Outlook's display of the same `.msg`; Message bodies section added.

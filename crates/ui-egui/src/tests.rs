@@ -117,6 +117,19 @@ fn hostile_bodies_draw_without_panicking() {
         "<p align=right><img src=cid:none align=left width=40 height=4000>a<br><br>b<img src=cid:none width=4096 height=1>".to_string() + &"long words ".repeat(300) + "</p>",
         "<table width=20><tr><td><img src=cid:none align=right width=200 height=200>x<td><img src=\"data:image/png;base64,AAAA\" align=left>y</table>".to_string(),
         "<p style=\"font-family:\u{202e}'',,,;;..\\x.ttf\">a<font face=\"".to_string() + &"Zz,".repeat(4000) + "\">b</font><b style=\"font-family:serif\">c</b></p>",
+        // Cells that reach down further than the table, borders and padding wider than the pane,
+        // and pictures at the side of everything that can follow them.
+        "<table border=1><tr><td rowspan=0>a<td rowspan=1000 colspan=900 valign=bottom>b<tr><td rowspan=7>c<br>d<tr><tr><td>e</table>".to_string(),
+        "<table border=99 cellspacing=99 style=\"border:99px double red\"><tr><td rowspan=3 bgcolor=#ffe699 style=\"border:99px dotted\">a".to_string()
+            + &"<tr><td rowspan=1000>r<br>s".repeat(200)
+            + "</table>",
+        "<div style=\"border:99999px dashed #fff;padding:99999px\"><p><img src=cid:none align=left width=300 height=4000>a</p>".to_string()
+            + &"<p style=\"border-left:12px dotted\">words that wrap </p>".repeat(40)
+            + "</div>",
+        "<p><img src=cid:none align=right width=200 height=3000>a</p><table border=1 width=100%><tr><td rowspan=2>t<td>u<tr><td>v</table><hr><ul><li>".to_string()
+            + &"item words ".repeat(400)
+            + "</ul><br clear=all><p style=\"border:1px solid;border-bottom:12px double #010101\">after</p>",
+        "<p><img src=cid:none align=left width=100 height=100>a</p>".repeat(80) + &"<p style=\"border:3px double\">b</p>".repeat(80),
     ];
     for dark in [false, true] {
         let tokens = theme::Tokens::named(dark);
@@ -318,14 +331,14 @@ fn text_beside_a_picture_is_cut_where_the_picture_ends() {
 
 #[test]
 fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own() {
-    let html = "<p style=\"font-family:Arial\">a<b>b</b></p><p style=\"font-family:'No Such Font 7f3a', sans-serif\">c</p>\
+    let html = "<p style=\"font-family:Arial\">a<b>b</b><i>i</i><b><i>bi</i></b></p><p style=\"font-family:'No Such Font 7f3a', sans-serif\">c</p>\
                 <p style=\"font-family:..\\..\\Windows\\Fonts\\arial.ttf\">d</p><p style=\"font-family:monospace\">e</p>"
         .to_string()
         + &(0..200).map(|i| format!("<font face=\"Nosuch{i}, Other{i}\">f</font>")).collect::<String>();
     let doc = mailcraft_formats::html::parse(&html);
     let ctx = egui::Context::default();
     let mut shown = faces::Faces::new(install_fonts(&ctx));
-    assert!(shown.pick("Arial", false).is_none(), "nothing is drawn with a font before it is looked up");
+    assert!(shown.pick("Arial", false, false).is_none(), "nothing is drawn with a font before it is looked up");
     // The fonts found are ready a frame after they are given; every frame draws.
     for _ in 0..3 {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -334,13 +347,14 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
         });
         output.textures_delta.clear();
     }
-    assert!(shown.pick("monospace", false).is_none());
-    assert!(shown.pick("never listed", true).is_none());
+    assert!(shown.pick("monospace", false, false).is_none());
+    assert!(shown.pick("never listed", true, true).is_none());
     // Whatever this machine has, a family that is picked is one egui can draw with.
     let bound = ctx.fonts(|f| f.families());
     for list in ["arial", "'no such font 7f3a', sans-serif", "..\\..\\windows\\fonts\\arial.ttf"] {
-        for bold in [false, true] {
-            assert!(shown.pick(list, bold).is_none_or(|family| bound.contains(&family)), "{list}");
+        for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+            let picked = shown.pick(list, bold, italic);
+            assert!(picked.as_ref().is_none_or(|p| bound.contains(&p.family) && (italic || !p.slant)), "{list}");
         }
     }
     // Another message with other names: still drawn, and the caps hold.
@@ -353,4 +367,62 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
         });
         output.textures_delta.clear();
     }
+}
+
+/// The height a body takes when it is drawn `width` wide.
+fn drawn_height(html: &str, width: f32) -> f32 {
+    let doc = mailcraft_formats::html::parse(html);
+    let tokens = theme::Tokens::named(false);
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut height = 0.0;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.set_max_width(width);
+        let top = ui.cursor().top();
+        body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+        height = ui.cursor().top() - top;
+    });
+    output.textures_delta.clear();
+    height
+}
+
+#[test]
+fn what_follows_a_picture_at_the_side_stands_beside_it_until_it_ends_or_is_cleared() {
+    let picture = "<p><img src=cid:none align=left width=100 height=300>a</p>";
+    let alone = drawn_height(picture, 600.0);
+    assert!(alone >= 300.0, "the picture is given its room: {alone}");
+    // Short paragraphs after the picture's own stand beside it and add no height.
+    let beside = drawn_height(&format!("{picture}<p>b</p><p>c</p>"), 600.0);
+    assert!((beside - alone).abs() < 1.0, "{beside} against {alone}");
+    // A paragraph after a break that clears stands under the picture.
+    let cleared = drawn_height(&format!("{picture}<br clear=all><p>b</p>"), 600.0);
+    assert!(cleared > alone + 10.0, "{cleared} against {alone}");
+    // A table beside the picture is narrower than one under it, so the same words take more rows.
+    let words = "word ".repeat(120);
+    let narrow = drawn_height(&format!("{picture}<table border=1 width=100%><tr><td>{words}</table>"), 600.0);
+    let wide = drawn_height(&format!("<table border=1 width=100%><tr><td>{words}</table>"), 600.0);
+    assert!(narrow > wide, "{narrow} against {wide}");
+}
+
+#[test]
+fn borders_and_cells_over_several_rows_take_the_room_they_ask_for() {
+    let plain = drawn_height("<p>a</p>", 600.0);
+    let framed = drawn_height("<p style=\"border:4px solid red;padding:10px\">a</p>", 600.0);
+    assert!((framed - plain - 28.0).abs() < 1.5, "two lines and two paddings: {framed} against {plain}");
+    // One border round two paragraphs is drawn once, not once round each.
+    let shared = drawn_height("<div style=\"border:4px solid red\"><p>a</p><p>b</p></div>", 600.0);
+    let each = drawn_height("<p style=\"border:4px solid red\">a</p><p style=\"border:4px solid red\">b</p>", 600.0);
+    assert!((each - shared - 8.0).abs() < 1.5, "{each} against {shared}");
+
+    // A cell over two rows is as tall as both; a tall one makes the rows it covers tall enough.
+    let two = drawn_height("<table border=1><tr><td>a<td>b<tr><td>c<td>d</table>", 600.0);
+    let reach = drawn_height("<table border=1><tr><td rowspan=2>a<td>b<tr><td>d</table>", 600.0);
+    assert!((two - reach).abs() < 1.0, "{two} against {reach}");
+    let tall = drawn_height("<table border=1><tr><td rowspan=2>a<br>b<br>c<br>d<br>e<br>f<td>b<tr><td>d</table>", 600.0);
+    let six = drawn_height("<table border=1><tr><td>a<br>b<br>c<br>d<br>e<br>f</table>", 600.0);
+    assert!(tall > two && tall >= six - 1.0, "{tall} against {two} and {six}");
+    // A thick border round the table takes room on both sides of it.
+    let thick = drawn_height("<table border=8 cellspacing=0><tr><td>a</table>", 600.0);
+    let thin = drawn_height("<table border=1 cellspacing=0><tr><td>a</table>", 600.0);
+    assert!((thick - thin - 14.0).abs() < 1.5, "{thick} against {thin}");
 }
