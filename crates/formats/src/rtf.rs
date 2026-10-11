@@ -1,8 +1,9 @@
 //! RTF message bodies → [`Doc`]. An RTF body that encapsulates HTML or plain text ([MS-OXRTFEX])
 //! is read as what it wraps; ordinary RTF keeps its character styles, colours, alignment,
 //! indents, links and tables, with the borders, fills and merged cells of each row. A picture
-//! written into the body as PNG or JPEG data is kept as its bytes, undecoded; other picture kinds
-//! and embedded objects leave only a place. Control words are those of the RTF specification,
+//! written into the body as PNG or JPEG data is kept as its bytes, undecoded; a bitmap, or a
+//! metafile that holds only one, is kept as a BMP file; other pictures leave only a place. The
+//! place of an attachment (`\objattph`, [MS-OXRTFEX] 2.2.3.4) is kept by its number. Control words are those of the RTF specification,
 //! version 1.9.1 ("Pictures", "Table Definitions", "Paragraph Borders").
 
 use std::collections::{HashMap, HashSet};
@@ -27,6 +28,8 @@ const MAX_CELL_PADDING: i32 = 64;
 /// Widest border line kept, in pixels, and the most rows one merged cell covers.
 const MAX_EDGE: u8 = 12;
 const MAX_ROW_SPAN: u16 = 1000;
+/// Places for attachments one body may keep.
+const MAX_OBJECTS: usize = 256;
 /// Longest side a picture may ask to be shown at, in pixels.
 const MAX_PICTURE_SIDE: i64 = 4096;
 
@@ -73,8 +76,7 @@ enum Dest {
 #[derive(Default)]
 struct Pict {
     style: Style,
-    /// PNG or JPEG data: the kinds that are kept.
-    kept: bool,
+    kind: Kind,
     /// The data could not be read as hex digits, or there is more of it than is kept.
     bad: bool,
     bytes: Vec<u8>,
@@ -83,6 +85,21 @@ struct Pict {
     /// The size to show the picture at, in twips, and how far to scale it, in hundredths.
     goal: (i32, i32),
     scale: (i32, i32),
+}
+
+/// What a picture's data is.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Kind {
+    /// A kind that is not read.
+    #[default]
+    Unread,
+    /// A PNG or JPEG file, kept as it is.
+    File,
+    /// A bitmap without a file's header (`\dibitmap`).
+    Bitmap,
+    /// A Windows metafile (`\wmetafile`) and an enhanced one (`\emfblip`).
+    Wmf,
+    Emf,
 }
 
 /// One cell of the row being defined: everything before its `\cellx`.
@@ -137,6 +154,7 @@ struct Builder {
     pict: Option<Pict>,
     written: Vec<Arc<[u8]>>,
     written_bytes: usize,
+    objects: usize,
     runs: Vec<Run>,
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
@@ -249,7 +267,7 @@ fn formatted(rtf: &[u8]) -> Doc {
     while matches!(b.blocks.last(), Some(Block::Para(p)) if p.text().trim().is_empty() && p.runs.iter().all(|r| r.picture.is_none())) {
         b.blocks.pop();
     }
-    Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), written: b.written, ..Doc::default() }
+    Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), written: b.written, objects: b.objects, ..Doc::default() }
 }
 
 impl Builder {
@@ -270,6 +288,14 @@ impl Builder {
                 self.end_picture();
                 cur.dest = Dest::Picture;
                 self.pict = Some(Pict { style: cur.style.clone(), scale: (100, 100), ..Pict::default() });
+            }
+            // An attachment stands here. Places past the cap are counted, so that the count
+            // still tells whether the body and the attachments agree.
+            "objattph" => {
+                if self.objects < MAX_OBJECTS {
+                    self.push(Run { style: cur.style.clone(), picture: Some(Picture::Object(self.objects)), ..Run::default() });
+                }
+                self.objects = self.objects.saturating_add(1);
             }
             "b" => cur.style.bold = on,
             "i" => cur.style.italic = on,
@@ -414,9 +440,12 @@ impl Builder {
         let Some(pict) = &mut self.pict else { return };
         let n = param.unwrap_or(0);
         match word {
-            "pngblip" | "jpegblip" => pict.kept = true,
-            // Kinds that are not read: metafiles, bitmaps without a file's header, QuickDraw.
-            "emfblip" | "wmetafile" | "dibitmap" | "wbitmap" | "macpict" | "pmmetafile" => pict.kept = false,
+            "pngblip" | "jpegblip" => pict.kind = Kind::File,
+            "dibitmap" => pict.kind = Kind::Bitmap,
+            "wmetafile" => pict.kind = Kind::Wmf,
+            "emfblip" => pict.kind = Kind::Emf,
+            // Kinds that are not read: a bitmap made for one device, QuickDraw, OS/2 metafiles.
+            "wbitmap" | "macpict" | "pmmetafile" => pict.kind = Kind::Unread,
             "picwgoal" => pict.goal.0 = n,
             "pichgoal" => pict.goal.1 = n,
             "picscalex" => pict.scale.0 = n,
@@ -432,7 +461,7 @@ impl Builder {
     /// The data of a picture: two hex digits to the byte, with line ends between them.
     fn picture_data(&mut self, text: &str) {
         let Some(pict) = &mut self.pict else { return };
-        if !pict.kept || pict.bad {
+        if pict.kind == Kind::Unread || pict.bad {
             return;
         }
         let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes);
@@ -458,19 +487,25 @@ impl Builder {
     /// Close the picture being read: it stands in the line of text where it was written.
     fn end_picture(&mut self) {
         let Some(pict) = self.pict.take() else { return };
-        let place = if pict.kept && !pict.bad && pict.half.is_none() && !pict.bytes.is_empty() {
-            match self.written.iter().position(|kept| **kept == *pict.bytes) {
-                Some(same) => Some(same),
-                None if self.written.len() < crate::html::MAX_WRITTEN => {
-                    self.written_bytes = self.written_bytes.saturating_add(pict.bytes.len());
-                    self.written.push(Arc::from(pict.bytes));
-                    Some(self.written.len() - 1)
-                }
-                None => None,
-            }
-        } else {
-            None
+        let whole = !pict.bad && pict.half.is_none() && !pict.bytes.is_empty();
+        let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes);
+        let file = match pict.kind {
+            _ if !whole => None,
+            Kind::Unread => None,
+            Kind::File => Some(pict.bytes),
+            Kind::Bitmap => crate::metafile::dib_file(&pict.bytes),
+            Kind::Wmf => crate::metafile::wmf_bitmap(&pict.bytes),
+            Kind::Emf => crate::metafile::emf_bitmap(&pict.bytes),
         };
+        let place = file.filter(|file| file.len() <= room).and_then(|file| match self.written.iter().position(|kept| **kept == *file) {
+            Some(same) => Some(same),
+            None if self.written.len() < crate::html::MAX_WRITTEN => {
+                self.written_bytes = self.written_bytes.saturating_add(file.len());
+                self.written.push(Arc::from(file));
+                Some(self.written.len() - 1)
+            }
+            None => None,
+        });
         // Twips to pixels, scaled as asked; a picture that gives no size is shown at its own.
         let side = |goal: i32, scale: i32| {
             let scale = if scale > 0 { i64::from(scale.min(10_000)) } else { 100 };

@@ -17,6 +17,9 @@ pub struct Doc {
     pub remote_blocked: usize,
     /// Pictures written into the body itself, each as the bytes of a picture file.
     pub written: Vec<Arc<[u8]>>,
+    /// Places the body keeps for attachments ([`Picture::Object`]), counted even where no
+    /// run was kept for one.
+    pub objects: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,6 +160,9 @@ pub enum Picture {
     Inline(Option<usize>),
     /// On a server. Not fetched.
     Remote,
+    /// The place an RTF body keeps for an attachment (`\objattph`), by its number among such
+    /// places. Which attachment stands there is for whoever has the message to say.
+    Object(usize),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 12 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 13 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -25,10 +25,12 @@
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
    Message bodies). RTF bodies
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
-   styles, fonts by name, colours, alignment, indents, links, PNG and JPEG pictures written into the
-   body, and tables with each cell's own lines, fill, place and merge down; not yet: pictures the
-   message holds as attached objects (`\objattph`, [MS-OXRTFEX]) and metafile or bitmap pictures (a
-   placeholder), `\bin` picture data, list numbering beyond the text the writer left, nested tables,
+   styles, fonts by name, colours, alignment, indents, links, pictures written into the body (PNG,
+   JPEG, bitmaps, and metafiles that hold only one bitmap), attachments in their places in the text
+   (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object as its own picture, any other by name),
+   and tables with each cell's own lines, fill, place and merge down; not yet: metafiles that are
+   drawings (a placeholder), the picture inside an attached object's own storage, an icon beside an
+   attachment named in the text, `\bin` picture data, list numbering beyond the text the writer left, nested tables,
    cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn; not yet: text beside a picture at the side (it is
@@ -69,6 +71,7 @@
 
 ## Revision history
 
+- 13 · 2026-10-11 — RTF bodies show attachments in their places, bitmaps and metafile bitmaps (item 3).
 - 12 · 2026-10-11 — pictures are printed; what remains for them listed (item 3).
 - 11 · 2026-10-11 — a message prints to a PDF file; what printing lacks listed (item 3).
 - 10 · 2026-10-11 — RTF pictures (PNG, JPEG) and RTF cell lines, fills, places and merges done (item 3).

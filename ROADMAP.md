@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 13 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 14 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 123, all passing |
+| Tests | 127, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -54,7 +54,9 @@
 9. Done: a message prints to a PDF file in Memo Style (`file.print`), text, tables and borders;
    pictures are not printed yet.
 10. Done: pictures in print - attached and written-in pictures are drawn on the page.
-11. Next: pictures an RTF body holds as attached objects, and metafiles.
+11. Done: attachments stand in their places in an RTF body; bitmaps, and metafiles that hold
+    only a bitmap, are shown.
+12. Next: metafiles that are drawings, and the pictures inside attached objects.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -143,3 +145,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   window into the engine (`engine::pictures`), so the reading pane and print share one set of
   limits. A picture on a server is never fetched and stays named in words. Not yet: a picture at
   the side with text beside it (it is printed in the line), and a picture cut over a page end.
+- **2026-10-11** - M2.11: attachments in RTF bodies, bitmaps and metafile bitmaps. Each place an
+  RTF body keeps for an attachment (`\objattph`) is filled as [MS-OXRTFEX] 2.2.3.4 says: the
+  attachments that are not hidden and have a rendering position, in the order of that position;
+  when their number and the number of places differ, the places are given up. An attached object
+  is shown as its own picture ([MS-OXCMSG] 2.2.2.17) when that can be read; any other attachment
+  is named where it stands. A picture written into RTF as a bitmap (`\dibitmap`), or as a metafile
+  (`\wmetafile`, `\emfblip`) that draws one bitmap and nothing else, is now shown and printed
+  ([MS-WMF], [MS-EMF]); a metafile that is a drawing still leaves a place. The sample receipt has
+  an attachment in its text. Not yet: metafiles that draw lines, shapes and text, the picture
+  inside an attached object's own storage, an icon beside an attachment's name, `\bin` data.

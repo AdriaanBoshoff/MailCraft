@@ -369,7 +369,13 @@ impl MailUi {
         let doc = match &self.body_doc {
             Some((k, doc)) if *k == key => doc.clone(),
             _ => {
-                let doc = if html { mailcraft_formats::html::parse(&item.body_html()?) } else { mailcraft_formats::rtf::parse(&item.body_rtf()?) };
+                let doc = if html {
+                    mailcraft_formats::html::parse(&item.body_html()?)
+                } else {
+                    let mut doc = mailcraft_formats::rtf::parse(&item.body_rtf()?);
+                    mailcraft_engine::pictures::settle(&mut doc, item);
+                    doc
+                };
                 let doc = Arc::new(doc);
                 self.body_doc = Some((key, doc.clone()));
                 doc

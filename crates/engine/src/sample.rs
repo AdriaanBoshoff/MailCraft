@@ -63,6 +63,7 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl Monthly permit, bay 14\\cell 62.00\\cell\\row\r\n\
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl {\\highlight2 Total paid}\\cell {\\b 62.00}\\cell\\row\r\n\
 \\pard\\par\\li720 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
+\\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\
 \\pard\\par Questions? See {\\field{\\*\\fldinst HYPERLINK \"https://parking.example.net/help\"}{\\fldrslt{\\ul\\cf1 parking.example.net/help}}}.\\par}";
 
 /// A shop's order mail the way such mail is built: a layout table, a banner, a data table, a
@@ -112,6 +113,11 @@ pub fn sample_store(now: i64) -> MemStore {
     permit.props.remove(pid::BODY);
     permit.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(PERMIT_RTF.as_bytes())));
     permit.props.set(pid::RTF_IN_SYNC, PropValue::Bool(true));
+    // An attachment that has its place in the body's text, as RTF mail keeps them.
+    let mut card = Attachment::file("permit-RP-20418.txt", "text/plain", b"Riverside Car Park\r\nPermit RP-20418, bay 14\r\n".to_vec());
+    card.props.set(pid::RENDERING_POSITION, PropValue::Int32(0));
+    permit.attachments.push(card);
+    permit.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(0x11));
     s.push_item(receipts, permit);
 
     let mut launch = Mail {

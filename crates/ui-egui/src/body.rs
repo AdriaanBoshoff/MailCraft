@@ -293,7 +293,7 @@ fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
     let drawn = match run.picture.as_ref()? {
         Picture::Attached(id) => pictures.get(id),
         Picture::Inline(Some(index)) => pictures.written(*index),
-        Picture::Inline(None) | Picture::Remote => None,
+        Picture::Inline(None) | Picture::Remote | Picture::Object(_) => None,
     };
     if let Some(drawn) = drawn {
         return Some(Stand::Drawn(drawn));
@@ -306,6 +306,7 @@ fn missing(picture: &Picture) -> &'static str {
     match picture {
         Picture::Remote => "Picture not downloaded",
         Picture::Attached(_) | Picture::Inline(_) => "Picture",
+        Picture::Object(_) => "Attachment",
     }
 }
 

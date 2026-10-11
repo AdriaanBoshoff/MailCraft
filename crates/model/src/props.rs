@@ -52,10 +52,12 @@ pub mod pid {
     pub const ATTACH_FILENAME: u16 = 0x3704;
     pub const ATTACH_METHOD: u16 = 0x3705;
     pub const ATTACH_LONG_FILENAME: u16 = 0x3707;
+    pub const ATTACH_RENDERING: u16 = 0x3709;
     pub const RENDERING_POSITION: u16 = 0x370B;
     pub const ATTACH_MIME_TAG: u16 = 0x370E;
     pub const ATTACH_CONTENT_ID: u16 = 0x3712;
     pub const SMTP_ADDRESS: u16 = 0x39FE;
+    pub const ATTACHMENT_HIDDEN: u16 = 0x7FFE;
     pub const INTERNET_CODEPAGE: u16 = 0x3FDE;
     pub const MESSAGE_CODEPAGE: u16 = 0x3FFD;
     pub const SENDER_SMTP_ADDRESS: u16 = 0x5D01;

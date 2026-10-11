@@ -128,7 +128,7 @@ fn tables_keep_cells_and_layout_tables_flatten() {
 fn nothing_active_survives_and_remote_content_is_only_counted() {
     let doc = parse(
         "<p onclick=\"evil()\">Text<script>alert('x')</script><style>p{}</style><iframe src=\"https://x.example/\">within</iframe>\
-         <object data=x>obj</object><img src=\"https://t.example/pixel.gif\" width=1 height=1><img src=\"https://x.example/a.png\" alt=\"Logo\">\
+         <object data=x>embedded</object><img src=\"https://t.example/pixel.gif\" width=1 height=1><img src=\"https://x.example/a.png\" alt=\"Logo\">\
          <img src=\"cid:part1@example\" alt=chart><img src=\"data:image/png;base64,AAAA\"><span style=\"display:none\">hidden preheader</span>\
          <span style=\"font-size:0\">also hidden</span><!-- comment <b>not text</b> --><![if !mso]>shown<![endif]></p>\
          <div style=\"background:url(https://x.example/bg.png)\">bg</div>",
@@ -139,7 +139,7 @@ fn nothing_active_survives_and_remote_content_is_only_counted() {
     let pictures: Vec<&Picture> = p[0].runs.iter().filter_map(|r| r.picture.as_ref()).collect();
     assert_eq!(pictures, [&Picture::Remote, &Picture::Attached("part1@example".to_string()), &Picture::Inline(Some(0))]);
     let all = format!("{doc:?}");
-    for gone in ["evil", "alert", "within", "obj", "hidden", "comment", "AAAA"] {
+    for gone in ["evil", "alert", "within", "embedded", "hidden", "comment", "AAAA"] {
         assert!(!all.contains(gone), "{gone} must not be in the document");
     }
 }
@@ -701,6 +701,163 @@ fn rtf_pictures_are_kept_as_bytes_at_the_size_they_ask_for() {
         assert!(doc.written.is_empty(), "{data}");
         assert_eq!(paras(&doc)[0].runs.iter().filter_map(|r| r.picture.clone()).collect::<Vec<_>>(), [Picture::Inline(None)], "{data}");
     }
+}
+
+/// A bitmap of two by two pixels, three bytes to the pixel, without a file's header. The first
+/// pixel kept (the lower left one) is blue.
+fn small_dib() -> Vec<u8> {
+    let mut dib = Vec::new();
+    for n in [40u32, 2, 2] {
+        dib.extend_from_slice(&n.to_le_bytes());
+    }
+    dib.extend_from_slice(&[1, 0, 24, 0]);
+    for n in [0u32, 16, 0, 0, 0, 0] {
+        dib.extend_from_slice(&n.to_le_bytes());
+    }
+    dib.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0]);
+    dib
+}
+
+/// A Windows metafile of these records (what each does, and what follows that).
+fn wmf(records: &[(u16, Vec<u8>)]) -> Vec<u8> {
+    let mut file = vec![1, 0, 9, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for (function, body) in records.iter().chain(&[(0u16, Vec::new())]) {
+        file.extend_from_slice(&u32::try_from((6 + body.len()) / 2).unwrap().to_le_bytes());
+        file.extend_from_slice(&function.to_le_bytes());
+        file.extend_from_slice(body);
+    }
+    file
+}
+
+/// The record that draws `dib` stretched (META_STRETCHDIB), copied as it is.
+fn stretch(dib: &[u8]) -> (u16, Vec<u8>) {
+    let mut body = vec![0x20, 0, 0xCC, 0, 0, 0];
+    body.extend_from_slice(&[0; 16]);
+    body.extend_from_slice(dib);
+    (0x0F43, body)
+}
+
+/// An enhanced metafile that draws `dib` (EMR_STRETCHDIBITS) and nothing else.
+fn emf(dib: &[u8]) -> Vec<u8> {
+    let mut file = vec![0u8; 88];
+    file[0] = 1;
+    file[4] = 88;
+    file[40..44].copy_from_slice(b" EMF");
+    let (header, pixels) = dib.split_at(40);
+    let mut record = vec![0u8; 80];
+    let size = u32::try_from(80 + dib.len()).unwrap();
+    for (at, n) in [(0, 81), (4, size), (48, 80), (52, 40), (56, 120), (60, u32::try_from(pixels.len()).unwrap()), (68, 0x00CC_0020)] {
+        record[at..at + 4].copy_from_slice(&n.to_le_bytes());
+    }
+    file.extend_from_slice(&record);
+    file.extend_from_slice(header);
+    file.extend_from_slice(pixels);
+    file.extend_from_slice(&[14, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0]);
+    file
+}
+
+#[test]
+fn a_bitmap_and_a_metafile_that_holds_only_one_become_a_picture_file() {
+    use crate::metafile::{dib_file, emf_bitmap, wmf_bitmap};
+    let dib = small_dib();
+    let file = dib_file(&dib).unwrap();
+    assert_eq!(file.len(), 14 + dib.len());
+    // "BM", the file's length, and where its pixels begin: after both headers.
+    assert_eq!(&file[..14], &[b'B', b'M', 70, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0]);
+    assert_eq!(&file[14..], &dib[..]);
+    // Eight bits to the pixel: a table of 256 colours stands before the pixels.
+    let mut indexed = dib.clone();
+    indexed[14] = 8;
+    indexed.resize(40 + 1024 + 8, 0);
+    assert_eq!(dib_file(&indexed).unwrap()[10..14], (14u32 + 40 + 1024).to_le_bytes());
+
+    // A metafile that sets things up and draws the one bitmap, placeable or not.
+    let plain = wmf(&[(0x0103, vec![8, 0]), stretch(&dib)]);
+    assert_eq!(wmf_bitmap(&plain), Some(file.clone()));
+    let mut placeable = vec![0xD7, 0xCD, 0xC6, 0x9A];
+    placeable.resize(22, 0);
+    placeable.extend_from_slice(&plain);
+    assert_eq!(wmf_bitmap(&placeable), Some(file.clone()));
+    assert_eq!(emf_bitmap(&emf(&dib)), Some(file));
+
+    // Anything else drawn (an ellipse), a second bitmap, a bitmap that is not copied as it is,
+    // or no bitmap at all: not read.
+    assert_eq!(wmf_bitmap(&wmf(&[stretch(&dib), (0x0418, vec![0; 8])])), None);
+    assert_eq!(wmf_bitmap(&wmf(&[stretch(&dib), stretch(&dib)])), None);
+    let mut inverted = stretch(&dib);
+    inverted.1[0] = 0x21;
+    assert_eq!(wmf_bitmap(&wmf(&[inverted])), None);
+    assert_eq!(wmf_bitmap(&wmf(&[(0x0103, vec![8, 0])])), None);
+}
+
+#[test]
+fn hostile_bitmaps_and_metafiles_are_not_read() {
+    use crate::metafile::{dib_file, emf_bitmap, wmf_bitmap};
+    let dib = small_dib();
+    let files = [dib.clone(), wmf(&[stretch(&dib)]), emf(&dib)];
+    for file in &files {
+        // Cut short anywhere, and with any one byte turned over: no picture, or one that is
+        // all there.
+        for end in 0..file.len() {
+            let _ = (dib_file(&file[..end]), wmf_bitmap(&file[..end]), emf_bitmap(&file[..end]));
+            let mut changed = file.clone();
+            changed[end] ^= 0xFF;
+            for read in [dib_file(&changed), wmf_bitmap(&changed), emf_bitmap(&changed)].into_iter().flatten() {
+                assert!(read.len() <= file.len() + 14);
+            }
+        }
+    }
+    assert_eq!(wmf_bitmap(&wmf(&[stretch(&dib)])[..40]), None);
+    // A record of no length would never end; sizes beyond the data; a header that says its
+    // colours fill more than there is.
+    let mut endless = wmf(&[]);
+    endless[18] = 0;
+    assert_eq!(wmf_bitmap(&endless), None);
+    let mut far = emf(&dib);
+    far[88 + 48..88 + 52].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(emf_bitmap(&far), None);
+    let mut greedy = dib.clone();
+    greedy[32..36].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(dib_file(&greedy), None);
+    assert_eq!(dib_file(&[0xFF; 64]), None);
+}
+
+#[test]
+fn rtf_keeps_bitmaps_metafile_bitmaps_and_the_places_of_attachments() {
+    let dib = small_dib();
+    let rtf = format!(
+        "{{\\rtf1\\ansi\\pard a{{\\pict\\dibitmap0\\picwgoal300\\pichgoal300 {}}}b{{\\pict\\wmetafile8 {}}}c{{\\pict\\emfblip {}}}\
+         d{{\\pict\\wbitmap0 {}}}\\par e\\objattph\\'20f\\objattph\\par}}",
+        hexed(&dib),
+        hexed(&wmf(&[stretch(&dib)])),
+        hexed(&emf(&dib)),
+        hexed(&dib)
+    );
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    assert_eq!(doc.text(), "abcd\ne f");
+    let pictures: Vec<_> = paras(&doc).iter().flat_map(|p| &p.runs).filter_map(|r| r.picture.clone().map(|p| (p, r.extent))).collect();
+    assert_eq!(
+        pictures,
+        [
+            (Picture::Inline(Some(0)), (20, 20)),
+            // The same bitmap out of a metafile is the same picture, kept once.
+            (Picture::Inline(Some(0)), (0, 0)),
+            (Picture::Inline(Some(0)), (0, 0)),
+            // A bitmap made for one device is not read.
+            (Picture::Inline(None), (0, 0)),
+            (Picture::Object(0), (0, 0)),
+            (Picture::Object(1), (0, 0)),
+        ]
+    );
+    assert_eq!(doc.written.len(), 1);
+    assert_eq!(crate::metafile::dib_file(&dib).as_deref(), Some(&*doc.written[0]));
+    assert_eq!(doc.objects, 2);
+
+    // More places than are kept: the runs stop, the count goes on.
+    let many = format!("{{\\rtf1 {}\\par}}", "\\objattph ".repeat(1000));
+    let doc = crate::rtf::parse(many.as_bytes());
+    assert_eq!(doc.objects, 1000);
+    assert_eq!(paras(&doc).iter().flat_map(|p| &p.runs).filter(|r| r.picture.is_some()).count(), 256);
 }
 
 #[test]

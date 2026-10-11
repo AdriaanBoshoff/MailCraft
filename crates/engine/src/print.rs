@@ -57,7 +57,7 @@ impl Pictures {
         let data: Option<&[u8]> = match picture {
             Picture::Attached(id) => pictures::attached(item, id).map(|a| a.data.as_slice()),
             Picture::Inline(Some(index)) => doc.written.get(*index).map(|data| &data[..]),
-            Picture::Inline(None) | Picture::Remote => None,
+            Picture::Inline(None) | Picture::Remote | Picture::Object(_) => None,
         };
         if let Some(pixels) = data.and_then(pictures::decode) {
             self.bytes = self.bytes.saturating_add(pixels.rgba.len());
@@ -111,7 +111,8 @@ fn body(item: &Item) -> (Doc, bool) {
         }
     }
     if let Some(rtf) = item.body_rtf() {
-        let doc = mailcraft_formats::rtf::parse(&rtf);
+        let mut doc = mailcraft_formats::rtf::parse(&rtf);
+        pictures::settle(&mut doc, item);
         if !doc.is_empty() {
             return (doc, false);
         }

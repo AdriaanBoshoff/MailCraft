@@ -6,7 +6,10 @@
 //! rest of the message, so its file size, its dimensions and the memory it may take are capped
 //! before anything is decoded.
 
-use mailcraft_model::{Attachment, Item};
+use std::sync::Arc;
+
+use mailcraft_formats::rich::{Block, Doc, Picture};
+use mailcraft_model::{Attachment, Item, pid};
 
 /// Largest picture file that is decoded.
 const MAX_FILE: usize = 16 << 20;
@@ -67,4 +70,73 @@ pub fn same_id(attachment: &str, body: &str) -> bool {
 /// The attachment of `item` a body means by a content id.
 pub fn attached<'a>(item: &'a Item, content_id: &str) -> Option<&'a Attachment> {
     item.attachments.iter().find(|a| a.content_id().is_some_and(|c| same_id(c, content_id)))
+}
+
+/// Pictures of attachments one body is given, and how deep its tables are followed.
+const MAX_RENDERINGS: usize = 64;
+const MAX_DEPTH: usize = 64;
+
+/// The attachments that stand in an RTF body, in the order of their places ([MS-OXRTFEX]
+/// 2.2.3.4): those that are not hidden and whose rendering position is not 0xFFFFFFFF, by that
+/// position ([MS-OXCMSG] 2.2.2.16).
+pub fn standing(item: &Item) -> Vec<&Attachment> {
+    let mut list: Vec<(u32, &Attachment)> = item
+        .attachments
+        .iter()
+        .filter(|a| a.props.bool(pid::ATTACHMENT_HIDDEN) != Some(true))
+        .filter_map(|a| Some((u32::from_ne_bytes(a.props.i32(pid::RENDERING_POSITION)?.to_ne_bytes()), a)))
+        .filter(|(at, _)| *at != u32::MAX)
+        .collect();
+    list.sort_by_key(|(at, _)| *at);
+    list.into_iter().map(|(_, a)| a).collect()
+}
+
+/// Put `item`'s attachments into the places `doc` keeps for them. An attached object that has a
+/// picture of itself ([MS-OXCMSG] 2.2.2.17, a metafile) is shown as that picture when it can be
+/// read; any other attachment is named. Where the places and the attachments do not agree in
+/// number the places are given up, as [MS-OXRTFEX] 2.2.3.4 has it: the attachments are still
+/// listed with the message.
+pub fn settle(doc: &mut Doc, item: &Item) {
+    if doc.objects == 0 {
+        return;
+    }
+    let list = standing(item);
+    let list = if list.len() == doc.objects { list } else { Vec::new() };
+    let Doc { blocks, written, .. } = doc;
+    settle_blocks(blocks, written, &list, 0);
+}
+
+fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&Attachment], depth: usize) {
+    for block in blocks {
+        match block {
+            Block::Para(para) => {
+                for run in &mut para.runs {
+                    let Some(Picture::Object(place)) = run.picture else { continue };
+                    run.picture = None;
+                    let Some(attachment) = list.get(place) else { continue };
+                    // Attach method 6: an object of another program, with its own picture.
+                    let rendering = (attachment.props.i32(pid::ATTACH_METHOD) == Some(6) && written.len() < MAX_RENDERINGS)
+                        .then(|| attachment.props.bin(pid::ATTACH_RENDERING).and_then(mailcraft_formats::metafile::wmf_bitmap))
+                        .flatten();
+                    match rendering {
+                        Some(file) => {
+                            written.push(Arc::from(file));
+                            run.picture = Some(Picture::Inline(Some(written.len() - 1)));
+                            run.text = attachment.name().chars().filter(|c| !c.is_control()).take(120).collect();
+                        }
+                        None => {
+                            let name: String = attachment.name().chars().filter(|c| !c.is_control()).take(120).collect();
+                            run.text = format!("[Attachment: {name}]");
+                        }
+                    }
+                }
+            }
+            Block::Table(table) if depth < MAX_DEPTH => {
+                for cell in table.rows.iter_mut().flatten() {
+                    settle_blocks(&mut cell.blocks, written, list, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
 }

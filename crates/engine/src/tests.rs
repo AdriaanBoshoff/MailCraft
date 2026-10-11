@@ -255,6 +255,76 @@ fn folders_can_be_made_renamed_and_deleted_but_not_the_inbox() {
 }
 
 #[test]
+fn attachments_stand_in_their_places_in_an_rtf_body() {
+    use mailcraft_formats::rich::{Block, Picture};
+    use mailcraft_model::{Attachment, Item, PropValue, pid, rtf};
+    // A bitmap of two by two pixels, the lower left one blue, drawn by a metafile (META_STRETCHDIB).
+    let mut dib = Vec::new();
+    for n in [40u32, 2, 2] {
+        dib.extend_from_slice(&n.to_le_bytes());
+    }
+    dib.extend_from_slice(&[1, 0, 24, 0]);
+    dib.extend_from_slice(&[0; 24]);
+    dib.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0]);
+    let mut wmf = vec![1, 0, 9, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    wmf.extend_from_slice(&u32::try_from((28 + dib.len()) / 2).unwrap().to_le_bytes());
+    wmf.extend_from_slice(&[0x43, 0x0F, 0x20, 0, 0xCC, 0, 0, 0]);
+    wmf.extend_from_slice(&[0; 16]);
+    wmf.extend_from_slice(&dib);
+    wmf.extend_from_slice(&[3, 0, 0, 0, 0, 0]);
+
+    let at = |mut a: Attachment, place: i32| {
+        a.props.set(pid::RENDERING_POSITION, PropValue::Int32(place));
+        a
+    };
+    let mut chart = at(Attachment::file("chart", "", Vec::new()), 20);
+    chart.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
+    chart.props.set(pid::ATTACH_RENDERING, PropValue::Binary(wmf));
+    let mut hidden = at(Attachment::file("hidden.png", "image/png", vec![1]), 1);
+    hidden.props.set(pid::ATTACHMENT_HIDDEN, PropValue::Bool(true));
+    let attachments = vec![
+        at(Attachment::file("notes\u{7}.txt", "text/plain", b"notes".to_vec()), 500),
+        chart,
+        hidden,
+        at(Attachment::file("unplaced.txt", "text/plain", vec![2]), -1),
+        Attachment::file("from-mime.txt", "text/plain", vec![3]),
+    ];
+    let mut item = Item { attachments, ..Item::default() };
+    let names: Vec<String> = crate::pictures::standing(&item).iter().map(|a| a.name()).collect();
+    assert_eq!(names, ["chart", "notes\u{7}.txt"], "by rendering position; hidden ones and those with no place are left out");
+
+    let read = |places: usize, item: &Item| {
+        let body = format!("{{\\rtf1\\ansi\\pard See {}\\par}}", "\\objattph\\'20".repeat(places));
+        let mut holder = Item::default();
+        holder.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(body.as_bytes())));
+        let mut doc = mailcraft_formats::rtf::parse(&holder.body_rtf().unwrap());
+        crate::pictures::settle(&mut doc, item);
+        doc
+    };
+    let doc = read(2, &item);
+    let Some(Block::Para(para)) = doc.blocks.first() else { panic!("{doc:?}") };
+    let stands: Vec<(Option<Picture>, &str)> =
+        para.runs.iter().map(|r| (r.picture.clone(), r.text.as_str())).filter(|(p, t)| p.is_some() || t.contains('[')).collect();
+    assert_eq!(stands, [(Some(Picture::Inline(Some(0))), "chart"), (None, "[Attachment: notes.txt]")]);
+    // The object's own picture is a picture file the reading pane and print can decode.
+    let pixels = crate::pictures::decode(&doc.written[0]).unwrap();
+    assert_eq!((pixels.width, pixels.height), (2, 2));
+    assert_eq!(&pixels.rgba[8..12], &[0, 0, 255, 255]);
+
+    // The body and the attachments do not agree: the places are given up, nothing is shown there.
+    for places in [1, 3, 300] {
+        let doc = read(places, &item);
+        assert!(doc.written.is_empty());
+        assert_eq!(doc.text().trim(), "See", "{places}");
+        let Some(Block::Para(para)) = doc.blocks.first() else { panic!("{doc:?}") };
+        assert!(para.runs.iter().all(|r| r.picture.is_none()));
+    }
+    // A rendering that is not a metafile of one bitmap: the object is named.
+    item.attachments[1].props.set(pid::ATTACH_RENDERING, PropValue::Binary(vec![0xFF; 64]));
+    assert!(read(2, &item).text().contains("[Attachment: chart]"));
+}
+
+#[test]
 fn a_message_prints_to_a_pdf_file() {
     let dir = std::env::temp_dir().join(format!("mailcraft-engine-print-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
