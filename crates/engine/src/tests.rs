@@ -255,6 +255,74 @@ fn folders_can_be_made_renamed_and_deleted_but_not_the_inbox() {
 }
 
 #[test]
+fn an_attached_object_is_shown_by_the_best_picture_it_has() {
+    use mailcraft_formats::rich::{Block, Picture};
+    use mailcraft_model::{Attachment, Item, PropValue, pid, rtf};
+    use std::io::Write;
+    let mut dib = Vec::new();
+    for n in [40u32, 2, 2] {
+        dib.extend_from_slice(&n.to_le_bytes());
+    }
+    dib.extend_from_slice(&[1, 0, 24, 0]);
+    dib.extend_from_slice(&[0; 24]);
+    dib.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0]);
+    let object = |kind: &str, bitmap: &[u8]| {
+        let mut a = Attachment::file("Card", "", mailcraft_msg::ole::picture_object(kind, bitmap).unwrap());
+        a.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
+        a.props.set(pid::RENDERING_POSITION, PropValue::Int32(0));
+        a
+    };
+    let show = |a: Attachment| {
+        let mut holder = Item::default();
+        holder.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(b"{\\rtf1\\ansi\\pard \\objattph\\'20\\par}")));
+        let mut doc = mailcraft_formats::rtf::parse(&holder.body_rtf().unwrap());
+        crate::pictures::settle(&mut doc, &Item { attachments: vec![a], ..Item::default() });
+        let Some(Block::Para(para)) = doc.blocks.first() else { panic!("a paragraph") };
+        let run = para.runs.iter().find(|r| r.picture.is_some() || r.text.contains("Card")).unwrap().clone();
+        let file = match run.picture {
+            Some(Picture::Inline(Some(n))) => Some(doc.written[n].to_vec()),
+            _ => None,
+        };
+        (run.text, file)
+    };
+    // The picture the object keeps of itself.
+    let (text, file) = show(object("Permit card", &dib));
+    assert_eq!(text, "Card");
+    let pixels = crate::pictures::decode(&file.unwrap()).unwrap();
+    assert_eq!((pixels.width, pixels.height), (2, 2));
+    // One that cannot be read: the attachment is named, with what the object calls itself.
+    let (text, file) = show(object("Permit\u{7} card", &dib[..30]));
+    assert_eq!((text.as_str(), file), ("[Attachment: Card (Permit card)]", None));
+    // The object's own data, when that is a picture file, goes before what it keeps for showing:
+    // here a bitmap file of one pixel beside a presentation of two by two.
+    let mut bmp = b"BM".to_vec();
+    bmp.extend_from_slice(&[58, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0]);
+    for n in [40u32, 1, 1] {
+        bmp.extend_from_slice(&n.to_le_bytes());
+    }
+    bmp.extend_from_slice(&[1, 0, 24, 0]);
+    bmp.extend_from_slice(&[0; 24]);
+    bmp.extend_from_slice(&[0, 0, 255, 0]);
+    let mut a = object("Bitmap", &dib);
+    let mut cf = cfb::CompoundFile::open(std::io::Cursor::new(std::mem::take(&mut a.data))).unwrap();
+    let mut native = u32::try_from(bmp.len()).unwrap().to_le_bytes().to_vec();
+    native.extend_from_slice(&bmp);
+    cf.create_stream("/\u{1}Ole10Native").unwrap().write_all(&native).unwrap();
+    cf.flush().unwrap();
+    a.data = cf.into_inner().into_inner();
+    let (_, file) = show(a);
+    assert_eq!(file.as_deref(), Some(&bmp[..]));
+    // Data that only claims to be a picture is passed over for the next one that reads.
+    let mut a = object("Bitmap", &dib);
+    let mut cf = cfb::CompoundFile::open(std::io::Cursor::new(std::mem::take(&mut a.data))).unwrap();
+    cf.create_stream("/\u{1}Ole10Native").unwrap().write_all(&[4, 0, 0, 0, b'B', b'M', 1, 2]).unwrap();
+    cf.flush().unwrap();
+    a.data = cf.into_inner().into_inner();
+    let pixels = crate::pictures::decode(&show(a).1.unwrap()).unwrap();
+    assert_eq!((pixels.width, pixels.height), (2, 2));
+}
+
+#[test]
 fn attachments_stand_in_their_places_in_an_rtf_body() {
     use mailcraft_formats::rich::{Block, Picture};
     use mailcraft_model::{Attachment, Item, PropValue, pid, rtf};

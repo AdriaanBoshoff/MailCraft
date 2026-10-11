@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 13 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 14 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -27,9 +27,10 @@
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
    styles, fonts by name, colours, alignment, indents, links, pictures written into the body (PNG,
    JPEG, bitmaps, and metafiles that hold only one bitmap), attachments in their places in the text
-   (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object as its own picture, any other by name),
+   (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object by the best picture it has, [MS-OLEDS]
+   2.3.4 and 2.3.6, any other by name),
    and tables with each cell's own lines, fill, place and merge down; not yet: metafiles that are
-   drawings (a placeholder), the picture inside an attached object's own storage, an icon beside an
+   drawings (a placeholder), an icon beside an
    attachment named in the text, `\bin` picture data, list numbering beyond the text the writer left, nested tables,
    cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
@@ -71,6 +72,7 @@
 
 ## Revision history
 
+- 14 · 2026-10-11 — attached objects of other programs are kept through `.msg` and shown by their own pictures (item 3).
 - 13 · 2026-10-11 — RTF bodies show attachments in their places, bitmaps and metafile bitmaps (item 3).
 - 12 · 2026-10-11 — pictures are printed; what remains for them listed (item 3).
 - 11 · 2026-10-11 — a message prints to a PDF file; what printing lacks listed (item 3).

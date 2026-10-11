@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 14 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 15 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 127, all passing |
+| Tests | 131, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -56,7 +56,10 @@
 10. Done: pictures in print - attached and written-in pictures are drawn on the page.
 11. Done: attachments stand in their places in an RTF body; bitmaps, and metafiles that hold
     only a bitmap, are shown.
-12. Next: metafiles that are drawings, and the pictures inside attached objects.
+12. Done: an attached object of another program is kept whole through `.msg`, and is shown by
+    the best picture it has.
+13. Next: a pass over what is already built, to make each feature better than the one it
+    follows; then metafiles that are drawings.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -155,3 +158,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   ([MS-WMF], [MS-EMF]); a metafile that is a drawing still leaves a place. The sample receipt has
   an attachment in its text. Not yet: metafiles that draw lines, shapes and text, the picture
   inside an attached object's own storage, an icon beside an attachment's name, `\bin` data.
+- **2026-10-11** - M2.12: attached objects of other programs. An attachment with attach method 6
+  ([MS-OXCMSG] 2.2.2.9) is a storage the owning program lays out ([MS-OXMSG] 2.2.2.2). Reading a
+  `.msg` used to take that storage for an attached message and writing dropped it; now it is kept
+  whole, as a compound file of its own (every stream and storage, with classes and state), and
+  written back as the storage it was, its entry marked as an object (2.4.2.2). Nothing in an
+  object is run or handed to another program. In an RTF body the object is shown by the best
+  picture that can be read: the pictures it keeps of itself ([MS-OLEDS] 2.3.4), before the small
+  one the message keeps (2.2.2.17). Beyond Outlook: when the object's own data is a picture file
+  (2.3.6) that picture is shown, at its full quality, in place of the copy kept for showing; and an
+  object that cannot be shown is named with what it calls itself (2.3.8) and not left as a blank
+  frame. The sample receipt carries such an object, a permit card drawn in code.

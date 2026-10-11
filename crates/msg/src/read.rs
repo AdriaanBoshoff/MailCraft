@@ -160,7 +160,19 @@ fn read_message(cf: &mut Cf, base: &Path, header: usize, names: &[Option<NamedKe
             _ => Vec::new(),
         };
         let inner = path.join(EMBEDDED_STORAGE);
-        let embedded = (depth < MAX_DEPTH && cf.is_storage(&inner)).then(|| Box::new(read_message(cf, &inner, HEADER_EMBEDDED, names, depth + 1)));
+        // The storage under an attachment is a message, or, with attach method 6, an object some
+        // other program laid out ([MS-OXMSG] 2.2.2.2). That one is kept whole, as a compound
+        // file of its own, which is also how a store hands it over.
+        let custom = props.i32(pid::ATTACH_METHOD) == Some(6);
+        let (data, embedded) = if !cf.is_storage(&inner) {
+            (data, None)
+        } else if custom {
+            (crate::ole::pack(cf, &inner).unwrap_or_default(), None)
+        } else if depth < MAX_DEPTH {
+            (data, Some(Box::new(read_message(cf, &inner, HEADER_EMBEDDED, names, depth + 1))))
+        } else {
+            (data, None)
+        };
         item.attachments.push(Attachment { props, data, embedded });
     }
     item.normalise_html();

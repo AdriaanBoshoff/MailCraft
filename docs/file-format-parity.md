@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 4 · 2026-10-11 · RTF-only and inline-picture `.msg` files checked in Outlook; RTF bodies are decoded for reading
+**Status:** revision 5 · 2026-10-11 · RTF-only and inline-picture `.msg` files checked in Outlook; RTF bodies are decoded for reading
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -23,6 +23,7 @@ writes for these checks stay local and are never committed.
 | File attachment: name, size, by-value | read back the same | not checked | not checked |
 | Inline picture (attachment with a content id, `cid:` in the HTML) | drawn in the body at the size asked for | not checked | not checked |
 | Attached message | not checked in Outlook | not checked | not checked |
+| Attached object of another program (attach method 6, a storage: [MS-OXMSG] 2.2.2.2) | written as the storage it was; not checked in Outlook | read whole, every stream and storage with classes and state (our own round trip is pinned by a test) | not checked |
 | Properties MailCraft does not interpret | n/a | kept | preserved (8 named properties survive) |
 | Template (`.oft`) opened as a new item | subject, body, recipients, attachment, categories arrive | read | not checked |
 

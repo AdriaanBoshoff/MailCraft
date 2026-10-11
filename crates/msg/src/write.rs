@@ -196,6 +196,12 @@ fn set(list: &mut Vec<(u16, PropValue)>, id: u16, v: PropValue) {
     list.push((id, v));
 }
 
+/// An attached object's bytes as the compound file they should be; `None` when they are not one.
+fn object(data: &[u8]) -> Option<cfb::CompoundFile<Cursor<&[u8]>>> {
+    // The container library is not ours; a panic inside it on damaged bytes must not escape.
+    std::panic::catch_unwind(|| cfb::CompoundFile::open(Cursor::new(data)).ok()).ok().flatten()
+}
+
 fn write_message(cf: &mut Cf, base: &Path, item: &Item, top: bool, names: &mut Names) -> std::io::Result<()> {
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX).to_le_bytes();
     let mut header = vec![0u8; 8];
@@ -245,8 +251,19 @@ fn write_message(cf: &mut Cf, base: &Path, item: &Item, top: bool, names: &mut N
             set(&mut props, pid::RENDERING_POSITION, PropValue::Int32(-1));
         }
         props.retain(|(id, _)| *id != pid::ATTACH_DATA);
-        match &a.embedded {
-            Some(inner) => {
+        // An object of another program goes back as the storage it was ([MS-OXMSG] 2.2.2.2).
+        let object = (a.embedded.is_none() && a.props.i32(pid::ATTACH_METHOD) == Some(6)).then(|| object(&a.data)).flatten();
+        match (&a.embedded, object) {
+            (None, Some(mut from)) => {
+                // As for an attached message, but the object kind is 4 ([MS-OXMSG] 2.4.2.2).
+                let mut raw = 0xFFFF_FFFFu32.to_le_bytes().to_vec();
+                raw.extend_from_slice(&4u32.to_le_bytes());
+                props.push((pid::ATTACH_DATA, PropValue::Other { ty: ptype::OBJECT, raw }));
+                let sub = dir.join(EMBEDDED_STORAGE);
+                cf.create_storage(&sub)?;
+                crate::ole::copy(&mut from, Path::new("/"), cf, &sub, &mut crate::ole::Budget::new(), 0)?;
+            }
+            (Some(inner), _) => {
                 // An attached message is a storage; its entry carries 0xFFFFFFFF and the object
                 // kind 1 in place of a size ([MS-OXMSG] 2.4.2.2).
                 set(&mut props, pid::ATTACH_METHOD, PropValue::Int32(5));
@@ -257,7 +274,7 @@ fn write_message(cf: &mut Cf, base: &Path, item: &Item, top: bool, names: &mut N
                 cf.create_storage(&sub)?;
                 write_message(cf, &sub, inner, false, names)?;
             }
-            None => {
+            (None, None) => {
                 set(&mut props, pid::ATTACH_SIZE, PropValue::Int32(i32::try_from(a.data.len()).unwrap_or(i32::MAX)));
                 props.push((pid::ATTACH_DATA, PropValue::Binary(a.data.clone())));
             }

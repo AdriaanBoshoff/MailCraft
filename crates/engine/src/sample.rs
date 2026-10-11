@@ -64,6 +64,7 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl {\\highlight2 Total paid}\\cell {\\b 62.00}\\cell\\row\r\n\
 \\pard\\par\\li720 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
 \\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\
+\\pard\\par\\qc \\objattph\\'20\\par\r\n\
 \\pard\\par Questions? See {\\field{\\*\\fldinst HYPERLINK \"https://parking.example.net/help\"}{\\fldrslt{\\ul\\cf1 parking.example.net/help}}}.\\par}";
 
 /// A shop's order mail the way such mail is built: a layout table, a banner, a data table, a
@@ -117,6 +118,13 @@ pub fn sample_store(now: i64) -> MemStore {
     let mut card = Attachment::file("permit-RP-20418.txt", "text/plain", b"Riverside Car Park\r\nPermit RP-20418, bay 14\r\n".to_vec());
     card.props.set(pid::RENDERING_POSITION, PropValue::Int32(0));
     permit.attachments.push(card);
+    // And an object another program would have made: here a picture of the card, drawn below.
+    if let Ok(object) = mailcraft_msg::ole::picture_object("Permit card", &card_bitmap()) {
+        let mut picture = Attachment::file("Permit card", "", object);
+        picture.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
+        picture.props.set(pid::RENDERING_POSITION, PropValue::Int32(1));
+        permit.attachments.push(picture);
+    }
     permit.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(0x11));
     s.push_item(receipts, permit);
 
@@ -368,4 +376,35 @@ fn png(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> 
     chunk(b"IDAT", &zlib);
     chunk(b"IEND", &[]);
     out
+}
+
+/// The permit card of the sample receipt: a bitmap without a file's header ([MS-WMF] 2.2.2.9),
+/// drawn here. A cream card with a green edge, a blue band, and a "P" in a square.
+fn card_bitmap() -> Vec<u8> {
+    const W: usize = 192;
+    const H: usize = 112;
+    let inside = |x: usize, y: usize, x0: usize, y0: usize, x1: usize, y1: usize| (x0..x1).contains(&x) && (y0..y1).contains(&y);
+    let mut dib = Vec::with_capacity(40 + W * H * 3);
+    for field in [40, W as u32, H as u32, 1 | 24 << 16, 0, (W * H * 3) as u32, 3780, 3780, 0, 0] {
+        dib.extend_from_slice(&field.to_le_bytes());
+    }
+    // Rows run from the bottom up, each pixel blue, green, red.
+    for y in (0..H).rev() {
+        for x in 0..W {
+            let letter = inside(x, y, 34, 30, 42, 82) || inside(x, y, 34, 30, 62, 38) || inside(x, y, 34, 52, 62, 60) || inside(x, y, 56, 30, 64, 60);
+            let color: [u8; 3] = if !inside(x, y, 4, 4, W - 4, H - 4) {
+                [0x4F, 0x7A, 0x2E]
+            } else if inside(x, y, 20, 20, 76, 92) {
+                if letter { [0xFF, 0xFF, 0xFF] } else { [0xA0, 0x5A, 0x1F] }
+            } else if inside(x, y, 88, 28, W - 16, 40) {
+                [0xA0, 0x5A, 0x1F]
+            } else if inside(x, y, 88, 52, W - 40, 58) || inside(x, y, 88, 68, W - 64, 74) || inside(x, y, 88, 84, W - 28, 90) {
+                [0x9A, 0x9A, 0x8C]
+            } else {
+                [0xE4, 0xF3, 0xFA]
+            };
+            dib.extend_from_slice(&color);
+        }
+    }
+    dib
 }

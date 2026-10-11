@@ -106,6 +106,21 @@ pub fn settle(doc: &mut Doc, item: &Item) {
     settle_blocks(blocks, written, &list, 0);
 }
 
+/// A picture file for an attached object, from the best source that can be read: the object's
+/// own data when that is a picture, the pictures it keeps of itself ([MS-OLEDS] 2.3.4), and last
+/// the small picture the message keeps of it ([MS-OXCMSG] 2.2.2.17).
+fn object_picture(attachment: &Attachment, object: Option<&mailcraft_msg::ole::Object>) -> Option<Vec<u8>> {
+    use mailcraft_formats::metafile;
+    use mailcraft_msg::ole::Shape;
+    let own = object.into_iter().flat_map(|o| &o.pictures).find_map(|p| match p.shape {
+        Shape::File => decode(&p.data).map(|_| p.data.clone()),
+        Shape::Bitmap => metafile::dib_file(&p.data),
+        Shape::Metafile => metafile::wmf_bitmap(&p.data),
+        Shape::Enhanced => metafile::emf_bitmap(&p.data),
+    });
+    own.or_else(|| attachment.props.bin(pid::ATTACH_RENDERING).and_then(metafile::wmf_bitmap))
+}
+
 fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&Attachment], depth: usize) {
     for block in blocks {
         match block {
@@ -115,8 +130,10 @@ fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&At
                     run.picture = None;
                     let Some(attachment) = list.get(place) else { continue };
                     // Attach method 6: an object of another program, with its own picture.
+                    let object =
+                        (attachment.props.i32(pid::ATTACH_METHOD) == Some(6)).then(|| mailcraft_msg::ole::object(&attachment.data)).flatten();
                     let rendering = (attachment.props.i32(pid::ATTACH_METHOD) == Some(6) && written.len() < MAX_RENDERINGS)
-                        .then(|| attachment.props.bin(pid::ATTACH_RENDERING).and_then(mailcraft_formats::metafile::wmf_bitmap))
+                        .then(|| object_picture(attachment, object.as_ref()))
                         .flatten();
                     match rendering {
                         Some(file) => {
@@ -126,7 +143,11 @@ fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&At
                         }
                         None => {
                             let name: String = attachment.name().chars().filter(|c| !c.is_control()).take(120).collect();
-                            run.text = format!("[Attachment: {name}]");
+                            // An object that cannot be shown is at least said to be what it is.
+                            run.text = match object.and_then(|o| o.kind) {
+                                Some(kind) => format!("[Attachment: {name} ({kind})]"),
+                                None => format!("[Attachment: {name}]"),
+                            };
                         }
                     }
                 }

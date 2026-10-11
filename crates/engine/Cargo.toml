@@ -23,3 +23,7 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+# Builds the attached objects the tests read.
+cfb = { workspace = true }
