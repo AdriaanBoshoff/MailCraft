@@ -1,0 +1,21 @@
+[package]
+name = "mailcraft-ui-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MailCraft egui front end (Outlook-Classic-style ribbon UI); swappable: nothing below depends on it"
+
+[lints]
+workspace = true
+
+[dependencies]
+mailcraft-model = { workspace = true }
+mailcraft-engine = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+image = { workspace = true }

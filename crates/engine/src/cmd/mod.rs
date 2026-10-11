@@ -1,0 +1,79 @@
+//! The command registry. Every user-visible action is one [`CommandSpec`]; the ribbon, shortcuts,
+//! command search, the CLI and agents all dispatch by id.
+
+mod compose;
+mod file;
+mod folder;
+mod mail;
+mod view;
+
+use crate::{CmdResult, EngineError, Session};
+use serde_json::Value;
+use std::sync::OnceLock;
+
+pub struct CommandSpec {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// Ribbon tab and group this command lives in; empty for commands with no button.
+    pub tab: &'static str,
+    pub group: &'static str,
+    /// Outlook Classic's default shortcut, as shown in its tooltips.
+    pub shortcut: &'static str,
+    /// One line describing the JSON parameters.
+    pub params: &'static str,
+    pub enabled: fn(&Session) -> bool,
+    pub run: fn(&mut Session, &Value) -> CmdResult,
+}
+
+pub fn registry() -> &'static [CommandSpec] {
+    static REG: OnceLock<Vec<CommandSpec>> = OnceLock::new();
+    REG.get_or_init(|| {
+        let mut v = Vec::new();
+        v.extend(file::commands());
+        v.extend(mail::commands());
+        v.extend(compose::commands());
+        v.extend(folder::commands());
+        v.extend(view::commands());
+        v
+    })
+}
+
+pub(crate) fn always(_: &Session) -> bool {
+    true
+}
+
+pub(crate) fn has_selection(s: &Session) -> bool {
+    s.selected.is_some() && s.open.is_some()
+}
+
+pub(crate) fn has_selection_writable(s: &Session) -> bool {
+    has_selection(s) && s.current_writable()
+}
+
+pub(crate) fn has_folder(s: &Session) -> bool {
+    s.current.is_some()
+}
+
+pub(crate) fn has_folder_writable(s: &Session) -> bool {
+    s.current.is_some() && s.current_writable()
+}
+
+pub(crate) fn p_str<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
+    p.get(key).and_then(Value::as_str)
+}
+
+pub(crate) fn need_str<'a>(p: &'a Value, key: &str) -> Result<&'a str, EngineError> {
+    p_str(p, key).ok_or_else(|| EngineError::BadParams(format!("\"{key}\" (text) is required")))
+}
+
+pub(crate) fn p_u64(p: &Value, key: &str) -> Option<u64> {
+    p.get(key).and_then(Value::as_u64)
+}
+
+pub(crate) fn p_bool(p: &Value, key: &str) -> Option<bool> {
+    p.get(key).and_then(Value::as_bool)
+}
+
+pub(crate) fn ok() -> CmdResult {
+    Ok(Value::Null)
+}

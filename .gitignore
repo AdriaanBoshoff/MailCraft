@@ -1,0 +1,10 @@
+# build output
+/target/
+
+# local-only planning, Outlook observation and real mail data: never committed, never published
+/plan/
+
+# Outlook-produced data files must never be committed (fixtures come from our own writers)
+*.pst
+*.ost
+*.nk2

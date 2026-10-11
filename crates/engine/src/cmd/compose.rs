@@ -1,0 +1,326 @@
+//! Compose commands: new mail, reply, reply all, forward, and the compose window's own actions.
+//! Nothing here touches a network: "Send" files the message in the Outbox.
+
+use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
+use crate::{CmdResult, Draft, EngineError, Session};
+use mailcraft_model::{
+    Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
+    recipient_label, time,
+};
+use serde_json::Value;
+
+/// One attached file is at most this large, and a draft carries at most this many.
+const MAX_ATTACHMENT: u64 = 150 * 1024 * 1024;
+const MAX_ATTACHMENTS: usize = 500;
+/// Field text is clamped: a subject line, an address line, a body.
+const MAX_LINE: usize = 32 * 1024;
+const MAX_BODY: usize = 16 * 1024 * 1024;
+
+pub(super) fn commands() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec { id: "mail.new", label: "New Email", tab: "Home", group: "New", shortcut: "Ctrl+N", params: "", enabled: always, run: new },
+        CommandSpec {
+            id: "mail.reply",
+            label: "Reply",
+            tab: "Home",
+            group: "Respond",
+            shortcut: "Ctrl+R",
+            params: "",
+            enabled: has_selection,
+            run: reply,
+        },
+        CommandSpec {
+            id: "mail.replyAll",
+            label: "Reply All",
+            tab: "Home",
+            group: "Respond",
+            shortcut: "Ctrl+Shift+R",
+            params: "",
+            enabled: has_selection,
+            run: reply_all,
+        },
+        CommandSpec {
+            id: "mail.forward",
+            label: "Forward",
+            tab: "Home",
+            group: "Respond",
+            shortcut: "Ctrl+F",
+            params: "",
+            enabled: has_selection,
+            run: forward,
+        },
+        CommandSpec {
+            id: "compose.setField",
+            label: "Set Field",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"field": "to" | "cc" | "bcc" | "subject" | "body", "value": text}"#,
+            enabled: composing,
+            run: set_field,
+        },
+        CommandSpec {
+            id: "compose.showBcc",
+            label: "Bcc",
+            tab: "Options",
+            group: "Show Fields",
+            shortcut: "",
+            params: r#"{"show": true | false}; default toggles"#,
+            enabled: composing,
+            run: show_bcc,
+        },
+        CommandSpec {
+            id: "compose.attach",
+            label: "Attach File",
+            tab: "Message",
+            group: "Include",
+            shortcut: "",
+            params: r#"{"path": file to attach}"#,
+            enabled: composing,
+            run: attach,
+        },
+        CommandSpec {
+            id: "compose.removeAttachment",
+            label: "Remove Attachment",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"index": attachment number}"#,
+            enabled: composing,
+            run: remove_attachment,
+        },
+        CommandSpec {
+            id: "compose.send",
+            label: "Send",
+            tab: "Message",
+            group: "",
+            shortcut: "Ctrl+Enter",
+            params: "",
+            enabled: composing,
+            run: send,
+        },
+        CommandSpec {
+            id: "compose.saveDraft",
+            label: "Save",
+            tab: "Message",
+            group: "",
+            shortcut: "Ctrl+S",
+            params: "",
+            enabled: composing,
+            run: save_draft,
+        },
+        CommandSpec {
+            id: "compose.discard",
+            label: "Discard",
+            tab: "Message",
+            group: "",
+            shortcut: "Esc",
+            params: "",
+            enabled: composing,
+            run: discard,
+        },
+    ]
+}
+
+fn composing(s: &Session) -> bool {
+    s.compose.is_some()
+}
+
+fn new(s: &mut Session, _: &Value) -> CmdResult {
+    s.compose = Some(Draft { kind: "New", ..Draft::default() });
+    ok()
+}
+
+/// "Name <address>", or just the address.
+fn mailbox(name: &str, email: &str) -> String {
+    if name.is_empty() || name == email {
+        email.to_string()
+    } else if email.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} <{email}>")
+    }
+}
+
+/// Add `prefix` unless the subject already starts with it (Outlook does not stack "RE: RE:").
+fn prefixed(prefix: &str, subject: &str) -> String {
+    let has = subject.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix));
+    if has { subject.to_string() } else { format!("{prefix} {subject}").trim_end().to_string() }
+}
+
+/// The header block Outlook puts above the quoted text of a plain-text reply or forward.
+fn quoted(s: &Session, item: &Item) -> String {
+    let mut out = String::from("\n\n-----Original Message-----\n");
+    out.push_str(&format!("From: {}\n", mailbox(&item.sender_name(), &item.sender_email())));
+    if item.time() > 0 {
+        out.push_str(&format!("Sent: {}\n", time::civil(item.time(), s.tz_offset_min).full_stamp()));
+    }
+    out.push_str(&format!("To: {}\n", item.display_recipients(RECIP_TO)));
+    let cc = item.display_recipients(RECIP_CC);
+    if !cc.is_empty() {
+        out.push_str(&format!("Cc: {cc}\n"));
+    }
+    out.push_str(&format!("Subject: {}\n\n", item.subject()));
+    out.push_str(&item.body_text());
+    out
+}
+
+fn recipients_of(s: &Session, item: &Item, kind: i32) -> Vec<String> {
+    item.recipients
+        .iter()
+        .filter(|r| r.i32(pid::RECIPIENT_TYPE).unwrap_or(RECIP_TO) == kind)
+        .filter(|r| !recipient_email(r).eq_ignore_ascii_case(&s.user_email))
+        .map(|r| mailbox(&recipient_label(r), &recipient_email(r)))
+        .collect()
+}
+
+fn respond(s: &mut Session, kind: &'static str) -> CmdResult {
+    let item = s.open.clone().ok_or(StoreError::NoItem)?;
+    let sender = mailbox(&item.sender_name(), &item.sender_email());
+    let mut draft = Draft { kind, body: quoted(s, &item), ..Draft::default() };
+    match kind {
+        "Forward" => {
+            draft.subject = prefixed("FW:", &item.subject());
+            draft.attachments = item.attachments.clone();
+        }
+        _ => {
+            draft.subject = prefixed("RE:", &item.subject());
+            draft.to = sender.clone();
+            if kind == "Reply All" {
+                let others: Vec<String> = recipients_of(s, &item, RECIP_TO).into_iter().filter(|r| *r != sender).collect();
+                if !others.is_empty() {
+                    draft.to = format!("{sender}; {}", others.join("; "));
+                }
+                draft.cc = recipients_of(s, &item, RECIP_CC).join("; ");
+            }
+        }
+    }
+    s.compose = Some(draft);
+    ok()
+}
+
+fn reply(s: &mut Session, _: &Value) -> CmdResult {
+    respond(s, "Reply")
+}
+
+fn reply_all(s: &mut Session, _: &Value) -> CmdResult {
+    respond(s, "Reply All")
+}
+
+fn forward(s: &mut Session, _: &Value) -> CmdResult {
+    respond(s, "Forward")
+}
+
+fn clamp(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.get(..end).unwrap_or("").to_string()
+}
+
+fn set_field(s: &mut Session, p: &Value) -> CmdResult {
+    let field = need_str(p, "field")?.to_ascii_lowercase();
+    let value = need_str(p, "value")?;
+    let draft = s.compose.as_mut().ok_or_else(|| EngineError::Disabled("Set Field".into()))?;
+    let one_line = clamp(&value.replace("\r\n", " ").replace(['\r', '\n'], " "), MAX_LINE);
+    match field.as_str() {
+        "to" => draft.to = one_line,
+        "cc" => draft.cc = one_line,
+        "bcc" => {
+            draft.bcc = one_line;
+            draft.show_bcc = true;
+        }
+        "subject" => draft.subject = one_line,
+        "body" => draft.body = clamp(value, MAX_BODY),
+        other => return Err(EngineError::BadParams(format!("\"{other}\" is not to, cc, bcc, subject or body"))),
+    }
+    ok()
+}
+
+fn show_bcc(s: &mut Session, p: &Value) -> CmdResult {
+    if let Some(d) = s.compose.as_mut() {
+        d.show_bcc = p_bool(p, "show").unwrap_or(!d.show_bcc);
+    }
+    ok()
+}
+
+fn attach(s: &mut Session, p: &Value) -> CmdResult {
+    let path = std::path::Path::new(need_str(p, "path")?);
+    let draft = s.compose.as_mut().ok_or_else(|| EngineError::Disabled("Attach File".into()))?;
+    if draft.attachments.len() >= MAX_ATTACHMENTS {
+        return Err(EngineError::Format("this message already has as many attachments as it can carry".into()));
+    }
+    if std::fs::metadata(path)?.len() > MAX_ATTACHMENT {
+        return Err(EngineError::Format("this file is too large to attach".into()));
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".to_string());
+    draft.attachments.push(Attachment::file(&name, "", std::fs::read(path)?));
+    ok()
+}
+
+fn remove_attachment(s: &mut Session, p: &Value) -> CmdResult {
+    let index = usize::try_from(p_u64(p, "index").unwrap_or(0)).unwrap_or(usize::MAX);
+    let draft = s.compose.as_mut().ok_or_else(|| EngineError::Disabled("Remove Attachment".into()))?;
+    if index >= draft.attachments.len() {
+        return Err(EngineError::BadParams(format!("there is no attachment {index}")));
+    }
+    draft.attachments.remove(index);
+    ok()
+}
+
+/// Turn the draft into an item. `sent` stamps the submit time and clears the unsent flag.
+fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
+    let mut item = Item::new_mail();
+    item.set_subject(&draft.subject);
+    item.set_body_text(&draft.body);
+    item.set_sender(&s.user_name, &s.user_email);
+    for (kind, line) in [(RECIP_TO, &draft.to), (RECIP_CC, &draft.cc), (RECIP_BCC, &draft.bcc)] {
+        for (name, email) in mailcraft_mime::parse_addresses(line) {
+            item.add_recipient(kind, &name, &email);
+        }
+    }
+    item.refresh_display_recipients();
+    item.attachments = draft.attachments.clone();
+    item.props.set(pid::CREATION_TIME, PropValue::Time(s.now));
+    item.props.set(pid::LAST_MODIFICATION_TIME, PropValue::Time(s.now));
+    if sent {
+        item.props.set(pid::CLIENT_SUBMIT_TIME, PropValue::Time(s.now));
+        item.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(MSGFLAG_READ));
+    } else {
+        item.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(MSGFLAG_READ | MSGFLAG_UNSENT));
+    }
+    item
+}
+
+fn file_draft(s: &mut Session, kind: FolderKind, sent: bool) -> Result<(), EngineError> {
+    let draft = s.compose.clone().ok_or_else(|| EngineError::Disabled("Send".into()))?;
+    let store = s.writable_store().ok_or_else(|| EngineError::Format("there is no writable data file to keep the message in".into()))?;
+    let folder = s.find_folder(store, kind).ok_or_else(|| EngineError::Format(format!("this data file has no {kind:?} folder")))?;
+    let item = build(s, &draft, sent);
+    s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?;
+    s.compose = None;
+    s.refresh_folders(store);
+    s.reload_rows()
+}
+
+fn send(s: &mut Session, _: &Value) -> CmdResult {
+    let has_recipient = s.compose.as_ref().is_some_and(|d| [&d.to, &d.cc, &d.bcc].iter().any(|l| !mailcraft_mime::parse_addresses(l).is_empty()));
+    if !has_recipient {
+        return Err(EngineError::Format("there must be at least one name or address in the To, Cc or Bcc box".into()));
+    }
+    file_draft(s, FolderKind::Outbox, true)?;
+    s.status = "The message is in the Outbox. Sending needs an account, which this version does not have yet.".to_string();
+    ok()
+}
+
+fn save_draft(s: &mut Session, _: &Value) -> CmdResult {
+    file_draft(s, FolderKind::Drafts, false)?;
+    s.status = "Saved to Drafts".to_string();
+    ok()
+}
+
+fn discard(s: &mut Session, _: &Value) -> CmdResult {
+    s.compose = None;
+    ok()
+}

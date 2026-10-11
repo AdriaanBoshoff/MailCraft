@@ -1,0 +1,324 @@
+//! Outlook data files: `.pst` and `.ost` ([MS-PST]), read-only.
+//!
+//! A data file is three layers: the node database (`ndb`: blocks and two B-trees that index
+//! them), lists/tables/properties on top of nodes (`ltp`), and the messaging layer here, which
+//! says which node is a folder, a message, a recipient table or an attachment ([MS-PST] 2.4).
+//!
+//! Nothing in this crate writes. The file is opened read-only and stays untouched.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+mod crypt;
+mod crypt_table;
+mod ltp;
+mod ndb;
+
+use ltp::Raw;
+use mailcraft_model::props::parse_name_map;
+use mailcraft_model::{
+    Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropBag, PropValue, Store, StoreError, Summary,
+    clean_subject, pid, ptype,
+};
+use ndb::{Ndb, Subnodes, u32_at};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+pub enum PstError {
+    #[error("this is not an Outlook data file")]
+    NotPst,
+    #[error("this data file cannot be opened: {0}")]
+    Unsupported(String),
+    #[error("the data file is damaged: {0}")]
+    Damaged(String),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+}
+
+impl From<PstError> for StoreError {
+    fn from(e: PstError) -> Self {
+        match e {
+            PstError::Io(e) => Self::Io(e),
+            e => Self::Format(e.to_string()),
+        }
+    }
+}
+
+/// Well-known nodes ([MS-PST] 2.4.1) and node types ([MS-PST] 2.2.2.1).
+const NID_MESSAGE_STORE: u32 = 0x21;
+const NID_NAME_TO_ID_MAP: u32 = 0x61;
+const NID_ROOT_FOLDER: u32 = 0x122;
+const NID_RECIPIENT_TABLE: u32 = 0x692;
+const NID_ATTACHMENT_TABLE: u32 = 0x671;
+const NID_TYPE_NORMAL_MESSAGE: u32 = 0x04;
+const NID_TYPE_HIERARCHY_TABLE: u32 = 0x0D;
+const NID_TYPE_CONTENTS_TABLE: u32 = 0x0E;
+
+/// Table bookkeeping columns (PidTagLtpRowId, PidTagLtpRowVer and neighbours): not item properties.
+const LTP_INTERNAL: std::ops::RangeInclusive<u16> = 0x67F1..=0x67F3;
+
+const MAX_FOLDERS: usize = 100_000;
+const MAX_CHILDREN: usize = 20_000;
+const MAX_FALLBACK_ITEMS: usize = 200_000;
+/// Messages attached to messages are followed this deep.
+const MAX_DEPTH: usize = 8;
+
+/// An open `.pst` / `.ost`.
+pub struct PstStore {
+    ndb: Ndb,
+    path: Option<PathBuf>,
+    name: String,
+    names: Vec<Option<NamedKey>>,
+    root: u32,
+    special: HashMap<u32, FolderKind>,
+}
+
+impl PstStore {
+    /// Open a data file read-only.
+    pub fn open(path: &Path) -> Result<Self, PstError> {
+        let file = std::fs::File::open(path)?;
+        let mut store = Self::from_source(Box::new(file))?;
+        if store.name.is_empty() {
+            store.name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        }
+        store.path = Some(path.to_path_buf());
+        Ok(store)
+    }
+
+    /// Open a data file held in memory.
+    pub fn from_bytes(data: Vec<u8>) -> Result<Self, PstError> {
+        Self::from_source(Box::new(std::io::Cursor::new(data)))
+    }
+
+    fn from_source(src: Box<dyn ndb::Source>) -> Result<Self, PstError> {
+        let ndb = Ndb::open(src)?;
+        let mut store = Self { ndb, path: None, name: String::new(), names: Vec::new(), root: NID_ROOT_FOLDER, special: HashMap::new() };
+        // The message store node ([MS-PST] 2.4.3): display name and the entry ids of the special folders.
+        if let Ok((bag, _)) = store.node_props(NID_MESSAGE_STORE) {
+            store.name = bag.str(pid::DISPLAY_NAME).unwrap_or("").to_string();
+            // An EntryID is 4 bytes of flags, the store's 16-byte id, then the node id ([MS-PST] 2.4.3.2).
+            let nid_of = |id: u16| bag.bin(id).and_then(|b| u32_at(b, 20));
+            if let Some(nid) = nid_of(pid::IPM_SUBTREE_ENTRY_ID).filter(|n| store.ndb.nbt.contains_key(n)) {
+                store.root = nid;
+            }
+            for (id, kind) in [(0x35E2, FolderKind::Outbox), (0x35E3, FolderKind::Deleted), (0x35E4, FolderKind::Sent), (0x35E7, FolderKind::Search)]
+            {
+                if let Some(nid) = nid_of(id) {
+                    store.special.insert(nid, kind);
+                }
+            }
+        }
+        // The named property map ([MS-PST] 2.4.7): the same three streams a `.msg` has.
+        if let Ok((bag, _)) = store.node_props(NID_NAME_TO_ID_MAP) {
+            let stream = |id: u16| bag.bin(id).unwrap_or(&[]);
+            store.names = parse_name_map(stream(0x0002), stream(0x0003), stream(0x0004));
+        }
+        if !store.ndb.nbt.contains_key(&store.root) {
+            return Err(PstError::Damaged("the file has no folder tree".to_string()));
+        }
+        Ok(store)
+    }
+
+    fn node(&self, nid: u32) -> Result<(u64, u64), PstError> {
+        self.ndb.nbt.get(&nid).map(|e| (e.data, e.sub)).ok_or_else(|| PstError::Damaged("a node is missing from the index".to_string()))
+    }
+
+    /// A top-level node's properties, ids below 0x8000 only.
+    fn node_props(&mut self, nid: u32) -> Result<(PropBag, Subnodes), PstError> {
+        let (data, sub) = self.node(nid)?;
+        let subs = self.ndb.subnodes(sub)?;
+        let raws = ltp::read_pc(&mut self.ndb, data, &subs)?;
+        let cp = code_page(&raws);
+        let bag = PropBag(raws.into_iter().filter_map(|r| ltp::decode(r, cp)).collect());
+        Ok((bag, subs))
+    }
+
+    /// A table's rows as property bags.
+    fn table(&mut self, data: u64, subs: &Subnodes, cp: u32) -> Result<Vec<(u32, PropBag)>, PstError> {
+        let rows = ltp::read_tc(&mut self.ndb, data, subs)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (row.id, PropBag(row.cells.into_iter().filter(|c| !LTP_INTERNAL.contains(&c.id)).filter_map(|c| ltp::decode(c, cp)).collect()))
+            })
+            .collect())
+    }
+
+    fn children(&mut self, folder: u32) -> Vec<(u32, PropBag)> {
+        // The hierarchy table of a folder ([MS-PST] 2.4.4.4): one row per subfolder, the row id its node.
+        let table = (folder & !0x1F) | NID_TYPE_HIERARCHY_TABLE;
+        let from_table = self.node(table).and_then(|(data, sub)| {
+            let subs = self.ndb.subnodes(sub)?;
+            self.table(data, &subs, 1252)
+        });
+        if let Ok(rows) = from_table {
+            return rows;
+        }
+        // A damaged table: fall back to the node index, which records every node's parent.
+        let mut nids: Vec<u32> = self
+            .ndb
+            .nbt
+            .iter()
+            .filter(|(nid, e)| e.parent == folder && **nid & 0x1F == folder & 0x1F && **nid != folder)
+            .map(|(nid, _)| *nid)
+            .collect();
+        nids.sort_unstable();
+        nids.truncate(MAX_CHILDREN);
+        nids.into_iter().filter_map(|nid| Some((nid, self.node_props(nid).ok()?.0))).collect()
+    }
+
+    fn message(&mut self, data: u64, sub: u64, depth: usize) -> Result<Item, PstError> {
+        let subs = self.ndb.subnodes(sub)?;
+        let raws = ltp::read_pc(&mut self.ndb, data, &subs)?;
+        let cp = code_page(&raws);
+        let mut item = Item::default();
+        for (id, v) in raws.into_iter().filter_map(|r| ltp::decode(r, cp)) {
+            if id < 0x8000 {
+                item.props.set(id, v);
+            } else if let Some(Some(key)) = self.names.get(usize::from(id - 0x8000)) {
+                match v {
+                    PropValue::MultiString(list) if *key == NamedKey::keywords() => item.categories = list,
+                    v => item.named.push((key.clone(), v)),
+                }
+            }
+        }
+        if let Some(s) = item.props.str(pid::SUBJECT) {
+            let clean = clean_subject(s);
+            item.props.set_str(pid::SUBJECT, &clean);
+        }
+        // Recipient and attachment tables are subnodes of the message ([MS-PST] 2.4.5).
+        if let Some(&(data, sub)) = subs.get(&NID_RECIPIENT_TABLE) {
+            let table_subs = self.ndb.subnodes(sub).unwrap_or_default();
+            if let Ok(rows) = self.table(data, &table_subs, cp) {
+                item.recipients = rows.into_iter().take(MAX_CHILDREN).map(|(_, bag)| bag).collect();
+            }
+        }
+        if let Some(&(data, sub)) = subs.get(&NID_ATTACHMENT_TABLE) {
+            let table_subs = self.ndb.subnodes(sub).unwrap_or_default();
+            let rows = self.table(data, &table_subs, cp).unwrap_or_default();
+            // Each row's id names the subnode that holds the attachment object ([MS-PST] 2.4.6.2).
+            for (nid, _) in rows.into_iter().take(MAX_CHILDREN) {
+                if let Some(&(data, sub)) = subs.get(&nid)
+                    && let Ok(att) = self.attachment(data, sub, &subs, cp, depth)
+                {
+                    item.attachments.push(att);
+                }
+            }
+        }
+        item.normalise_html();
+        Ok(item)
+    }
+
+    fn attachment(&mut self, data: u64, sub: u64, message_subs: &Subnodes, cp: u32, depth: usize) -> Result<Attachment, PstError> {
+        let subs = self.ndb.subnodes(sub)?;
+        let raws = ltp::read_pc(&mut self.ndb, data, &subs)?;
+        let mut att = Attachment {
+            props: PropBag(raws.into_iter().filter(|r| r.id < 0x8000).filter_map(|r| ltp::decode(r, cp)).collect()),
+            ..Attachment::default()
+        };
+        match att.props.0.remove(&pid::ATTACH_DATA) {
+            Some(PropValue::Binary(b)) => att.data = b,
+            // PtypObject: the node that holds the object, then its size ([MS-PST] 2.3.3.5).
+            Some(PropValue::Other { ty: ptype::OBJECT, raw }) => {
+                let target = u32_at(&raw, 0).and_then(|nid| subs.get(&nid).or_else(|| message_subs.get(&nid)).copied());
+                if let Some((data, sub)) = target {
+                    if att.props.i32(pid::ATTACH_METHOD) == Some(5) {
+                        if depth < MAX_DEPTH {
+                            att.embedded = self.message(data, sub, depth + 1).ok().map(Box::new);
+                        }
+                    } else {
+                        att.data = self.ndb.data(data).unwrap_or_default();
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(att)
+    }
+
+    fn summary(&self, id: u32, mut props: PropBag) -> Summary {
+        if let Some(s) = props.str(pid::SUBJECT) {
+            let clean = clean_subject(s);
+            props.set_str(pid::SUBJECT, &clean);
+        }
+        let item = Item { props, ..Item::default() };
+        let mut s = item.summary(u64::from(id));
+        s.has_attachments = item.flags() & MSGFLAG_HASATTACH != 0;
+        s
+    }
+}
+
+/// The code page of an object's 8-bit strings: its own, else Windows-1252.
+fn code_page(raws: &[Raw]) -> u32 {
+    let own = |want: u16| raws.iter().find(|r| r.id == want && r.ty == ptype::INT32).and_then(|r| u32_at(&r.data, 0)).filter(|c| *c != 0);
+    own(pid::MESSAGE_CODEPAGE).or_else(|| own(pid::INTERNET_CODEPAGE)).unwrap_or(1252)
+}
+
+impl Store for PstStore {
+    fn display_name(&self) -> String {
+        if self.name.is_empty() { "Outlook Data File".to_string() } else { self.name.clone() }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
+        let mut out: Vec<FolderInfo> = Vec::new();
+        let mut seen: HashSet<u32> = HashSet::from([self.root]);
+        let mut queue = std::collections::VecDeque::from([(self.root, None)]);
+        while let Some((nid, parent)) = queue.pop_front() {
+            for (child, bag) in self.children(nid) {
+                if !seen.insert(child) || out.len() >= MAX_FOLDERS {
+                    continue;
+                }
+                let name = bag.str(pid::DISPLAY_NAME).unwrap_or("").to_string();
+                let class = bag.str(pid::CONTAINER_CLASS).unwrap_or("").to_string();
+                let count = |id: u16| u32::try_from(bag.i32(id).unwrap_or(0)).unwrap_or(0);
+                let id = FolderId(u64::from(child));
+                out.push(FolderInfo {
+                    id,
+                    parent,
+                    kind: self.special.get(&child).copied().unwrap_or_else(|| FolderKind::guess(&name, &class)),
+                    name,
+                    container_class: class,
+                    total: count(pid::CONTENT_COUNT),
+                    unread: count(pid::CONTENT_UNREAD_COUNT),
+                    has_children: bag.bool(pid::SUBFOLDERS).unwrap_or(false),
+                });
+                queue.push_back((child, Some(id)));
+            }
+        }
+        Ok(out)
+    }
+
+    fn list(&mut self, folder: FolderId) -> Result<Vec<Summary>, StoreError> {
+        let nid = u32::try_from(folder.0).map_err(|_| StoreError::NoFolder)?;
+        if !self.ndb.nbt.contains_key(&nid) {
+            return Err(StoreError::NoFolder);
+        }
+        // The contents table ([MS-PST] 2.4.4.5): one row per message, the row id its node.
+        let table = (nid & !0x1F) | NID_TYPE_CONTENTS_TABLE;
+        let from_table = self.node(table).and_then(|(data, sub)| {
+            let subs = self.ndb.subnodes(sub)?;
+            self.table(data, &subs, 1252)
+        });
+        if let Ok(rows) = from_table {
+            return Ok(rows.into_iter().map(|(id, bag)| self.summary(id, bag)).collect());
+        }
+        // A damaged table: list the message nodes whose parent is this folder.
+        let mut nids: Vec<u32> =
+            self.ndb.nbt.iter().filter(|(n, e)| e.parent == nid && **n & 0x1F == NID_TYPE_NORMAL_MESSAGE).map(|(n, _)| *n).collect();
+        nids.sort_unstable();
+        nids.truncate(MAX_FALLBACK_ITEMS);
+        Ok(nids.into_iter().filter_map(|n| self.node_props(n).ok().map(|(bag, _)| self.summary(n, bag))).collect())
+    }
+
+    fn load(&mut self, _folder: FolderId, id: ItemId) -> Result<Item, StoreError> {
+        let nid = u32::try_from(id.0).map_err(|_| StoreError::NoItem)?;
+        let (data, sub) = self.node(nid).map_err(|_| StoreError::NoItem)?;
+        Ok(self.message(data, sub, 0)?)
+    }
+}
+
+#[cfg(test)]
+mod tests;

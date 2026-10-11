@@ -1,0 +1,15 @@
+[package]
+name = "mailcraft-msg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Outlook .msg/.oft ([MS-OXMSG]) reader and writer over a CFB container"
+
+[lints]
+workspace = true
+
+[dependencies]
+mailcraft-model = { workspace = true }
+thiserror = { workspace = true }
+cfb = { workspace = true }
+uuid = { workspace = true }
