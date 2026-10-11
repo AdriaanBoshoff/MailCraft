@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 2 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 3 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -8,8 +8,12 @@
    files the message in Outbox and says so.
 2. **`.pst`/`.ost` are read-only.** No writer exists; every change to such a store is refused. Changes
    made in the sample mailbox live in memory and are lost on exit.
-3. **Message bodies are plain text.** HTML is reduced to text (no formatting, tables or pictures).
-   Bodies stored only as compressed RTF ([MS-OXRTFCP]) are not decoded and show empty.
+3. **Formatted bodies are partly drawn.** HTML bodies show text styles, colours, headings, lists,
+   quotations, rules and tables. Not yet: pictures (attached and inline ones show a labelled
+   placeholder), style sheets (`<style>` rules and classes are ignored; only inline styles count),
+   cell and block backgrounds as areas (a background is drawn behind the text only), fonts by name,
+   exact widths and margins, and opening a link (its address is shown on hover). Bodies stored only
+   as compressed RTF ([MS-OXRTFCP]) are not decoded and show empty. Printing does not exist.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`mailcraft-cli mcp`, `--control`) are not built.
 6. **Web build.** The engine and everything under it compiles for wasm32; there is no web app.
@@ -39,3 +43,10 @@
 15. Keyboard shortcuts cover the common commands only; there is no command search.
 16. Password-protected and encrypted data files are refused or opened without the password check.
 17. No localisation; times use a 12-hour clock and month/day/year order.
+18. A long formatted body is laid out in full on every repaint; nothing skips the part off screen.
+
+## Revision history
+
+- 3 · 2026-10-11 — HTML bodies are drawn formatted (item 3 rewritten); item 18 added.
+- 2 · 2026-10-11 — `.msg` checked in Outlook Classic; first UI comparison.
+- 1 · 2026-10-11 — first list.

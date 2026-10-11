@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 2 · 2026-10-11 · one side-by-side look at the Mail module; layout only.
+**Status:** revision 3 · 2026-10-11 · one side-by-side look at the Mail module; layout only.
 
 How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -27,6 +27,7 @@ in both sets, not Outlook's.
 | Message list | 276 wide (user-resizable); header row with All / Unread, "By Date" and a direction arrow; group header 24 high; rows about 70 high with sender, subject, preview | 348 wide, fixed; same header parts; rows 64 high | close |
 | Row details | attachment mark at the right of the first line; date at the right of the second | marks at the right of the first line; time at the right of the second | close |
 | Reading pane, nothing open | envelope drawing with a one-line hint, centred | the same arrangement, our own drawing | close |
+| Reading pane, message open | formatted body on a page in the theme's colour | formatted body: text styles, lists, tables; pictures are placeholders; not compared with Outlook's rendering of the same message yet | unverified |
 | Status bar | 22 high: item count left; connection state, two view buttons and a zoom slider right | 22 high: item and unread counts left, store kind right | close |
 
 ## Behaviour seen
@@ -44,5 +45,6 @@ in both sets, not Outlook's.
 
 ## Revision history
 
+- 3 · 2026-10-11 — formatted bodies drawn; row added.
 - 2 · 2026-10-11 — simplified ribbon, full-height module strip and dark colour set built; table updated.
 - 1 · 2026-10-11 — first comparison.

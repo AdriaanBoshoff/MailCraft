@@ -1787,6 +1787,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mailcraft-formats"
+version = "0.1.0"
+dependencies = [
+ "mailcraft-model",
+]
+
+[[package]]
 name = "mailcraft-mime"
 version = "0.1.0"
 dependencies = [
@@ -1833,6 +1840,7 @@ dependencies = [
  "image",
  "log",
  "mailcraft-engine",
+ "mailcraft-formats",
  "mailcraft-model",
  "serde_json",
 ]

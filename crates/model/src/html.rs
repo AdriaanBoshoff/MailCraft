@@ -119,7 +119,7 @@ fn push_text(out: &mut String, text: &str) {
 }
 
 /// Decode the entity at the start of `s`: (text, bytes consumed).
-fn entity(s: &str) -> Option<(String, usize)> {
+pub fn entity(s: &str) -> Option<(String, usize)> {
     let end = s.char_indices().take(12).find(|(_, c)| *c == ';').map(|(i, _)| i)?;
     let name = s.get(1..end)?;
     let text = if let Some(num) = name.strip_prefix('#') {
@@ -148,6 +148,23 @@ fn entity(s: &str) -> Option<(String, usize)> {
             "hellip" => "…",
             "bull" => "•",
             "euro" => "€",
+            "pound" => "£",
+            "yen" => "¥",
+            "cent" => "¢",
+            "sect" => "§",
+            "para" => "¶",
+            "deg" => "°",
+            "middot" => "·",
+            "laquo" => "«",
+            "raquo" => "»",
+            "times" => "×",
+            "divide" => "÷",
+            "plusmn" => "±",
+            "frac12" => "½",
+            "larr" => "←",
+            "rarr" => "→",
+            "ensp" | "emsp" | "thinsp" => " ",
+            "shy" | "zwnj" | "zwj" => "",
             _ => return None,
         }
         .to_string()

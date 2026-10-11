@@ -52,6 +52,27 @@ const DEPOT: (&str, &str) = ("Northgate Print Depot", "orders@printdepot.example
 const HELENA: (&str, &str) = ("Helena Brandt", "helena.brandt@example.org");
 const TRAVEL: (&str, &str) = ("Travel Bookings", "bookings@travel.example.net");
 
+/// A shop's order mail the way such mail is built: a layout table, a banner, a data table, a
+/// remote logo and a tracking pixel (neither is ever fetched) and a hidden preview line.
+const DEPOT_HTML: &str = "<html><head><style>td{font-family:sans-serif}</style></head><body bgcolor=\"#ffffff\">\
+<span style=\"display:none\">Order 48213 is ready at the front counter.</span>\
+<table width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"#1F4E79\" align=\"center\">\
+<img src=\"https://printdepot.example.com/logo.png\" alt=\"Northgate Print Depot\" width=\"180\" height=\"40\">\
+<font color=\"#ffffff\" size=\"5\"><b>&nbsp;Your order is ready&nbsp;</b></font></td></tr>\
+<tr><td><h2>Order 48213</h2>\
+<p>Hello Alex Morgan,</p>\
+<p>Everything in your order has been printed and checked. You can collect it from the <b>front counter</b>, \
+weekdays <span style=\"color:#2E7D32;font-weight:bold\">8:30 to 17:00</span>.</p>\
+<table border=\"1\" cellpadding=\"4\"><tr><th align=\"left\">Item</th><th align=\"right\">Quantity</th><th align=\"right\">Price</th></tr>\
+<tr><td>Folded leaflets, A5, full colour</td><td align=\"right\">200</td><td align=\"right\">64.00</td></tr>\
+<tr><td>Roll-up banner, 85 &times; 200 cm</td><td align=\"right\">2</td><td align=\"right\">118.00</td></tr>\
+<tr><td colspan=\"2\"><b>Total</b></td><td align=\"right\"><b>182.00</b></td></tr></table>\
+<p>Please bring this message with you. <a href=\"https://printdepot.example.com/orders/48213\">View the order online</a> \
+or <a href=\"mailto:orders@printdepot.example.com\">write to us</a> if anything looks wrong.</p>\
+<blockquote><i>Uncollected orders are kept for <u>30 days</u>.</i></blockquote>\
+<hr><p align=\"center\"><small>Northgate Print Depot &middot; 14 Canal Row &middot; <s>Unit 3</s> Unit 5</small></p>\
+<img src=\"https://printdepot.example.com/t/open.gif\" width=\"1\" height=\"1\"></td></tr></table></body></html>";
+
 const LAUNCH_HTML: &str = "<html><body style=\"font-family:Aptos,Calibri,sans-serif;font-size:11pt\">\
 <p>Hi Alex,</p>\
 <p>The <b>launch checklist</b> is in good shape. Three things are still open:</p>\
@@ -130,7 +151,7 @@ pub fn sample_store(now: i64) -> MemStore {
             cc: &[],
             subject: "Your order 48213 is ready for collection",
             body: "Hello Alex Morgan,\n\nYour order 48213 (200 folded leaflets, 2 roll-up banners) is ready. Collection is from the front counter, weekdays 8:30 to 17:00. Please bring this message with you.\n\nNorthgate Print Depot",
-            html: None,
+            html: Some(DEPOT_HTML),
             age: DAY + 7 * HOUR,
             read: true,
         },

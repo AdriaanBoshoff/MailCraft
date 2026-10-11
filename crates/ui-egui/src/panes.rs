@@ -2,7 +2,7 @@
 //! compose form.
 
 use crate::icons::{self, Icon};
-use crate::{MailUi, bold, clip_text, font, one_line, text_width, theme};
+use crate::{MailUi, body, bold, clip_text, font, one_line, text_width, theme};
 use egui::{Align2, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
 use mailcraft_engine::{Module, ReadingPane, SortKey};
 use mailcraft_model::{Flag, FolderId, FolderInfo, FolderKind, RECIP_CC, RECIP_TO, Summary, time};
@@ -400,6 +400,7 @@ impl MailUi {
 
     fn reading_pane(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
+        let doc = self.body_doc();
         let p = ui.painter_at(rect);
         let Some(item) = self.session.open.as_ref() else {
             icons::paint(&p, Rect::from_center_size(rect.center() - vec2(0.0, 26.0), vec2(52.0, 52.0)), Icon::Mail, t.disabled);
@@ -518,37 +519,48 @@ impl MailUi {
             }
             y += 38.0;
         }
-        let html = item.body_html().is_some();
-        if html {
+        // Says only what was held back; a formatted body needs no notice of its own.
+        let notice = match &doc {
+            Some(d) if d.truncated => Some("This message is very long; the rest is not shown. Remote content is never downloaded."),
+            Some(d) if d.remote_blocked > 0 => Some("Pictures and other remote content in this message were not downloaded."),
+            Some(_) => None,
+            None if item.body_html().is_some() => Some("Shown as plain text. Pictures and remote content are never downloaded."),
+            None => None,
+        };
+        if let Some(notice) = notice {
             let bar = Rect::from_min_size(pos2(rect.left() + 1.0, y), vec2(rect.width() - 1.0, 24.0));
             p.rect_filled(bar, 0.0, t.info_bar);
             icons::paint(&p, Rect::from_center_size(pos2(bar.left() + pad, bar.center().y), vec2(13.0, 13.0)), Icon::Info, t.text_dim);
-            clip_text(
-                &p,
-                pos2(bar.left() + pad + 12.0, bar.center().y - 8.0),
-                bar.width() - 40.0,
-                "Shown as plain text. Formatting is not drawn yet; pictures and remote content are never downloaded.",
-                font(11.5),
-                t.text_dim,
-            );
+            clip_text(&p, pos2(bar.left() + pad + 12.0, bar.center().y - 8.0), bar.width() - 40.0, notice, font(11.5), t.text_dim);
             y += 30.0;
         }
         p.hline((rect.left() + 1.0)..=rect.right(), y, (1.0, t.line));
         y += 1.0;
 
-        let full = item.body_text();
-        let cut = full.char_indices().nth(MAX_BODY_CHARS).map(|(i, _)| i);
-        let mut body: String = full.get(..cut.unwrap_or(full.len())).unwrap_or("").replace('\t', "    ");
-        body.retain(|c| c == '\n' || !c.is_control());
-        if cut.is_some() {
-            body.push_str("\n\n[The rest of this message is not shown.]");
-        }
+        let plain = match &doc {
+            Some(_) => String::new(),
+            None => {
+                let full = item.body_text();
+                let cut = full.char_indices().nth(MAX_BODY_CHARS).map(|(i, _)| i);
+                let mut body: String = full.get(..cut.unwrap_or(full.len())).unwrap_or("").replace('\t', "    ");
+                body.retain(|c| c == '\n' || !c.is_control());
+                if cut.is_some() {
+                    body.push_str("\n\n[The rest of this message is not shown.]");
+                }
+                body
+            }
+        };
         let body_rect = Rect::from_min_max(pos2(rect.left() + 1.0, y), rect.max);
         ui.scope_builder(UiBuilder::new().max_rect(body_rect), |ui| {
             ScrollArea::vertical().id_salt(("body", self.session.selected)).auto_shrink(false).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad as i8, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.add(egui::Label::new(egui::RichText::new(body).font(font(13.5)).color(t.text)).wrap().selectable(true));
+                    match &doc {
+                        Some(doc) => body::draw(ui, doc, &t),
+                        None => {
+                            ui.add(egui::Label::new(egui::RichText::new(plain).font(font(13.5)).color(t.text)).wrap().selectable(true));
+                        }
+                    }
                 });
             });
         });

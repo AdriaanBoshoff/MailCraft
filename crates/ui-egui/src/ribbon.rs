@@ -73,7 +73,7 @@ const FOLDER: &[Group] = &[
 const VIEW: &[Group] = &[
     ("Arrangement", &[small(Icon::Sort, "Arrange By", "menu:arrange"), small(Icon::Swap, "Reverse Sort", "view.reverseSort")]),
     ("Layout", &[small(Icon::Sidebar, "Folder Pane", "view.folderPane"), small(Icon::Panes, "Reading Pane", "menu:reading")]),
-    ("Message", &[small(Icon::Info, "Properties", "mail.properties")]),
+    ("Message", &[small(Icon::Info, "Properties", "mail.properties"), small(Icon::MailOpen, "Plain Text", "ui.bodyFormat")]),
     ("Window", &[small(Icon::Panes, "Simplified Ribbon", "ui.ribbonMode"), small(Icon::Swap, "Dark Mode", "ui.theme")]),
 ];
 

@@ -6,6 +6,7 @@
 //! live here. Message text is drawn as text: nothing in a message is ever run or fetched.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod body;
 pub mod icons;
 mod panes;
 mod ribbon;
@@ -15,8 +16,11 @@ use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
 use icons::Icon;
 use mailcraft_engine::{Module, Session};
+use mailcraft_formats::rich::Doc;
+use mailcraft_model::{PropValue, pid};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use theme::Tokens;
 
@@ -84,6 +88,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     },
     UiCommand { id: "ui.ribbonMode", label: "Simplified Ribbon", params: r#"{"mode": "classic" | "simplified"}; none switches"# },
     UiCommand { id: "ui.theme", label: "Dark Mode", params: r#"{"theme": "light" | "dark"}; none switches"# },
+    UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About MailCraft", params: "" },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
@@ -118,6 +123,10 @@ pub struct MailUi {
     pub(crate) tab: Tab,
     pub(crate) ribbon_mode: RibbonMode,
     theme_applied: Option<bool>,
+    /// Messages are read as plain text even when they have a formatted body.
+    pub(crate) plain_bodies: bool,
+    /// The open message's formatted body, kept until another message is opened.
+    body_doc: Option<(u64, Arc<Doc>)>,
     pub(crate) actions: Vec<(String, Value)>,
     pub(crate) search: String,
     pub(crate) collapsed: HashSet<(usize, u64)>,
@@ -201,6 +210,8 @@ impl MailUi {
             tab: Tab::Home,
             ribbon_mode: RibbonMode::Simplified,
             theme_applied: None,
+            plain_bodies: false,
+            body_doc: None,
             actions: Vec::new(),
             search,
             collapsed: HashSet::new(),
@@ -310,6 +321,14 @@ impl MailUi {
                 };
                 self.tokens = Tokens::named(dark);
             }
+            "ui.bodyFormat" => {
+                self.plain_bodies = match (params.get("format"), text("format")) {
+                    (None, _) => !self.plain_bodies,
+                    (_, Some("formatted")) => false,
+                    (_, Some("plain")) => true,
+                    _ => return Err("\"format\" must be formatted or plain".to_string()),
+                };
+            }
             "ui.about" => {
                 self.session.status =
                     format!("MailCraft {}: an independent open-source mail client. Not affiliated with Microsoft.", env!("CARGO_PKG_VERSION"));
@@ -318,6 +337,36 @@ impl MailUi {
             _ => return Err(format!("unknown command {}", one_line(id))),
         }
         Ok(Value::Null)
+    }
+
+    /// The open message's HTML body as a formatted document, read once per message. `None` when
+    /// the message has no HTML body, the body holds nothing to show, or plain reading is on.
+    pub(crate) fn body_doc(&mut self) -> Option<Arc<Doc>> {
+        if self.plain_bodies {
+            return None;
+        }
+        let item = self.session.open.as_ref()?;
+        let len = match item.props.get(pid::HTML) {
+            Some(PropValue::Binary(b)) => b.len(),
+            Some(PropValue::String(s)) => s.len(),
+            _ => return None,
+        };
+        let mut hasher = DefaultHasher::new();
+        (self.session.selected, len, item.subject()).hash(&mut hasher);
+        let key = hasher.finish();
+        let doc = match &self.body_doc {
+            Some((k, doc)) if *k == key => doc.clone(),
+            _ => {
+                let doc = Arc::new(mailcraft_formats::html::parse(&item.body_html()?));
+                self.body_doc = Some((key, doc.clone()));
+                doc
+            }
+        };
+        (!doc.is_empty()).then_some(doc)
+    }
+
+    pub fn plain_bodies(&self) -> bool {
+        self.plain_bodies
     }
 
     pub(crate) fn act(&mut self, id: &str, params: Value) {
