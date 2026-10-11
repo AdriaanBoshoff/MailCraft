@@ -307,3 +307,28 @@ fn inspect_marks_message_text_as_untrusted() {
     assert!(v["open"]["untrusted_content"]["body"].as_str().unwrap().contains("launch checklist"));
     assert!(v["open"].get("body").is_none() && v["rows"][0].get("subject").is_none());
 }
+
+#[test]
+fn a_message_kept_only_as_rtf_has_text_a_preview_and_survives_as_html() {
+    use mailcraft_model::{Item, PropValue, pid, rtf};
+    let mut s = session();
+    run(&mut s, "mail.select", json!({ "folder": "Inbox/Receipts", "index": 0 }));
+    let item = s.open.as_ref().unwrap();
+    assert!(item.props.get(pid::BODY).is_none() && item.props.get(pid::HTML).is_none());
+    let text = item.body_text();
+    assert!(text.starts_with("Riverside Car Park\nReceipt for permit RP-20418, paid by card."), "{text}");
+    assert!(text.contains("Monthly permit, bay 14\t62.00"));
+    assert!(!text.contains("HYPERLINK") && !text.contains("Arial"));
+    assert!(s.rows[0].preview.starts_with("Riverside Car Park Receipt for permit"));
+    assert_eq!(item.body_html(), None, "ordinary RTF is not HTML");
+
+    // RTF that wraps HTML ([MS-OXRTFEX]) is the message's HTML body wherever one is asked for.
+    let mut wrapped = Item::new_mail();
+    let body = b"{\\rtf1\\ansi\\fromhtml1 {\\*\\htmltag64 <p>}\\htmlrtf {\\htmlrtf0 Hello {\\*\\htmltag84 <b>}you{\\*\\htmltag92 </b>}\\htmlrtf }\\htmlrtf0{\\*\\htmltag72 </p>}}";
+    wrapped.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(body)));
+    assert_eq!(wrapped.body_html().as_deref(), Some("<p>Hello <b>you</b></p>"));
+    assert_eq!(wrapped.body_text(), "Hello you");
+    // Damaged or foreign bytes in the property are no body, not an error.
+    wrapped.props.set(pid::RTF_COMPRESSED, PropValue::Binary(vec![0xAB; 40]));
+    assert_eq!((wrapped.body_html(), wrapped.body_text()), (None, String::new()));
+}

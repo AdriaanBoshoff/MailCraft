@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 4 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 5 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 63, all passing |
+| Tests | 75, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -17,7 +17,7 @@
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
-| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML text, lists and tables are drawn |
+| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists and tables are drawn |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -36,7 +36,9 @@
 
 1. Done: HTML bodies read into a formatted document (`crates/formats`) and drawn in the reading pane,
    with nothing run and nothing fetched.
-2. Next: bodies stored as compressed RTF ([MS-OXRTFCP]), then pictures attached to the message.
+2. Done: bodies stored as compressed RTF ([MS-OXRTFCP]) are decoded; RTF that wraps HTML or text
+   ([MS-OXRTFEX]) is read as what it wraps, ordinary RTF is drawn formatted.
+3. Next: pictures attached to the message, then checking both renderings against Outlook's.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -60,3 +62,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
 - **2026-10-11** - M1.7: the classic ribbon was compared with Outlook's and rebuilt: both ribbon
   layouts now share one shell (title bar, full-height module strip, tab row) and the classic ribbon
   is a rounded panel 98 high. `mail.select` with only a folder goes to that folder.
+- **2026-10-11** - M2.2: RTF bodies are read. PidTagRtfCompressed is decompressed (checked against
+  the worked example in [MS-OXRTFCP]); a message kept only as RTF now has text, a list preview and a
+  formatted body, and RTF that wraps HTML gives that HTML back (so it also survives conversion to
+  `.eml`). The sample mailbox has an RTF-only receipt under Inbox/Receipts.

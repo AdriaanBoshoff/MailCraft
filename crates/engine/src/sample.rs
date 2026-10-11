@@ -1,7 +1,7 @@
 //! The sample mailbox: invented people at example.org writing invented mail. Every word here is
 //! ours; nothing comes from a real mailbox.
 
-use mailcraft_model::{Attachment, Flag, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, MemStore, PropValue, RECIP_CC, RECIP_TO, pid};
+use mailcraft_model::{Attachment, Flag, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, MemStore, PropValue, RECIP_CC, RECIP_TO, pid, rtf};
 
 const MINUTE: i64 = 60 * 10_000_000;
 const HOUR: i64 = 60 * MINUTE;
@@ -51,6 +51,19 @@ const FACILITIES: (&str, &str) = ("Facilities Desk", "facilities@example.org");
 const DEPOT: (&str, &str) = ("Northgate Print Depot", "orders@printdepot.example.com");
 const HELENA: (&str, &str) = ("Helena Brandt", "helena.brandt@example.org");
 const TRAVEL: (&str, &str) = ("Travel Bookings", "bookings@travel.example.net");
+const PARKING: (&str, &str) = ("Riverside Car Park", "permits@parking.example.net");
+
+/// A receipt kept only as RTF, the way older mail in a data file often is: no plain-text and no
+/// HTML body beside it.
+const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Arial;}{\\f1\\fmodern Courier New;}}\
+{\\colortbl;\\red0\\green102\\blue153;\\red255\\green242\\blue204;}\r\n\
+\\pard\\qc\\b\\fs32\\cf1 Riverside Car Park\\b0\\fs20\\cf0\\par\r\n\
+\\pard Receipt for permit {\\f1 RP-20418}, paid by card. Thank you.\\par\\par\r\n\
+\\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl\\b Item\\cell Amount\\b0\\cell\\row\r\n\
+\\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl Monthly permit, bay 14\\cell 62.00\\cell\\row\r\n\
+\\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl {\\highlight2 Total paid}\\cell {\\b 62.00}\\cell\\row\r\n\
+\\pard\\par\\li720 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
+\\pard\\par Questions? See {\\field{\\*\\fldinst HYPERLINK \"https://parking.example.net/help\"}{\\fldrslt{\\ul\\cf1 parking.example.net/help}}}.\\par}";
 
 /// A shop's order mail the way such mail is built: a layout table, a banner, a data table, a
 /// remote logo and a tracking pixel (neither is ever fetched) and a hidden preview line.
@@ -90,7 +103,13 @@ pub fn sample_store(now: i64) -> MemStore {
         return s;
     };
     let projects = s.push_folder(Some(inbox), "Projects", "IPF.Note");
-    s.push_folder(Some(inbox), "Receipts", "IPF.Note");
+    let receipts = s.push_folder(Some(inbox), "Receipts", "IPF.Note");
+
+    let permit = Mail { from: PARKING, to: &[ME], cc: &[], subject: "Your parking permit receipt", body: "", html: None, age: 12 * DAY, read: true };
+    let mut permit = permit.item(now);
+    permit.props.remove(pid::BODY);
+    permit.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(PERMIT_RTF.as_bytes())));
+    s.push_item(receipts, permit);
 
     let mut launch = Mail {
         from: PRIYA,

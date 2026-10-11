@@ -9,6 +9,7 @@ pub mod codepage;
 pub mod html;
 pub mod memstore;
 pub mod props;
+pub mod rtf;
 pub mod time;
 
 pub use memstore::MemStore;
@@ -325,23 +326,39 @@ impl Item {
         }
     }
 
-    /// The plain-text body; derived from the HTML body when the item has no plain one.
+    /// The plain-text body; derived from the HTML or RTF body when the item has no plain one.
     pub fn body_text(&self) -> String {
         if let Some(s) = self.props.str(pid::BODY)
             && !s.trim().is_empty()
         {
             return s.replace("\r\n", "\n");
         }
-        match self.body_html() {
-            Some(h) => html::to_text(&h),
-            None => String::new(),
+        if let Some(h) = self.html_property() {
+            return html::to_text(&h);
         }
+        self.body_rtf().map(|r| rtf::to_text(&r)).unwrap_or_default()
     }
 
+    /// The HTML body: PidTagHtml, or else the HTML an RTF body encapsulates ([MS-OXRTFEX]).
     pub fn body_html(&self) -> Option<String> {
+        self.html_property().or_else(|| match rtf::encapsulated(&self.body_rtf()?)? {
+            rtf::Wrapped::Html(h) => Some(h),
+            rtf::Wrapped::Text(_) => None,
+        })
+    }
+
+    fn html_property(&self) -> Option<String> {
         match self.props.get(pid::HTML) {
             Some(PropValue::Binary(b)) => Some(String::from_utf8_lossy(b).into_owned()),
             Some(PropValue::String(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// The RTF body (PidTagRtfCompressed, [MS-OXRTFCP]), decompressed.
+    pub fn body_rtf(&self) -> Option<Vec<u8>> {
+        match self.props.get(pid::RTF_COMPRESSED) {
+            Some(PropValue::Binary(b)) => rtf::decompress(b),
             _ => None,
         }
     }

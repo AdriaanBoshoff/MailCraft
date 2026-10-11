@@ -518,7 +518,9 @@ impl MailUi {
             Some(d) if d.truncated => Some("This message is very long; the rest is not shown. Remote content is never downloaded."),
             Some(d) if d.remote_blocked > 0 => Some("Pictures and other remote content in this message were not downloaded."),
             Some(_) => None,
-            None if item.body_html().is_some() => Some("Shown as plain text. Pictures and remote content are never downloaded."),
+            None if item.body_html().is_some() || item.body_rtf().is_some() => {
+                Some("Shown as plain text. Pictures and remote content are never downloaded.")
+            }
             None => None,
         };
         if let Some(notice) = notice {

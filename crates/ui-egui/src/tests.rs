@@ -114,3 +114,18 @@ fn hostile_bodies_draw_without_panicking() {
         }
     }
 }
+
+#[test]
+fn an_rtf_body_is_read_formatted_and_drawn() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("mail.select", &json!({ "folder": "Inbox/Receipts", "index": 0 })).unwrap();
+    let doc = ui.body_doc().unwrap();
+    assert!(doc.blocks.iter().any(|b| matches!(b, mailcraft_formats::rich::Block::Table(t) if t.border && t.rows.len() == 3)));
+    assert!(doc.text().contains("parking.example.net/help"));
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(true)));
+    output.textures_delta.clear();
+    ui.execute("ui.bodyFormat", &json!({ "format": "plain" })).unwrap();
+    assert!(ui.body_doc().is_none());
+}

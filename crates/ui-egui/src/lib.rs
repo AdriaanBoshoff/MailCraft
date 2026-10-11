@@ -339,25 +339,28 @@ impl MailUi {
         Ok(Value::Null)
     }
 
-    /// The open message's HTML body as a formatted document, read once per message. `None` when
-    /// the message has no HTML body, the body holds nothing to show, or plain reading is on.
+    /// The open message's HTML or RTF body as a formatted document, read once per message. `None`
+    /// when the message has neither, the body holds nothing to show, or plain reading is on.
+    /// The HTML body wins when a message has both.
     pub(crate) fn body_doc(&mut self) -> Option<Arc<Doc>> {
         if self.plain_bodies {
             return None;
         }
         let item = self.session.open.as_ref()?;
-        let len = match item.props.get(pid::HTML) {
-            Some(PropValue::Binary(b)) => b.len(),
-            Some(PropValue::String(s)) => s.len(),
+        let (html, len) = match (item.props.get(pid::HTML), item.props.get(pid::RTF_COMPRESSED)) {
+            (Some(PropValue::Binary(b)), _) => (true, b.len()),
+            (Some(PropValue::String(s)), _) => (true, s.len()),
+            (_, Some(PropValue::Binary(b))) => (false, b.len()),
             _ => return None,
         };
         let mut hasher = DefaultHasher::new();
-        (self.session.selected, len, item.subject()).hash(&mut hasher);
+        (self.session.selected, html, len, item.subject()).hash(&mut hasher);
         let key = hasher.finish();
         let doc = match &self.body_doc {
             Some((k, doc)) if *k == key => doc.clone(),
             _ => {
-                let doc = Arc::new(mailcraft_formats::html::parse(&item.body_html()?));
+                let doc = if html { mailcraft_formats::html::parse(&item.body_html()?) } else { mailcraft_formats::rtf::parse(&item.body_rtf()?) };
+                let doc = Arc::new(doc);
                 self.body_doc = Some((key, doc.clone()));
                 doc
             }

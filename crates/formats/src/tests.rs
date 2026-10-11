@@ -199,3 +199,77 @@ fn hostile_markup_never_panics_and_is_capped() {
     let multibyte = "é".repeat(3 << 20);
     assert!(parse(&multibyte).truncated);
 }
+
+const RTF: &[u8] = b"{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Arial;}{\\f1\\fmodern Courier New;}}{\\colortbl;\\red0\\green102\\blue153;\\red255\\green242\\blue204;}\
+    {\\*\\generator Ours;}\\pard\\qc\\b\\fs32\\cf1 Title\\b0\\fs20\\cf0\\par\
+    \\pard Code {\\f1 RP-1}, {\\i it}{\\v hidden}{\\super 2}{\\strike old}\\line next\\par\\par\
+    \\trowd\\clbrdrt\\brdrs\\cellx3000\\cellx6000\\intbl\\b Item\\cell Amount\\b0\\cell\\row\
+    \\trowd\\cellx3000\\cellx6000\\intbl {\\highlight2 Total}\\cell 62.00\\cell\\row\
+    \\pard\\li1440 Indented {\\pict\\wmetafile8 010203}\\par\
+    \\pard See {\\field{\\*\\fldinst{HYPERLINK \"https://example.net/help\"}}{\\fldrslt{\\ul\\cf1 the help page}}} now\\par\\par\\par}";
+
+#[test]
+fn rtf_keeps_styles_paragraphs_tables_and_links() {
+    let doc = crate::rtf::parse(RTF);
+    assert!(!doc.truncated);
+    assert_eq!(doc.text(), "Title\nCode RP-1, it2old\nnext\n\u{a0}\nItem\tAmount\nTotal\t62.00\nIndented \nSee the help page now");
+    let p = paras(&doc);
+    assert_eq!(p[0].align, Align::Center);
+    let title = &p[0].runs[0].style;
+    assert_eq!((title.bold, title.size, title.color), (true, Some(16.0), Some([0, 102, 153])));
+    assert_eq!(p[1].align, Align::Left);
+    let by_text = |para: &Para, text: &str| para.runs.iter().find(|r| r.text == text).map(|r| r.style.clone()).unwrap();
+    assert!(by_text(p[1], "RP-1").mono);
+    assert!(by_text(p[1], "it").italic);
+    assert_eq!(by_text(p[1], "2").script, Script::Super);
+    assert!(by_text(p[1], "old").strike);
+    assert!(!by_text(p[1], "Code ").bold, "the title's bold ended with \\b0");
+    let table = doc.blocks.iter().find_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).unwrap();
+    assert!(table.border);
+    assert_eq!((table.rows.len(), table.columns()), (2, 2));
+    let Block::Para(total) = &table.rows[1][0].blocks[0] else { panic!("a paragraph") };
+    assert_eq!(total.runs[0].style.background, Some([255, 242, 204]));
+    assert_eq!(p[3].indent, 2);
+    assert_eq!(p[3].runs[1].picture, Some(Picture::Inline));
+    let link = by_text(p[4], "the help page");
+    assert_eq!(link.link.as_deref(), Some("https://example.net/help"));
+    assert!(link.underline);
+    assert_eq!(by_text(p[4], " now").link, None);
+}
+
+#[test]
+fn rtf_that_wraps_html_or_text_is_read_as_what_it_wraps() {
+    let html = b"{\\rtf1\\ansi\\fromhtml1 {\\*\\htmltag64 <p>}\\htmlrtf {\\htmlrtf0 Hello {\\*\\htmltag84 <b>}you{\\*\\htmltag92 </b>}\\htmlrtf }\\htmlrtf0{\\*\\htmltag72 </p>}\
+        {\\*\\htmltag4 <script>}alert(1){\\*\\htmltag12 </script>}{\\*\\htmltag4 <img src=\"http://example.com/p.gif\" width=40 height=40>}}";
+    let doc = crate::rtf::parse(html);
+    assert_eq!(doc.text(), "Hello you");
+    assert!(paras(&doc)[0].runs[1].style.bold);
+    assert_eq!(doc.remote_blocked, 1, "what the wrapped HTML points at is still not fetched");
+    let text = crate::rtf::parse(b"{\\rtf1\\ansi\\fromtext \\pard One\\par\\par Three\\par}");
+    assert_eq!(paras(&text).iter().map(|p| p.text()).collect::<Vec<_>>(), ["One", "\u{a0}", "Three"]);
+}
+
+#[test]
+fn hostile_rtf_gives_a_bounded_document() {
+    let junk: [&[u8]; 7] = [
+        b"",
+        b"{",
+        b"}",
+        b"\\",
+        b"{\\rtf1\\cell\\row\\cell\\row}",
+        b"{\\rtf1\\cf99999\\highlight-4 x\\fs-9 y\\fs999999 z\\li-5 q\\li99999999 r}",
+        b"{\\field{\\*\\fldinst HYPERLINK}{\\fldrslt x}}",
+    ];
+    for rtf in junk {
+        let _ = crate::rtf::parse(rtf);
+    }
+    let deep = [b"{\\rtf1 ".to_vec(), b"{\\b ".repeat(5000), b"deep".to_vec(), vec![b'}'; 5001]].concat();
+    assert_eq!(crate::rtf::parse(&deep).text(), "deep");
+    let many = [b"{\\rtf1 ".to_vec(), b"x\\par ".repeat(80_000), b"}".to_vec()].concat();
+    let doc = crate::rtf::parse(&many);
+    assert!(doc.truncated && doc.blocks.len() <= 50_000);
+    let cells = [b"{\\rtf1 ".to_vec(), b"\\intbl c\\cell ".repeat(20_000), b"\\row}".to_vec()].concat();
+    assert!(matches!(crate::rtf::parse(&cells).blocks.first(), Some(Block::Table(t)) if t.columns() == 20_000));
+    let colors = [b"{\\rtf1{\\colortbl".to_vec(), b";".repeat(100_000), b"}\\cf5000 x}".to_vec()].concat();
+    assert_eq!(crate::rtf::parse(&colors).text(), "x");
+}

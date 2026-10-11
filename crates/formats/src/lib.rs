@@ -4,6 +4,7 @@
 
 pub mod html;
 pub mod rich;
+pub mod rtf;
 
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 1 · 2026-10-11
+**Status:** revision 2 · 2026-10-11 · RTF bodies are decoded for reading
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -19,7 +19,7 @@ writes for these checks stay local and are never committed.
 | Categories (named property `Keywords`) | read back the same, after the fix below | read | same |
 | Plain text body | read back the same | read | same |
 | HTML body | Outlook reports an HTML item with the same text | not checked (Outlook stored its HTML as RTF) | not checked |
-| RTF body (compressed, [MS-OXRTFCP]) | not written by us | kept as bytes, **not decoded** | preserved: Outlook shows the HTML again |
+| RTF body (compressed, [MS-OXRTFCP]) | not written by us | decoded for reading (text, preview, formatted body; wrapped HTML or text taken back out); the bytes themselves are kept untouched | preserved: Outlook shows the HTML again |
 | File attachment: name, size, by-value | read back the same | not checked | not checked |
 | Attached message | not checked in Outlook | not checked | not checked |
 | Properties MailCraft does not interpret | n/a | kept | preserved (8 named properties survive) |
