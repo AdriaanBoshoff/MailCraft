@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 23 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 24 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 142, all passing |
+| Tests | 143, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -247,3 +247,12 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   steps remain, and `session.inspect` what the next one is; a step whose message has since gone
   says so and is dropped without touching anything else. Found on the way and fixed: a move
   whose second half failed left the message in neither folder; it now goes back where it was.
+- **2026-10-11** - M2.21: writing and files, the ninth of the pass. Starting a new message or
+  a reply while one was being written wrote over it, and Discard dropped it; what a writer has
+  put into a message is now set aside instead (twenty are kept), Undo brings a discarded one
+  back, and `compose.restore` any of them, which Outlook cannot do once its prompt is answered.
+  Attaching refuses a folder and the same file a second time and says what the message now
+  carries; the checks before sending also tell of attachments over about 20 MB together, an
+  empty one, and a program or script that mail servers refuse. Save As takes a folder and saves
+  the message there under its subject made safe, replacing nothing (`"format"` picks msg, eml
+  or oft). Opening a data file that is open already goes to it instead of opening it twice.

@@ -135,6 +135,8 @@ pub struct Draft {
     pub kind: &'static str,
     /// The message this answers reached its writer as a hidden recipient, and it answers all.
     pub was_hidden: bool,
+    /// Its writer has put something into it.
+    pub touched: bool,
 }
 
 pub struct Session {
@@ -163,6 +165,9 @@ pub struct Session {
     pub user_email: String,
     /// What was done to messages and can be taken back, the newest last.
     pub undo: Vec<undo::Step>,
+    /// Messages that were being written and were discarded or made way for another, the newest
+    /// last: `compose.restore` brings one back.
+    pub set_aside: Vec<Draft>,
 }
 
 impl Default for Session {
@@ -195,6 +200,7 @@ impl Session {
             user_name: "Alex Morgan".to_string(),
             user_email: "alex.morgan@example.org".to_string(),
             undo: Vec::new(),
+            set_aside: Vec::new(),
         }
     }
 
@@ -523,6 +529,7 @@ impl Session {
             "search": self.search,
             "unread_only": self.unread_only,
             "undo": self.undo.last().map(|step| step.what()),
+            "setAside": self.set_aside.len(),
             "composing": self.compose.as_ref().map(|d| json!({
                 "kind": d.kind, "to": d.to, "cc": d.cc, "subject": d.subject, "attachments": d.attachments.len(),
                 "cautions": outgoing::cautions(d).iter().map(|c| c.words()).collect::<Vec<_>>(),

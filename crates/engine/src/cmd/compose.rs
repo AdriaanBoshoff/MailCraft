@@ -13,6 +13,8 @@ use std::collections::HashSet;
 /// One attached file is at most this large, and a draft carries at most this many.
 const MAX_ATTACHMENT: u64 = 150 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 500;
+/// Messages set aside that are kept; an older one is forgotten when a newer one comes.
+const MAX_SET_ASIDE: usize = 20;
 /// Field text is clamped: a subject line, an address line, a body.
 const MAX_LINE: usize = 32 * 1024;
 const MAX_BODY: usize = 16 * 1024 * 1024;
@@ -126,9 +128,19 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "Message",
             group: "",
             shortcut: "Esc",
-            params: "",
+            params: "what was written is set aside, and Undo or compose.restore brings it back",
             enabled: composing,
             run: discard,
+        },
+        CommandSpec {
+            id: "compose.restore",
+            label: "Restore Discarded Message",
+            tab: "Message",
+            group: "",
+            shortcut: "",
+            params: r#"brings back the message last discarded, or replaced by a new one, as it was; returns {"left": how many more are set aside}"#,
+            enabled: has_set_aside,
+            run: restore,
         },
     ]
 }
@@ -137,7 +149,27 @@ fn composing(s: &Session) -> bool {
     s.compose.is_some()
 }
 
+fn has_set_aside(s: &Session) -> bool {
+    !s.set_aside.is_empty()
+}
+
+/// Close the message being written. What its writer put into it is kept, so that starting
+/// another message, or discarding this one, loses nothing. Says whether there was anything.
+fn set_aside(s: &mut Session) -> bool {
+    match s.compose.take() {
+        Some(draft) if draft.touched => {
+            if s.set_aside.len() >= MAX_SET_ASIDE {
+                s.set_aside.remove(0);
+            }
+            s.set_aside.push(draft);
+            true
+        }
+        _ => false,
+    }
+}
+
 fn new(s: &mut Session, _: &Value) -> CmdResult {
+    set_aside(s);
     s.compose = Some(Draft { kind: "New", ..Draft::default() });
     ok()
 }
@@ -230,6 +262,7 @@ fn respond(s: &mut Session, kind: &'static str) -> CmdResult {
             }
         }
     }
+    set_aside(s);
     s.compose = Some(draft);
     ok()
 }
@@ -270,6 +303,7 @@ fn set_field(s: &mut Session, p: &Value) -> CmdResult {
         "body" => draft.body = clamp(value, MAX_BODY),
         other => return Err(EngineError::BadParams(format!("\"{other}\" is not to, cc, bcc, subject or body"))),
     }
+    draft.touched = true;
     ok()
 }
 
@@ -286,12 +320,24 @@ fn attach(s: &mut Session, p: &Value) -> CmdResult {
     if draft.attachments.len() >= MAX_ATTACHMENTS {
         return Err(EngineError::Format("this message already has as many attachments as it can carry".into()));
     }
-    if std::fs::metadata(path)?.len() > MAX_ATTACHMENT {
+    let about = std::fs::metadata(path)?;
+    if about.is_dir() {
+        return Err(EngineError::BadParams(format!("{} is a folder, not a file", path.display())));
+    }
+    if about.len() > MAX_ATTACHMENT {
         return Err(EngineError::Format("this file is too large to attach".into()));
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".to_string());
-    draft.attachments.push(Attachment::file(&name, "", std::fs::read(path)?));
-    ok()
+    let data = std::fs::read(path)?;
+    // The same file a second time is a slip, not a wish.
+    if draft.attachments.iter().any(|a| a.embedded.is_none() && a.name() == name && a.data == data) {
+        return Err(EngineError::Format(format!("{name} is attached already")));
+    }
+    let size = data.len();
+    draft.attachments.push(Attachment::file(&name, "", data));
+    draft.touched = true;
+    let total = draft.attachments.iter().fold(0usize, |sum, a| sum.saturating_add(a.size()));
+    Ok(json!({ "index": draft.attachments.len().saturating_sub(1), "size": size, "total": total }))
 }
 
 fn remove_attachment(s: &mut Session, p: &Value) -> CmdResult {
@@ -301,6 +347,7 @@ fn remove_attachment(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::BadParams(format!("there is no attachment {index}")));
     }
     draft.attachments.remove(index);
+    draft.touched = true;
     ok()
 }
 
@@ -368,6 +415,17 @@ fn save_draft(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 fn discard(s: &mut Session, _: &Value) -> CmdResult {
-    s.compose = None;
+    if set_aside(s) {
+        s.did(crate::undo::Step::Discarded);
+        s.status = "Discarded. Undo (Ctrl+Z) brings it back.".to_string();
+    }
     ok()
+}
+
+fn restore(s: &mut Session, _: &Value) -> CmdResult {
+    let draft = s.set_aside.pop().ok_or_else(|| EngineError::Disabled("Restore Discarded Message".into()))?;
+    // What is being written now makes way, and is kept in its turn.
+    set_aside(s);
+    s.compose = Some(draft);
+    Ok(json!({ "left": s.set_aside.len() }))
 }

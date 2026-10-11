@@ -39,7 +39,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Save",
             shortcut: "F12",
-            params: r#"{"path": target ending in .msg, .oft or .eml}"#,
+            params: r#"{"path": target ending in .msg, .oft or .eml, or a folder to save it in under its subject without replacing anything; "format": "msg" (default), "eml" or "oft" for a folder}"#,
             enabled: has_selection,
             run: save_as,
         },
@@ -92,6 +92,13 @@ fn has_store(s: &Session) -> bool {
 
 fn open(s: &mut Session, p: &Value) -> CmdResult {
     let path = Path::new(need_str(p, "path")?);
+    // A data file that is open already is gone to, not opened a second time beside itself.
+    if let Ok(real) = std::fs::canonicalize(path)
+        && let Some(idx) = s.stores.iter().position(|st| st.path().and_then(|p| std::fs::canonicalize(p).ok()).is_some_and(|p| p == real))
+    {
+        s.select_default_folder(idx);
+        return Ok(json!({ "store": idx, "already": true }));
+    }
     match io::open_path(path)? {
         Opened::Store(store) => {
             let name = store.display_name();
@@ -131,9 +138,25 @@ fn open_sample(s: &mut Session, _: &Value) -> CmdResult {
 fn save_as(s: &mut Session, p: &Value) -> CmdResult {
     let path = Path::new(need_str(p, "path")?);
     let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
-    io::save_item(item, path)?;
-    s.status = format!("Saved {}", path.display());
-    ok()
+    // A folder takes the message under its subject, made safe, beside what is there.
+    let target = if path.is_dir() {
+        let kind = match p_str(p, "format").map(str::to_ascii_lowercase).as_deref() {
+            None | Some("msg") => "msg",
+            Some("eml") => "eml",
+            Some("oft") => "oft",
+            Some(other) => return Err(EngineError::BadParams(format!("\"{other}\" is not msg, eml or oft"))),
+        };
+        let subject = item.subject();
+        let stem = attachments::safe_name(if subject.trim().is_empty() { "No subject" } else { subject.trim() });
+        // A subject's last dot is not a file ending.
+        let name = format!("{}.{kind}", stem.replace('.', "_"));
+        attachments::free_path(path, &name, &mut HashSet::new()).ok_or_else(|| full(path))?
+    } else {
+        path.to_path_buf()
+    };
+    io::save_item(item, &target)?;
+    s.status = format!("Saved {}", target.display());
+    Ok(json!({"untrusted_content": {"path": target.display().to_string()}}))
 }
 
 fn save_attachment(s: &mut Session, p: &Value) -> CmdResult {

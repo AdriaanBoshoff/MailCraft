@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 
 use crate::Draft;
+use crate::attachments;
 use crate::search::fold;
 
 /// Characters of the new text that are read for a word about an attachment.
@@ -11,6 +12,10 @@ const MAX_READ: usize = 20_000;
 /// Cautions about addresses that are told, and characters of an address that are said back.
 const MAX_TOLD: usize = 8;
 const MAX_SAID: usize = 80;
+/// More than this in attachments and many mail servers refuse the message.
+pub const HEAVY: usize = 20 * 1024 * 1024;
+/// Cautions about single attachments that are told.
+const MAX_FILES_TOLD: usize = 4;
 
 /// The line a reply or a forward puts above the text it answers.
 pub const ORIGINAL: &str = "-----Original Message-----";
@@ -30,6 +35,12 @@ pub enum Caution {
     Twice(String),
     /// The writer was a hidden recipient of the message this answers, and answers everyone.
     WasHidden,
+    /// The attachments come to so many bytes.
+    Heavy(usize),
+    /// An attachment that holds nothing.
+    Empty(String),
+    /// An attachment of a kind mail servers refuse to carry.
+    Refused(String),
 }
 
 impl Caution {
@@ -40,6 +51,11 @@ impl Caution {
             Self::NothingAttached => "The text speaks of an attachment, but nothing is attached.".to_string(),
             Self::NotAnAddress(text) => format!("\u{201c}{text}\u{201d} is not an address mail can be sent to."),
             Self::Twice(address) => format!("{address} is named more than once."),
+            Self::Heavy(bytes) => {
+                format!("The attachments come to {}; many mail servers refuse more than about 20 MB.", attachments::size_words(*bytes))
+            }
+            Self::Empty(name) => format!("\u{201c}{name}\u{201d} is empty."),
+            Self::Refused(name) => format!("\u{201c}{name}\u{201d} is a program or a script; most mail servers refuse to carry one."),
             Self::WasHidden => {
                 "You were a hidden (Bcc) recipient of the message this answers: a reply to all shows the others that you had it.".to_string()
             }
@@ -95,6 +111,22 @@ pub fn cautions(draft: &Draft) -> Vec<Caution> {
     if draft.subject.trim().is_empty() {
         found.push(Caution::NoSubject);
     }
+    let total = draft.attachments.iter().fold(0usize, |sum, a| sum.saturating_add(a.size()));
+    if total > HEAVY {
+        found.push(Caution::Heavy(total));
+    }
+    let files = draft.attachments.iter().filter_map(|a| {
+        if a.embedded.is_none() && a.data.is_empty() {
+            return Some(Caution::Empty(said(&attachments::safe_name(&a.name()))));
+        }
+        match attachments::caution_of(a) {
+            Some(attachments::Caution::Runs { .. } | attachments::Caution::Program { .. }) => {
+                Some(Caution::Refused(said(&attachments::safe_name(&a.name()))))
+            }
+            _ => None,
+        }
+    });
+    found.extend(files.take(MAX_FILES_TOLD));
     if draft.attachments.is_empty() {
         let text: String = new_text(&draft.body).chars().take(MAX_READ).collect();
         if fold(&text).split(|c: char| !c.is_alphanumeric()).any(|word| ATTACHING.contains(&word)) {

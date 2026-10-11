@@ -464,6 +464,91 @@ fn a_message_that_cannot_be_put_where_it_is_going_stays_where_it_was() {
 }
 
 #[test]
+fn what_is_being_written_is_not_lost_and_files_are_not_replaced() {
+    use crate::outgoing::{Caution, HEAVY, cautions};
+    use mailcraft_model::Attachment;
+    let mut s = session();
+    assert!(!s.is_enabled("compose.restore"));
+
+    // An untouched message leaves nothing behind; a touched one is set aside by whatever closes it.
+    run(&mut s, "mail.new", Value::Null);
+    run(&mut s, "compose.discard", Value::Null);
+    assert!(s.set_aside.is_empty() && !s.is_enabled("edit.undo"));
+    run(&mut s, "mail.new", Value::Null);
+    run(&mut s, "compose.setField", json!({"field": "body", "value": "First thoughts"}));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    run(&mut s, "mail.reply", Value::Null);
+    assert_eq!((s.set_aside.len(), s.inspect()["setAside"].as_u64()), (1, Some(1)), "a reply does not write over a message in progress");
+    run(&mut s, "compose.setField", json!({"field": "body", "value": "Second thoughts"}));
+    run(&mut s, "compose.discard", Value::Null);
+    assert!(s.compose.is_none() && s.status.contains("Undo"));
+    assert_eq!(run(&mut s, "edit.undo", Value::Null)["undone"], "Discard");
+    let d = s.compose.clone().unwrap();
+    assert_eq!((d.kind, d.body.as_str(), d.subject.as_str()), ("Reply", "Second thoughts", "RE: Launch checklist: three items left"));
+    // Bringing the other one back sets this one aside in its turn.
+    assert_eq!(run(&mut s, "compose.restore", Value::Null)["left"], 1);
+    assert_eq!(s.compose.as_ref().unwrap().body, "First thoughts");
+    run(&mut s, "compose.restore", Value::Null);
+    assert_eq!(s.compose.as_ref().unwrap().body, "Second thoughts");
+    // A message that is sent or saved is not set aside as well.
+    run(&mut s, "compose.saveDraft", Value::Null);
+    assert_eq!(s.set_aside.len(), 1);
+    // Only so many are kept.
+    for n in 0..30 {
+        run(&mut s, "mail.new", Value::Null);
+        run(&mut s, "compose.setField", json!({"field": "subject", "value": format!("Note {n}")}));
+    }
+    run(&mut s, "compose.discard", Value::Null);
+    assert_eq!(s.set_aside.len(), 20);
+    run(&mut s, "compose.restore", Value::Null);
+    assert_eq!(s.compose.as_ref().unwrap().subject, "Note 29");
+
+    // Attaching: not a folder, not the same file twice, and it says what the message now carries.
+    let dir = std::env::temp_dir().join(format!("mailcraft-m221-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("rota.txt"), b"Monday: June").unwrap();
+    std::fs::write(dir.join("empty.txt"), b"").unwrap();
+    std::fs::write(dir.join("setup.bat"), b"echo hello").unwrap();
+    assert!(s.run("compose.attach", &json!({"path": dir})).unwrap_err().to_string().contains("folder"));
+    let told = run(&mut s, "compose.attach", json!({"path": dir.join("rota.txt")}));
+    assert_eq!((told["index"].as_u64(), told["size"].as_u64(), told["total"].as_u64()), (Some(0), Some(12), Some(12)));
+    assert!(s.run("compose.attach", &json!({"path": dir.join("rota.txt")})).unwrap_err().to_string().contains("attached already"));
+    run(&mut s, "compose.attach", json!({"path": dir.join("empty.txt")}));
+    run(&mut s, "compose.attach", json!({"path": dir.join("setup.bat")}));
+    let found = cautions(s.compose.as_ref().unwrap());
+    assert!(found.contains(&Caution::Empty("empty.txt".into())) && found.contains(&Caution::Refused("setup.bat".into())), "{found:?}");
+    let heavy = Draft {
+        to: "a@example.org".into(),
+        subject: "Big".into(),
+        attachments: vec![Attachment::file("film.bin", "", vec![7; HEAVY + 1])],
+        ..Draft::default()
+    };
+    let found = cautions(&heavy);
+    assert!(matches!(found.as_slice(), [Caution::Heavy(_)]) && found[0].words().contains("20 MB"), "{found:?}");
+    let many = Draft { attachments: (0..50).map(|n| Attachment::file(&format!("{n}.exe"), "", Vec::new())).collect(), ..heavy };
+    assert!(cautions(&many).len() <= 6);
+    run(&mut s, "compose.discard", Value::Null);
+
+    // Saving a message into a folder: under its subject made safe, replacing nothing.
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let first = run(&mut s, "file.saveAs", json!({"path": dir}))["untrusted_content"]["path"].as_str().unwrap().to_string();
+    let second = run(&mut s, "file.saveAs", json!({"path": dir}))["untrusted_content"]["path"].as_str().unwrap().to_string();
+    let eml = run(&mut s, "file.saveAs", json!({"path": dir, "format": "EML"}))["untrusted_content"]["path"].as_str().unwrap().to_string();
+    assert!(
+        first.ends_with("Launch checklist_ three items left.msg") && second.ends_with("Launch checklist_ three items left (2).msg"),
+        "{first} {second}"
+    );
+    assert!(eml.ends_with("Launch checklist_ three items left.eml") && std::fs::metadata(&eml).unwrap().len() > 0);
+    assert!(s.run("file.saveAs", &json!({"path": dir, "format": "exe"})).is_err());
+    // A file that was saved opens again as the message it was.
+    let stores = s.stores.len();
+    run(&mut s, "file.open", json!({"path": first}));
+    assert_eq!((s.stores.len(), s.open.as_ref().unwrap().subject().as_str()), (stores + 1, "Launch checklist: three items left"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn sort_search_and_filter() {
     let mut s = session();
     run(&mut s, "view.sortBy", json!({"key": "from"}));

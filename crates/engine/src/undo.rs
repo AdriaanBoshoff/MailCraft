@@ -16,6 +16,8 @@ pub enum Step {
     Moved { what: &'static str, store: usize, from: FolderId, was: u64, to: FolderId, id: u64 },
     /// The message `was` in `folder` was removed for good; `item` is all of it.
     Removed { what: &'static str, store: usize, folder: FolderId, was: u64, item: Box<Item> },
+    /// A message that was being written was discarded; it is the newest of those set aside.
+    Discarded,
 }
 
 impl Step {
@@ -23,6 +25,7 @@ impl Step {
     pub fn what(&self) -> &'static str {
         match self {
             Self::Edited { what, .. } | Self::Moved { what, .. } | Self::Removed { what, .. } => what,
+            Self::Discarded => "Discard",
         }
     }
 }
@@ -57,6 +60,11 @@ impl Session {
         let what = step.what();
         let gone = |e: StoreError| EngineError::Format(format!("{what} can no longer be undone: {e}"));
         let (at_store, at_folder, at_id) = match step {
+            Step::Discarded => {
+                let draft = self.set_aside.pop().ok_or(StoreError::NoItem).map_err(gone)?;
+                self.compose = Some(draft);
+                return Ok(what);
+            }
             Step::Edited { store, folder, id, before, .. } => {
                 let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder).map_err(gone)?;
                 st.load(folder, ItemId(id)).map_err(gone)?;
