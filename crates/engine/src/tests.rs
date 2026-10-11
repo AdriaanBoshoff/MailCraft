@@ -241,6 +241,149 @@ fn sort_search_and_filter() {
 }
 
 #[test]
+fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
+    use crate::SortKey;
+    use crate::arrange::{groups, natural, sort};
+    use mailcraft_model::{Flag, Summary, time};
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    for (a, b, want) in [
+        ("invoice 9", "invoice 10", Less),
+        ("invoice 10", "invoice 9", Greater),
+        ("invoice 010", "invoice 10", Equal),
+        ("a2b", "a10", Less),
+        ("", "a", Less),
+        ("a", "", Greater),
+        ("abc", "abc", Equal),
+        ("1", "a", Less),
+        ("99999999999999999999999999999998", "99999999999999999999999999999999", Less),
+        ("000", "0", Equal),
+    ] {
+        assert_eq!(natural(a, b), want, "{a:?} {b:?}");
+    }
+
+    let now = time::from_civil(2026, 10, 11, 12, 0, 0, 0);
+    let at = |y, m, d| time::from_civil(y, m, d, 9, 0, 0, 0);
+    let row = |id: u64, from: &str, subject: &str, time: i64| Summary {
+        id,
+        from: from.into(),
+        subject: subject.into(),
+        time,
+        read: true,
+        importance: 1,
+        ..Summary::default()
+    };
+    let rows = vec![
+        row(1, "Zoe Adams", "Invoice 10", at(2026, 10, 11)),
+        row(2, "\u{c9}lodie Martin", "RE: invoice 9", at(2026, 10, 10)),
+        Summary { read: false, size: 2 << 20, ..row(3, "elodie martin", "Invoice 9", at(2026, 10, 7)) },
+        Summary {
+            has_attachments: true,
+            flag: Flag::Flagged,
+            importance: 2,
+            size: 50_000,
+            ..row(4, "Aaron Bell", "FW: RE: Agenda", at(2026, 10, 2))
+        },
+        Summary { read: false, ..row(5, "aaron bell", "agenda", at(2026, 9, 20)) },
+        Summary { flag: Flag::Complete, importance: 0, ..row(6, "", "", at(2025, 12, 24)) },
+        row(7, "Zoe Adams", "Invoice 100", at(2025, 3, 1)),
+        row(8, "Bo", "\u{c5}ngstr\u{f6}m notes", 0),
+    ];
+    let ids = |key, descending| {
+        let mut sorted = rows.clone();
+        sort(&mut sorted, key, descending);
+        sorted.iter().map(|r| r.id).collect::<Vec<_>>()
+    };
+    // Names without their case and accents; those that are equal, newest first both ways.
+    assert_eq!(ids(SortKey::From, false), [6, 4, 5, 8, 2, 3, 1, 7]);
+    assert_eq!(ids(SortKey::From, true), [1, 7, 2, 3, 8, 4, 5, 6]);
+    // Subjects without their prefixes, numbers by their value.
+    assert_eq!(ids(SortKey::Subject, false), [6, 4, 5, 8, 2, 3, 1, 7]);
+    assert_eq!(ids(SortKey::Subject, true), [7, 1, 2, 3, 8, 4, 5, 6]);
+    assert_eq!(ids(SortKey::Date, true), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(ids(SortKey::Date, false), [8, 7, 6, 5, 4, 3, 2, 1]);
+    assert_eq!(ids(SortKey::Size, true), [3, 4, 1, 2, 5, 6, 7, 8]);
+    assert_eq!(ids(SortKey::Importance, true), [4, 1, 2, 3, 5, 7, 8, 6]);
+    assert_eq!(ids(SortKey::Flag, true), [4, 6, 1, 2, 3, 5, 7, 8]);
+    assert_eq!(ids(SortKey::Attachments, true), [4, 1, 2, 3, 5, 6, 7, 8]);
+
+    let told = |key, descending| {
+        let mut sorted = rows.clone();
+        sort(&mut sorted, key, descending);
+        groups(&sorted, key, now, 0).into_iter().map(|g| (g.label, g.start, g.count, g.unread)).collect::<Vec<_>>()
+    };
+    let g = |label: &str, start, count, unread| (label.to_string(), start, count, unread);
+    assert_eq!(
+        told(SortKey::Date, true),
+        [
+            g("Today", 0, 1, 0),
+            g("Yesterday", 1, 1, 0),
+            g("This Week", 2, 1, 1),
+            g("Last Week", 3, 1, 0),
+            g("September", 4, 1, 1),
+            g("December 2025", 5, 1, 0),
+            g("2025", 6, 1, 0),
+            g("No date", 7, 1, 0)
+        ]
+    );
+    assert_eq!(
+        told(SortKey::From, false),
+        [g("No sender", 0, 1, 0), g("Aaron Bell", 1, 2, 1), g("Bo", 3, 1, 0), g("\u{c9}lodie Martin", 4, 2, 1), g("Zoe Adams", 6, 2, 0)]
+    );
+    assert_eq!(
+        told(SortKey::Subject, false),
+        [
+            g("No subject", 0, 1, 0),
+            g("Agenda", 1, 2, 1),
+            g("\u{c5}ngstr\u{f6}m notes", 3, 1, 0),
+            g("invoice 9", 4, 2, 1),
+            g("Invoice 10", 6, 1, 0),
+            g("Invoice 100", 7, 1, 0)
+        ]
+    );
+    assert_eq!(told(SortKey::Size, true), [g("1 MB to 10 MB", 0, 1, 1), g("10 KB to 100 KB", 1, 1, 0), g("Under 10 KB", 2, 6, 1)]);
+    assert_eq!(told(SortKey::Importance, true), [g("High importance", 0, 1, 0), g("Normal importance", 1, 6, 2), g("Low importance", 7, 1, 0)]);
+    assert_eq!(told(SortKey::Flag, true), [g("Flagged", 0, 1, 0), g("Completed", 1, 1, 0), g("Not flagged", 2, 6, 2)]);
+    assert_eq!(told(SortKey::Attachments, true), [g("With attachments", 0, 1, 0), g("No attachments", 1, 7, 2)]);
+    // Earlier in the month than the last two weeks.
+    let late = time::from_civil(2026, 10, 30, 12, 0, 0, 0);
+    assert_eq!(groups(&[row(1, "a", "b", at(2026, 10, 2))], SortKey::Date, late, 0)[0].label, "Earlier This Month");
+
+    // Through the session: the groups are told with the rows, and their headings are marked as
+    // what the messages say.
+    let mut s = session();
+    assert_eq!(s.groups().iter().map(|g| g.count).sum::<usize>(), s.rows.len());
+    run(&mut s, "view.sortBy", json!({"key": "from"}));
+    let told = s.inspect();
+    let first = &told["groups"][0];
+    assert_eq!((first["start"].as_u64(), first["untrusted_content"]["label"].as_str()), (Some(0), Some("Facilities Desk")));
+    assert_eq!(told["groups"].as_array().unwrap().iter().map(|g| g["count"].as_u64().unwrap()).sum::<u64>(), 9);
+
+    // Hostile: nothing here panics, whatever the rows hold.
+    let wild = |n: u64| Summary {
+        id: n,
+        from: ["\u{0}", "9".repeat(5000).as_str(), "\u{202e}", "", "\u{301}"][n as usize % 5].to_string(),
+        subject: "re: ".repeat(n as usize % 7 * 500),
+        time: [i64::MIN, i64::MAX, 0, -1, 1][n as usize % 5],
+        size: [0, u32::MAX][n as usize % 2],
+        importance: [i32::MIN, i32::MAX, 0][n as usize % 3],
+        ..Summary::default()
+    };
+    let mut many: Vec<Summary> = (0..200).map(wild).collect();
+    for key in [SortKey::Date, SortKey::From, SortKey::To, SortKey::Subject, SortKey::Size, SortKey::Importance, SortKey::Flag, SortKey::Attachments]
+    {
+        for descending in [false, true] {
+            sort(&mut many, key, descending);
+            for (now, tz) in [(i64::MIN, i32::MIN), (i64::MAX, i32::MAX), (0, 0)] {
+                let found = groups(&many, key, now, tz);
+                assert_eq!(found.iter().map(|g| g.count).sum::<usize>(), 200);
+                assert!(found.iter().all(|g| g.label.chars().count() <= 80));
+            }
+        }
+    }
+    assert!(groups(&[], SortKey::Date, now, 0).is_empty());
+}
+
+#[test]
 fn search_understands_fields_states_dates_and_sizes() {
     use crate::search::{fold, parse};
     use mailcraft_model::{Flag, Summary, time};

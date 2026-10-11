@@ -14,19 +14,8 @@ const GROUP_H: f32 = 24.0;
 const MAX_BODY_CHARS: usize = 200_000;
 
 enum Entry {
-    Group(&'static str),
+    Group(usize),
     Row(usize),
-}
-
-fn date_group(now_day: i64, day: i64) -> &'static str {
-    match now_day.saturating_sub(day) {
-        i64::MIN..=0 => "Today",
-        1 => "Yesterday",
-        2..=6 => "This Week",
-        7..=13 => "Last Week",
-        14..=30 => "This Month",
-        _ => "Older",
-    }
 }
 
 fn folder_icon(kind: FolderKind) -> Icon {
@@ -313,20 +302,17 @@ impl MailUi {
             return;
         }
 
-        // Lay the rows out once: group headings only when arranged by date.
+        // Lay the rows out once, each group under its heading, however the list is arranged.
+        let groups = s.groups();
         let now_day = time::civil(s.now, s.tz_offset_min).day_number;
-        let grouped = s.sort == SortKey::Date;
-        let mut entries: Vec<(f32, Entry)> = Vec::with_capacity(s.rows.len() + 8);
+        let mut entries: Vec<(f32, Entry)> = Vec::with_capacity(s.rows.len() + groups.len());
         let mut y = 0.0;
-        let mut last_group = "";
-        for (i, row) in s.rows.iter().enumerate() {
-            if grouped {
-                let group = date_group(now_day, time::civil(row.time, s.tz_offset_min).day_number);
-                if group != last_group {
-                    entries.push((y, Entry::Group(group)));
-                    y += GROUP_H;
-                    last_group = group;
-                }
+        let mut next = 0;
+        for i in 0..s.rows.len() {
+            if groups.get(next).is_some_and(|g| g.start == i) {
+                entries.push((y, Entry::Group(next)));
+                y += GROUP_H;
+                next += 1;
             }
             entries.push((y, Entry::Row(i)));
             y += ROW_H;
@@ -348,7 +334,8 @@ impl MailUi {
                         break;
                     }
                     match entry {
-                        Entry::Group(name) => {
+                        Entry::Group(at) => {
+                            let Some(group) = groups.get(*at) else { continue };
                             let r = Rect::from_min_size(pos2(area.left(), area.top() + y), vec2(area.width(), GROUP_H));
                             icons::paint(
                                 &p,
@@ -356,7 +343,20 @@ impl MailUi {
                                 Icon::ChevronDown,
                                 t.text_dim,
                             );
-                            p.text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, name, bold(11.5), t.text_dim);
+                            // How many the group holds, and how many of them wait to be read.
+                            let count = match group.unread {
+                                0 => group.count.to_string(),
+                                unread => format!("{unread} unread of {}", group.count),
+                            };
+                            let counted = p.text(pos2(r.right() - 12.0, r.center().y), Align2::RIGHT_CENTER, count, font(11.0), t.text_faint);
+                            clip_text(
+                                &p,
+                                pos2(r.left() + 24.0, r.center().y - 8.0),
+                                (counted.left() - r.left() - 32.0).max(0.0),
+                                &group.label,
+                                bold(11.5),
+                                t.text_dim,
+                            );
                         }
                         Entry::Row(i) => {
                             let Some(row) = rows.get(*i) else { continue };

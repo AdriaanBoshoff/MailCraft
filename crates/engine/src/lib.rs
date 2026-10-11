@@ -4,6 +4,7 @@
 //! the CLI and agents all go through [`Session::run`]; nothing here opens a dialog or a socket.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod arrange;
 pub mod attachments;
 pub mod catalog;
 pub mod cmd;
@@ -345,26 +346,7 @@ impl Session {
         if self.unread_only {
             rows.retain(|r| !r.read);
         }
-        let key = self.sort;
-        rows.sort_by(|a, b| {
-            let ord = match key {
-                SortKey::Date => a.time.cmp(&b.time),
-                SortKey::From => a.from.to_lowercase().cmp(&b.from.to_lowercase()),
-                SortKey::To => a.to.to_lowercase().cmp(&b.to.to_lowercase()),
-                SortKey::Subject => mailcraft_model::strip_reply_prefix(&a.subject)
-                    .to_lowercase()
-                    .cmp(&mailcraft_model::strip_reply_prefix(&b.subject).to_lowercase()),
-                SortKey::Size => a.size.cmp(&b.size),
-                SortKey::Importance => a.importance.cmp(&b.importance),
-                SortKey::Flag => (a.flag as u8).cmp(&(b.flag as u8)),
-                SortKey::Attachments => a.has_attachments.cmp(&b.has_attachments),
-            };
-            // Ties fall back to newest first, as Outlook does inside a group.
-            ord.then_with(|| if key == SortKey::Date { std::cmp::Ordering::Equal } else { b.time.cmp(&a.time).reverse() })
-        });
-        if self.sort_desc {
-            rows.reverse();
-        }
+        arrange::sort(&mut rows, self.sort, self.sort_desc);
         self.rows = rows;
         if let Some(sel) = self.selected
             && !self.rows.iter().any(|r| r.id == sel)
@@ -373,6 +355,11 @@ impl Session {
             self.open = None;
         }
         Ok(())
+    }
+
+    /// The groups the listed rows stand in, as they are arranged.
+    pub fn groups(&self) -> Vec<arrange::Group> {
+        arrange::groups(&self.rows, self.sort, self.now, self.tz_offset_min)
     }
 
     pub fn selected_index(&self) -> Option<usize> {
@@ -509,6 +496,9 @@ impl Session {
             "selected": self.selected,
             "open": open,
             "sort": { "key": self.sort.name(), "descending": self.sort_desc },
+            "groups": self.groups().iter().map(|g| json!({
+                "start": g.start, "count": g.count, "unread": g.unread, "untrusted_content": { "label": g.label },
+            })).collect::<Vec<_>>(),
             "search": self.search,
             "unread_only": self.unread_only,
             "composing": self.compose.as_ref().map(|d| json!({ "kind": d.kind, "to": d.to, "cc": d.cc, "subject": d.subject, "attachments": d.attachments.len() })),

@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 19 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 20 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 137, all passing |
+| Tests | 138, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -208,3 +208,12 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   its own address, and `"links": "none"` prints the body alone. Each page's foot says which page
   of how many it is, so a loose page tells whether the rest is with it, and the header lists
   each attachment under the name it would be saved as, with its size.
+- **2026-10-11** - M2.17: arranging the list, the fifth of the pass. The list now stands in
+  groups however it is arranged, as Outlook's does (by sender, recipient, subject, size,
+  importance, flag and attachments, not only by date), and goes further: names and subjects are
+  ordered without their case and accents (`Élodie` beside `Elodie`, not after `Zoe`), numbers in
+  them by their value (`Invoice 9` before `Invoice 10`), each group's heading says how many
+  messages it holds and how many of them are unread, and mail older than two weeks is grouped by
+  its month and then its year, not under one "Older". Messages that are equal by the
+  arrangement stand newest first whichever way it runs (they stood oldest first in an ascending
+  one). The groups are part of `session.inspect`.
