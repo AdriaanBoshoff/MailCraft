@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 21 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 22 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 139, all passing |
+| Catalogued Outlook Classic features with a command | 40 of 114 (35%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 140, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -228,3 +228,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   `compose.check` and `session.inspect` tell them. Reply All names each address once however
   the original listed it, and an answer to a message one sent oneself goes to those it went to,
   not back to oneself.
+- **2026-10-11** - M2.19: folders, the seventh of the pass. Delete Folder removed the folder
+  and all it held for good; it now puts the folder, whole, in Deleted Items as Outlook does
+  (under a numbered name when one of that name is there), and only a folder already there, or
+  `"permanently": true`, is removed. Move Folder (`folder.move`) is new, and takes a deleted
+  folder back. Beyond Outlook: deleting says what went with the folder (messages, unread,
+  folders); Empty Folder takes the folders inside with the mail and can remove only what is
+  older than a number of days (`"olderThanDays"`); Mark All as Read can take the folders inside
+  too (`"subfolders": true`) and says how many it marked; Folder Properties tells the path, the
+  size, the oldest and newest message and the totals with the folders inside in one call; a
+  rename onto a neighbour's name is refused, and names differing only in case are one name in
+  any alphabet, not only in ASCII.

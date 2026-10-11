@@ -146,11 +146,54 @@ impl Store for MemStore {
             i += 1;
         }
         self.folders.retain(|f| !doomed.contains(&f.info.id));
+        self.mark_parents();
+        Ok(())
+    }
+
+    fn move_folder(&mut self, folder: FolderId, parent: FolderId) -> Result<(), StoreError> {
+        self.folder_mut(folder)?;
+        self.folder_mut(parent)?;
+        // The folder and all under it, in the order they are listed.
+        let mut moved = vec![folder];
+        let mut i = 0;
+        while let Some(&cur) = moved.get(i) {
+            let under: Vec<FolderId> =
+                self.folders.iter().filter(|f| f.info.parent == Some(cur) && !moved.contains(&f.info.id)).map(|f| f.info.id).collect();
+            moved.extend(under);
+            i += 1;
+        }
+        if moved.contains(&parent) {
+            return Err(StoreError::Format("a folder cannot be moved into itself or a folder inside it".into()));
+        }
+        self.folder_mut(folder)?.info.parent = Some(parent);
+        // Parents stay listed before their children: the moved folders go after the last folder
+        // that is under their new parent.
+        let (mut taken, mut rest): (Vec<MemFolder>, Vec<MemFolder>) =
+            std::mem::take(&mut self.folders).into_iter().partition(|f| moved.contains(&f.info.id));
+        taken.sort_by_key(|f| moved.iter().position(|id| *id == f.info.id));
+        let mut under = vec![parent];
+        let mut after = 0;
+        for (at, f) in rest.iter().enumerate() {
+            if f.info.id == parent || f.info.parent.is_some_and(|p| under.contains(&p)) {
+                under.push(f.info.id);
+                after = at + 1;
+            }
+        }
+        let tail = rest.split_off(after.min(rest.len()));
+        rest.extend(taken);
+        rest.extend(tail);
+        self.folders = rest;
+        self.mark_parents();
+        Ok(())
+    }
+}
+
+impl MemStore {
+    fn mark_parents(&mut self) {
         let parents: Vec<FolderId> = self.folders.iter().filter_map(|f| f.info.parent).collect();
         for f in &mut self.folders {
             f.info.has_children = parents.contains(&f.info.id);
         }
-        Ok(())
     }
 }
 

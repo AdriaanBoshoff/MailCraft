@@ -536,6 +536,10 @@ pub trait Store {
     fn delete_folder(&mut self, _folder: FolderId) -> Result<(), StoreError> {
         Err(StoreError::ReadOnly)
     }
+    /// Put `folder`, with all it holds, under `parent`. Never into itself or a folder inside it.
+    fn move_folder(&mut self, _folder: FolderId, _parent: FolderId) -> Result<(), StoreError> {
+        Err(StoreError::ReadOnly)
+    }
 }
 
 #[cfg(test)]

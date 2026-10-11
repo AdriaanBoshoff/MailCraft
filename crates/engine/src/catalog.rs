@@ -57,7 +57,7 @@ pub const FEATURES: &[Feature] = &[
     f("Mail", "Folder", "New", "New Search Folder", ""),
     f("Mail", "Folder", "Actions", "Rename Folder", "folder.rename"),
     f("Mail", "Folder", "Actions", "Copy Folder", ""),
-    f("Mail", "Folder", "Actions", "Move Folder", ""),
+    f("Mail", "Folder", "Actions", "Move Folder", "folder.move"),
     f("Mail", "Folder", "Actions", "Delete Folder", "folder.delete"),
     f("Mail", "Folder", "Clean Up", "Mark All as Read", "folder.markAllRead"),
     f("Mail", "Folder", "Clean Up", "Run Rules Now", ""),

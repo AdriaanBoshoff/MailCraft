@@ -1,5 +1,5 @@
 use crate::{Draft, EngineError, Session, catalog, registry};
-use mailcraft_model::{FolderKind, RECIP_CC, RECIP_TO, time};
+use mailcraft_model::{FolderId, FolderKind, RECIP_CC, RECIP_TO, time};
 use serde_json::{Value, json};
 
 /// 2026-10-07 14:30 UTC, a Wednesday.
@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 34, "parity fell to {done} of {total}");
+    assert!(done >= 40, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -664,9 +664,88 @@ fn folders_can_be_made_renamed_and_deleted_but_not_the_inbox() {
     run(&mut s, "folder.select", json!({"folderId": id}));
     run(&mut s, "folder.rename", json!({"name": "Customers"}));
     assert_eq!(s.current_folder().unwrap().name, "Customers");
-    run(&mut s, "folder.delete", Value::Null);
+    run(&mut s, "folder.delete", json!({"permanently": true}));
     assert_eq!(s.current_folder().unwrap().name, "Inbox");
     assert!(s.folders[0].iter().all(|f| f.name != "Customers"));
+}
+
+#[test]
+fn a_deleted_folder_can_be_taken_back_and_folders_say_what_they_hold() {
+    let mut s = session();
+    let names = |s: &Session, parent: &str| {
+        let parent = s.folder_by_path(0, parent);
+        s.folders[0].iter().filter(|f| f.parent == parent).map(|f| f.name.clone()).collect::<Vec<_>>()
+    };
+    let told = run(&mut s, "folder.properties", Value::Null);
+    assert_eq!((told["total"].as_u64(), told["subfolders"].as_u64(), told["untrusted_content"]["path"].as_str()), (Some(9), Some(2), Some("Inbox")));
+    let with = told["withSubfolders"]["total"].as_u64().unwrap();
+    assert!(
+        with > 9 && told["withSubfolders"]["size"].as_u64() > told["size"].as_u64() && told["oldest"].as_i64() < told["newest"].as_i64(),
+        "{told}"
+    );
+
+    // Names are one name whatever the case of their letters, in a rename as in a new folder.
+    run(&mut s, "folder.select", json!({"folder": "Inbox/Projects"}));
+    assert!(s.run("folder.rename", &json!({"name": "RECEIPTS"})).is_err());
+    run(&mut s, "folder.rename", json!({"name": "projects"}));
+    run(&mut s, "folder.rename", json!({"name": "Projects"}));
+    let held = run(&mut s, "folder.properties", Value::Null)["total"].as_u64().unwrap();
+    assert!(held > 0);
+
+    // Moving: not into itself, not onto a name that is taken, and with all it holds.
+    let inner = run(&mut s, "folder.new", json!({"name": "Old"}))["folderId"].as_u64().unwrap();
+    assert!(s.run("folder.move", &json!({"toId": inner})).is_err(), "not into a folder inside it");
+    assert!(s.run("folder.move", &json!({"to": "Inbox/Projects"})).is_err(), "not into itself");
+    assert!(s.run("folder.move", &json!({"to": "Nowhere"})).is_err() && s.run("folder.move", &Value::Null).is_err());
+    run(&mut s, "folder.move", json!({"to": "Archive"}));
+    assert_eq!(run(&mut s, "folder.properties", Value::Null)["untrusted_content"]["path"], "Archive/Projects");
+    assert_eq!(names(&s, "Inbox"), ["Receipts"]);
+    assert_eq!(s.folder_by_path(0, "Archive/Projects/Old"), Some(FolderId(inner)));
+    let order: Vec<_> = s.folders[0].iter().map(|f| f.id).collect();
+    assert!(
+        s.folders[0].iter().all(|f| f.parent.is_none_or(|p| order.iter().position(|id| *id == p) < order.iter().position(|id| *id == f.id))),
+        "parents first"
+    );
+    run(&mut s, "folder.move", json!({"to": "Inbox"}));
+
+    // Deleting puts the folder with the deleted mail, whole, and says what went with it.
+    let went = run(&mut s, "folder.delete", Value::Null);
+    assert_eq!((went["permanently"].as_bool(), went["messages"].as_u64(), went["folders"].as_u64()), (Some(false), Some(held), Some(2)));
+    assert_eq!(s.current_folder().unwrap().name, "Inbox");
+    assert_eq!(s.folder_by_path(0, "Deleted Items/Projects/Old"), Some(FolderId(inner)));
+    // A second folder of the same name gets a number there, not an error.
+    run(&mut s, "folder.new", json!({"name": "Projects"}));
+    run(&mut s, "folder.select", json!({"folder": "Inbox/Projects"}));
+    run(&mut s, "folder.delete", Value::Null);
+    assert_eq!(names(&s, "Deleted Items"), ["Projects", "Projects (2)"]);
+    // Taken back with what it held.
+    run(&mut s, "folder.select", json!({"folder": "Deleted Items/Projects"}));
+    run(&mut s, "folder.move", json!({"to": "Inbox"}));
+    assert_eq!(run(&mut s, "folder.properties", Value::Null)["total"].as_u64(), Some(held));
+
+    // Marking a folder read with the folders inside it.
+    run(&mut s, "folder.select", json!({"folder": "Inbox"}));
+    let unread = run(&mut s, "folder.properties", Value::Null)["withSubfolders"]["unread"].as_u64().unwrap();
+    assert_eq!(run(&mut s, "folder.markAllRead", json!({"subfolders": true}))["marked"].as_u64(), Some(unread));
+    assert_eq!(run(&mut s, "folder.properties", Value::Null)["withSubfolders"]["unread"].as_u64(), Some(0));
+
+    // A folder among the deleted mail goes for good; emptying takes the folders with the mail.
+    run(&mut s, "folder.select", json!({"folder": "Inbox/Projects"}));
+    run(&mut s, "folder.delete", Value::Null);
+    run(&mut s, "folder.select", json!({"folder": "Deleted Items/Projects (2)"}));
+    assert_eq!(run(&mut s, "folder.delete", Value::Null)["permanently"], true);
+    assert_eq!(names(&s, "Deleted Items"), ["Projects"]);
+    assert_eq!(s.current_folder().unwrap().name, "Deleted Items");
+    let before = folder(&s, "Deleted Items").0 as u64;
+    assert!(s.run("folder.empty", &json!({"olderThanDays": "soon"})).is_err());
+    // Only what is older than asked goes, and the folders stay.
+    let aged = run(&mut s, "folder.empty", json!({"olderThanDays": 100_000}));
+    assert_eq!((aged["removed"].as_u64(), aged["kept"].as_u64(), aged["folders"].as_u64()), (Some(0), Some(before), Some(0)));
+    let aged = run(&mut s, "folder.empty", json!({"olderThanDays": u64::MAX}));
+    assert_eq!(aged["removed"].as_u64(), Some(0));
+    let gone = run(&mut s, "folder.empty", Value::Null);
+    assert_eq!((gone["removed"].as_u64(), gone["folders"].as_u64(), gone["kept"].as_u64()), (Some(before + held), Some(2), Some(0)));
+    assert!(names(&s, "Deleted Items").is_empty());
 }
 
 #[test]
