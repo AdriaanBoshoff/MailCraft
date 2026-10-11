@@ -109,6 +109,16 @@ fn opens_on_the_inbox_newest_first() {
 }
 
 #[test]
+fn select_can_go_to_a_folder_first() {
+    let mut s = session();
+    run(&mut s, "mail.select", json!({ "folder": "Sent Items", "index": 0 }));
+    assert_eq!(s.current_folder().unwrap().kind, FolderKind::Sent);
+    assert_eq!(s.open.as_ref().unwrap().subject(), "RE: Launch checklist: three items left");
+    assert!(s.run("mail.select", &json!({ "folder": "No/Such", "index": 0 })).is_err());
+    assert_eq!(s.current_folder().unwrap().kind, FolderKind::Sent);
+}
+
+#[test]
 fn selecting_marks_read_and_delete_moves_to_deleted_items() {
     let mut s = session();
     run(&mut s, "mail.select", json!({"index": 0}));

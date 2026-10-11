@@ -26,8 +26,8 @@
    messages and templates and reads back subject, sender, recipients, times, flags, categories, bodies
    and a file attachment ([file-format-parity.md](file-format-parity.md)). Attached messages, inline
    pictures, non-mail items and opening from the Outlook window are unchecked.
-10. **The UI has not been compared side by side with Outlook Classic.** Layout follows the general
-    arrangement; measurements, spacing and behaviour details are unverified.
+10. **The UI differs from Outlook Classic in measured ways.** A first side-by-side look is in
+    [ui-parity.md](ui-parity.md): no dark theme, no simplified ribbon, different bar and pane sizes.
 
 ## Known shortcomings
 
