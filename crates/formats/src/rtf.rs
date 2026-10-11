@@ -1,6 +1,9 @@
 //! RTF message bodies → [`Doc`]. An RTF body that encapsulates HTML or plain text ([MS-OXRTFEX])
 //! is read as what it wraps; ordinary RTF keeps its character styles, colours, alignment,
-//! indents, links and tables. Pictures and embedded objects are never decoded here.
+//! indents, links and tables, with the borders, fills and merged cells of each row. A picture
+//! written into the body as PNG or JPEG data is kept as its bytes, undecoded; other picture kinds
+//! and embedded objects leave only a place. Control words are those of the RTF specification,
+//! version 1.9.1 ("Pictures", "Table Definitions", "Paragraph Borders").
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -8,7 +11,7 @@ use std::sync::Arc;
 use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
 
 use crate::html;
-use crate::rich::{Align, Block, Cell, Doc, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table};
+use crate::rich::{Align, Block, Cell, Doc, Edge, Edges, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, VAlign, any_edge};
 
 const MAX_BLOCKS: usize = 50_000;
 const MAX_RUNS: usize = 200_000;
@@ -17,8 +20,15 @@ const MAX_FONTS: usize = 4096;
 const MAX_FONT_NAME: usize = 64;
 const MAX_LINK: usize = 2048;
 const MAX_EDGES: usize = 64;
-/// Room inside a cell, in pixels, close to the half-gap RTF rows are usually written with.
-const CELL_PADDING: u16 = 5;
+/// Room at the sides of a cell's text, in pixels, for a row that asks for less or for none
+/// (`\trgaph`), and the most a row may ask for. Above and below there is one pixel.
+const CELL_PADDING: u16 = 2;
+const MAX_CELL_PADDING: i32 = 64;
+/// Widest border line kept, in pixels, and the most rows one merged cell covers.
+const MAX_EDGE: u8 = 12;
+const MAX_ROW_SPAN: u16 = 1000;
+/// Longest side a picture may ask to be shown at, in pixels.
+const MAX_PICTURE_SIDE: i64 = 4096;
 
 pub fn parse(rtf: &[u8]) -> Doc {
     match encapsulated(rtf) {
@@ -55,6 +65,44 @@ enum Dest {
     Colors,
     /// A field's instruction, e.g. `HYPERLINK "address"`.
     Instruction,
+    /// A picture's settings and data (`\pict`).
+    Picture,
+}
+
+/// A picture being read.
+#[derive(Default)]
+struct Pict {
+    style: Style,
+    /// PNG or JPEG data: the kinds that are kept.
+    kept: bool,
+    /// The data could not be read as hex digits, or there is more of it than is kept.
+    bad: bool,
+    bytes: Vec<u8>,
+    /// The first of two hex digits, when the second has not come yet.
+    half: Option<u8>,
+    /// The size to show the picture at, in twips, and how far to scale it, in hundredths.
+    goal: (i32, i32),
+    scale: (i32, i32),
+}
+
+/// One cell of the row being defined: everything before its `\cellx`.
+#[derive(Clone, Copy, Default)]
+struct CellDef {
+    /// The cell's right edge, in twips.
+    right: i32,
+    edges: Edges,
+    fill: Option<Rgb>,
+    valign: VAlign,
+    merge: Merge,
+}
+
+/// A cell's part in a cell merged down several rows.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Merge {
+    #[default]
+    None,
+    First,
+    Under,
 }
 
 #[derive(Clone, Default)]
@@ -76,9 +124,19 @@ struct Builder {
     rows: Vec<Vec<Cell>>,
     row: Vec<Cell>,
     cell: Vec<Block>,
-    border: bool,
-    /// Right edges of the cells of the row being defined, in twips (`\cellx`).
-    edges: Vec<i32>,
+    /// For each finished row, each cell's right edge and its part in a cell merged down.
+    merges: Vec<Vec<(i32, Merge)>>,
+    merging: Vec<(i32, Merge)>,
+    /// The cells of the row being defined, the one whose settings are being read, and the side
+    /// of it border words apply to.
+    defs: Vec<CellDef>,
+    def: CellDef,
+    side: Option<usize>,
+    /// Half the room between the text of two cells of the row being defined, in twips.
+    half_gap: i32,
+    pict: Option<Pict>,
+    written: Vec<Arc<[u8]>>,
+    written_bytes: usize,
     runs: Vec<Run>,
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
@@ -96,7 +154,7 @@ fn formatted(rtf: &[u8]) -> Doc {
     let mut b = Builder::default();
     let mut scope = Scope::new(Chars::default());
     let mut reader = Reader::new(rtf);
-    for event in reader.by_ref() {
+    while let Some(event) = reader.next() {
         if b.truncated {
             break;
         }
@@ -111,6 +169,9 @@ fn formatted(rtf: &[u8]) -> Doc {
                 if was == Dest::Instruction && scope.cur.dest != Dest::Instruction {
                     scope.cur.style.link = link(&b.instruction);
                     b.instruction.clear();
+                }
+                if was == Dest::Picture && scope.cur.dest != Dest::Picture {
+                    b.end_picture();
                 }
             }
             Event::Word("*", _) => scope.cur.star = true,
@@ -140,6 +201,7 @@ fn formatted(rtf: &[u8]) -> Doc {
                             *slot = u8::try_from(param.unwrap_or(0).clamp(0, 255)).unwrap_or(0);
                         }
                     }
+                    Dest::Picture => b.picture_word(&mut scope.cur, word, param, star),
                     Dest::Skip | Dest::Instruction => {}
                 }
             }
@@ -172,18 +234,22 @@ fn formatted(rtf: &[u8]) -> Doc {
                         }
                     }
                     Dest::Instruction if b.instruction.len() < MAX_LINK * 2 => b.instruction.push_str(&text),
+                    Dest::Picture => b.picture_data(&text),
                     _ => {}
                 }
             }
         }
+        // A picture's digits and what is skipped are not text: they do not use up the room for it.
+        reader.count_text(!matches!(scope.cur.dest, Dest::Skip | Dest::Picture));
     }
+    b.end_picture();
     b.end_para(&scope.cur, false, false);
     b.end_table();
     // Empty paragraphs at the end are the writer's, not the reader's.
     while matches!(b.blocks.last(), Some(Block::Para(p)) if p.text().trim().is_empty() && p.runs.iter().all(|r| r.picture.is_none())) {
         b.blocks.pop();
     }
-    Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), ..Doc::default() }
+    Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), written: b.written, ..Doc::default() }
 }
 
 impl Builder {
@@ -197,13 +263,13 @@ impl Builder {
                 cur.dest = Dest::Instruction;
                 self.instruction.clear();
             }
-            // The picture a reader of this RTF version shows; its bytes are skipped.
+            // The picture a reader of this RTF version shows (the other one, `\nonshppict`, is skipped).
             "shppict" => {}
+            "pict" if cur.hidden => cur.dest = Dest::Skip,
             "pict" => {
-                cur.dest = Dest::Skip;
-                if !cur.hidden {
-                    self.push(Run { style: cur.style.clone(), picture: Some(Picture::Inline(None)), ..Run::default() });
-                }
+                self.end_picture();
+                cur.dest = Dest::Picture;
+                self.pict = Some(Pict { style: cur.style.clone(), scale: (100, 100), ..Pict::default() });
             }
             "b" => cur.style.bold = on,
             "i" => cur.style.italic = on,
@@ -240,22 +306,178 @@ impl Builder {
             // Twips; half an inch is one level.
             "li" => cur.indent = u8::try_from((param.unwrap_or(0).max(0) / 720).min(8)).unwrap_or(0),
             "intbl" => cur.in_table = true,
-            "trowd" => self.edges.clear(),
-            "cellx" if self.edges.len() < MAX_EDGES => self.edges.push(param.unwrap_or(0)),
+            "trowd" => {
+                self.defs.clear();
+                self.def = CellDef::default();
+                self.side = None;
+                self.half_gap = 0;
+            }
+            "trgaph" => self.half_gap = param.unwrap_or(0),
+            // A cell's settings come before the `\cellx` that gives its right edge.
+            "cellx" => {
+                let mut def = CellDef { right: param.unwrap_or(0), ..std::mem::take(&mut self.def) };
+                // A double line is two lines of the width given with as much room between them.
+                for edge in def.edges.iter_mut().filter(|e| e.line == Line::Double) {
+                    edge.width = edge.width.saturating_mul(3).min(MAX_EDGE);
+                }
+                if self.defs.len() < MAX_EDGES {
+                    self.defs.push(def);
+                }
+                self.side = None;
+            }
             "cell" => {
                 self.end_para(cur, true, false);
                 let blocks = std::mem::take(&mut self.cell);
+                let def = self.defs.get(self.row.len()).copied().unwrap_or_default();
                 // 15 twips to the pixel.
-                let right = self.edges.get(self.row.len()).copied().unwrap_or(0);
-                let left = self.row.len().checked_sub(1).and_then(|i| self.edges.get(i)).copied().unwrap_or(0);
-                let width = u16::try_from((right.saturating_sub(left) / 15).clamp(0, 4096)).unwrap_or(0);
-                self.row.push(Cell { blocks, span: 1, width, ..Cell::default() });
+                let left = self.row.len().checked_sub(1).and_then(|i| self.defs.get(i)).map_or(0, |d| d.right);
+                let width = u16::try_from((def.right.saturating_sub(left) / 15).clamp(0, 4096)).unwrap_or(0);
+                let mut edges = def.edges;
+                // Cells that touch share the line between them: it is drawn once.
+                if let (Some(before), Some(own)) = (self.row.last().and_then(|c| c.edges), edges.get_mut(3))
+                    && before.get(1).is_some_and(|e| e.width > 0)
+                {
+                    own.width = 0;
+                }
+                if let (Some(top), Some(above)) = (edges.first_mut(), self.rows.last())
+                    && !above.is_empty()
+                    && above.iter().all(|c| c.edges.is_some_and(|e| e.get(2).is_some_and(|e| e.width > 0)))
+                {
+                    top.width = 0;
+                }
+                self.merging.push((def.right, def.merge));
+                let beside = u16::try_from((self.half_gap / 15).clamp(i32::from(CELL_PADDING), MAX_CELL_PADDING)).unwrap_or(CELL_PADDING);
+                self.row.push(Cell {
+                    blocks,
+                    span: 1,
+                    width,
+                    padding: Some((1, beside)),
+                    background: def.fill,
+                    valign: def.valign,
+                    edges: any_edge(&edges).then_some(edges),
+                    ..Cell::default()
+                });
             }
             "row" => self.end_row(),
-            "clbrdrt" | "clbrdrl" | "clbrdrb" | "clbrdrr" => self.border = true,
+            // The sides of a cell, in the order the model keeps them: top, right, bottom, left.
+            "clbrdrt" => self.side = Some(0),
+            "clbrdrr" => self.side = Some(1),
+            "clbrdrb" => self.side = Some(2),
+            "clbrdrl" => self.side = Some(3),
+            // Borders of rows and of paragraphs are not a cell's.
+            "trbrdrt" | "trbrdrl" | "trbrdrb" | "trbrdrr" | "trbrdrh" | "trbrdrv" | "brdrt" | "brdrb" | "brdrl" | "brdrr" | "brdrbtw" | "brdrbar"
+            | "box" | "chbrdr" | "cldglu" | "cldgll" => self.side = None,
+            "brdrs" | "brdrth" | "brdrsh" | "brdrhair" | "brdrinset" | "brdroutset" => self.edge(|e| e.line = Line::Solid),
+            "brdrdb" => self.edge(|e| e.line = Line::Double),
+            "brdrdot" => self.edge(|e| e.line = Line::Dotted),
+            "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" => self.edge(|e| e.line = Line::Dashed),
+            "brdrnone" | "brdrnil" | "brdrtbl" => {
+                if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+                    *edge = Edge::default();
+                }
+                self.side = None;
+            }
+            // Twips, 15 to the pixel; a line is never thinner than one pixel.
+            "brdrw" => {
+                let width = u8::try_from(((param.unwrap_or(0).max(0) + 7) / 15).clamp(1, i32::from(MAX_EDGE))).unwrap_or(1);
+                if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+                    edge.width = width;
+                }
+            }
+            "brdrcf" => {
+                let rgb = color(&self.colors);
+                if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+                    edge.color = rgb;
+                }
+            }
+            "clcbpat" => self.def.fill = color(&self.colors),
+            "clvertalt" => self.def.valign = VAlign::Top,
+            "clvertalc" => self.def.valign = VAlign::Middle,
+            "clvertalb" => self.def.valign = VAlign::Bottom,
+            "clvmgf" => self.def.merge = Merge::First,
+            "clvmrg" => self.def.merge = Merge::Under,
             _ if star || is_skipped_destination(word) => cur.dest = Dest::Skip,
             _ => {}
         }
+    }
+
+    /// Set the kind of line of the side of the cell that border words apply to now.
+    fn edge(&mut self, set: impl Fn(&mut Edge)) {
+        if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+            set(edge);
+            edge.width = edge.width.max(1);
+        }
+    }
+
+    /// A control word inside `\pict` (RTF 1.9.1, "Pictures").
+    fn picture_word(&mut self, cur: &mut Chars, word: &str, param: Option<i32>, star: bool) {
+        let Some(pict) = &mut self.pict else { return };
+        let n = param.unwrap_or(0);
+        match word {
+            "pngblip" | "jpegblip" => pict.kept = true,
+            // Kinds that are not read: metafiles, bitmaps without a file's header, QuickDraw.
+            "emfblip" | "wmetafile" | "dibitmap" | "wbitmap" | "macpict" | "pmmetafile" => pict.kept = false,
+            "picwgoal" => pict.goal.0 = n,
+            "pichgoal" => pict.goal.1 = n,
+            "picscalex" => pict.scale.0 = n,
+            "picscaley" => pict.scale.1 = n,
+            // Bytes written as they are; the reader of words steps over them.
+            "bin" => pict.bad = true,
+            // Properties of the picture (`\*\picprop`) are not its data.
+            _ if star => cur.dest = Dest::Skip,
+            _ => {}
+        }
+    }
+
+    /// The data of a picture: two hex digits to the byte, with line ends between them.
+    fn picture_data(&mut self, text: &str) {
+        let Some(pict) = &mut self.pict else { return };
+        if !pict.kept || pict.bad {
+            return;
+        }
+        let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes);
+        for c in text.chars() {
+            if c.is_ascii_whitespace() {
+                continue;
+            }
+            let Some(digit) = c.to_digit(16).and_then(|d| u8::try_from(d).ok()) else {
+                pict.bad = true;
+                break;
+            };
+            match pict.half.take() {
+                None => pict.half = Some(digit),
+                Some(high) if pict.bytes.len() < room => pict.bytes.push(high << 4 | digit),
+                Some(_) => {
+                    pict.bad = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Close the picture being read: it stands in the line of text where it was written.
+    fn end_picture(&mut self) {
+        let Some(pict) = self.pict.take() else { return };
+        let place = if pict.kept && !pict.bad && pict.half.is_none() && !pict.bytes.is_empty() {
+            match self.written.iter().position(|kept| **kept == *pict.bytes) {
+                Some(same) => Some(same),
+                None if self.written.len() < crate::html::MAX_WRITTEN => {
+                    self.written_bytes = self.written_bytes.saturating_add(pict.bytes.len());
+                    self.written.push(Arc::from(pict.bytes));
+                    Some(self.written.len() - 1)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        // Twips to pixels, scaled as asked; a picture that gives no size is shown at its own.
+        let side = |goal: i32, scale: i32| {
+            let scale = if scale > 0 { i64::from(scale.min(10_000)) } else { 100 };
+            u16::try_from((i64::from(goal.max(0)) * scale / 100 / 15).clamp(0, MAX_PICTURE_SIDE)).unwrap_or(0)
+        };
+        let extent = (side(pict.goal.0, pict.scale.0), side(pict.goal.1, pict.scale.1));
+        self.push(Run { style: pict.style, picture: Some(Picture::Inline(place)), extent, ..Run::default() });
     }
 
     /// The name of a font of the font table, as a list of one.
@@ -307,18 +529,62 @@ impl Builder {
             let blocks = std::mem::take(&mut self.cell);
             self.row.push(Cell { blocks, span: 1, ..Cell::default() });
         }
+        let merging = std::mem::take(&mut self.merging);
         if !self.row.is_empty() {
             self.rows.push(std::mem::take(&mut self.row));
+            self.merges.push(merging);
+        }
+    }
+
+    /// Cells merged down (`\clvmgf` in the first row, `\clvmrg` in those under it) become one
+    /// cell that covers the rows; cells are matched by their right edge.
+    fn merge_down(&mut self) {
+        let merges = std::mem::take(&mut self.merges);
+        if !merges.iter().flatten().any(|(_, merge)| *merge == Merge::Under) {
+            return;
+        }
+        let rows = std::mem::take(&mut self.rows);
+        // Right edge of a cell that reaches down: the row it is in and its place there.
+        let mut open: HashMap<i32, (usize, usize)> = HashMap::new();
+        for (r, (row, parts)) in rows.into_iter().zip(merges).enumerate() {
+            let mut kept: Vec<Cell> = Vec::with_capacity(row.len());
+            let mut still: HashMap<i32, (usize, usize)> = HashMap::new();
+            for (i, cell) in row.into_iter().enumerate() {
+                let (right, merge) = parts.get(i).copied().unwrap_or((0, Merge::None));
+                let first = (merge == Merge::Under).then(|| open.get(&right).copied()).flatten();
+                let above =
+                    first.and_then(|(at, place)| self.rows.get_mut(at).and_then(|above| above.get_mut(place)).map(|cell| (cell, (at, place))));
+                match above {
+                    Some((above, place)) if above.rows.max(1) < MAX_ROW_SPAN => {
+                        above.rows = above.rows.max(1) + 1;
+                        // The line under the last part is the line under the whole cell.
+                        if let (Some(whole), Some(part)) = (&mut above.edges, cell.edges)
+                            && let (Some(under), Some(last)) = (whole.get_mut(2), part.get(2))
+                        {
+                            *under = *last;
+                        }
+                        still.insert(right, place);
+                    }
+                    _ => {
+                        if merge == Merge::First {
+                            still.insert(right, (r, kept.len()));
+                        }
+                        kept.push(cell);
+                    }
+                }
+            }
+            open = still;
+            self.rows.push(kept);
         }
     }
 
     fn end_table(&mut self) {
         self.end_row();
+        self.merge_down();
         if self.rows.is_empty() {
             return;
         }
-        let table =
-            Table { rows: std::mem::take(&mut self.rows), border: std::mem::take(&mut self.border), padding: CELL_PADDING, ..Table::default() };
+        let table = Table { rows: std::mem::take(&mut self.rows), padding: CELL_PADDING, snug: true, ..Table::default() };
         if table.columns() > 1 {
             self.blocks.push(Block::Table(table));
         } else {

@@ -248,6 +248,7 @@ pub struct Reader<'a> {
     skip: usize,
     held: Option<Event<'a>>,
     emitted: usize,
+    uncounted: bool,
     truncated: bool,
 }
 
@@ -266,6 +267,7 @@ impl<'a> Reader<'a> {
             skip: 0,
             held: None,
             emitted: 0,
+            uncounted: false,
             truncated: rtf.len() > MAX_RTF,
         }
     }
@@ -273,6 +275,13 @@ impl<'a> Reader<'a> {
     /// The body was longer than the limits; the rest was not read.
     pub fn truncated(&self) -> bool {
         self.truncated
+    }
+
+    /// Whether what is read from here on counts towards the cap on text. What a caller reads as
+    /// data and not as text (the hex digits of a picture, a destination it skips) is bounded by
+    /// the size of the body alone, so that a picture does not cut the text after it short.
+    pub fn count_text(&mut self, on: bool) {
+        self.uncounted = !on;
     }
 
     fn flush(&mut self) {
@@ -295,7 +304,9 @@ impl<'a> Reader<'a> {
         if self.text.is_empty() {
             return None;
         }
-        self.emitted = self.emitted.saturating_add(self.text.len());
+        if !self.uncounted {
+            self.emitted = self.emitted.saturating_add(self.text.len());
+        }
         if self.emitted > MAX_TEXT {
             self.truncated = true;
             self.tokens.pos = self.tokens.src.len();

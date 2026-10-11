@@ -156,7 +156,7 @@ fn one(ui: &mut Ui, list: &[Block], i: usize, group: Group, look: Look, depth: u
             (None, None)
         }
         (Some(Block::Table(table)), _) => {
-            if i > 0 {
+            if i > 0 && !table.snug {
                 ui.add_space(6.0);
             }
             self::table(ui, table, look, depth);
@@ -240,13 +240,15 @@ fn edges(ui: &Ui, rect: Rect, edges: &Edges, look: Look, unset: Color32) {
                 painter.rect_filled(second, 0.0, color);
             }
             Line::Dashed | Line::Dotted => {
-                let mark = if edge.line == Line::Dashed { w * 3.0 } else { w };
+                // A mark one pixel square is too small to be drawn: dots are two long at the least.
+                let mark = if edge.line == Line::Dashed { w * 3.0 } else { w.max(2.0) };
                 let step = mark * 2.0;
                 let (start, end) = if across { (strip.left(), strip.right()) } else { (strip.top(), strip.bottom()) };
                 let (from, to) = if across { (seen.left(), seen.right()) } else { (seen.top(), seen.bottom()) };
                 // Only the marks that can be seen, keeping their places along the line.
                 let skipped = ((from - start) / step).floor().max(0.0);
-                let mut at = start + skipped * step;
+                // Marks start on a whole pixel, or the smallest of them fade away.
+                let mut at = (start + skipped * step).round();
                 let mut drawn = 0usize;
                 while at < end.min(to) && drawn < MAX_DASHES && step > 0.0 {
                     let upto = (at + mark).min(end);
@@ -790,7 +792,12 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
 /// Room between a cell's edges and what it holds: left and right, then above and below.
 fn padding(table: &Table, cell: &rich::Cell) -> Vec2 {
     let (vertical, horizontal) = cell.padding.unwrap_or((table.padding, table.padding));
-    vec2(f32::from(horizontal.min(MAX_CELL_ROOM)), f32::from(vertical.min(MAX_CELL_ROOM)))
+    // A cell's own lines are drawn inside it: what they take past a hair line is not the text's.
+    let line = |a: usize, b: usize| {
+        let wide = |i: usize| cell.edges.and_then(|e| e.get(i).map(|e| e.width.min(MAX_EDGE))).unwrap_or(0);
+        f32::from(wide(a).max(wide(b)).saturating_sub(1))
+    };
+    vec2(f32::from(horizontal.min(MAX_CELL_ROOM)) + line(1, 3), f32::from(vertical.min(MAX_CELL_ROOM)) + line(0, 2))
 }
 
 /// Room a table's own border takes on each side when it is thicker than a hair line.

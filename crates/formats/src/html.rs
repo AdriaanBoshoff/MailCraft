@@ -36,8 +36,8 @@ const MAX_FAMILY_LEN: usize = 160;
 /// A picture written into the body: the longest address read, and how many pictures and bytes
 /// of them one body may keep.
 const MAX_DATA_ADDRESS: usize = 3 << 20;
-const MAX_WRITTEN: usize = 64;
-const MAX_WRITTEN_BYTES: usize = 12 << 20;
+pub(crate) const MAX_WRITTEN: usize = 64;
+pub(crate) const MAX_WRITTEN_BYTES: usize = 12 << 20;
 /// Largest width or height, in pixels, a picture may ask to be shown at.
 const MAX_PICTURE_SIDE: f32 = 4096.0;
 /// Relative sizes (`em`, `%`, `<small>`, headings) start from this many points when no size is
@@ -1032,6 +1032,7 @@ impl Builder {
                 spacing: t.spacing,
                 frame: t.frame,
                 line: t.line,
+                snug: false,
             }));
         }
         self.gap = true;

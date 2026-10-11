@@ -227,7 +227,10 @@ fn rtf_keeps_styles_paragraphs_tables_and_links() {
     assert!(by_text(p[1], "old").strike);
     assert!(!by_text(p[1], "Code ").bold, "the title's bold ended with \\b0");
     let table = doc.blocks.iter().find_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).unwrap();
-    assert!(table.border);
+    // Only the line the row asks for: above its first cell.
+    assert!(!table.border && table.snug);
+    assert_eq!(table.rows[0][0].edges.map(|e| e.map(|e| e.width)), Some([1, 0, 0, 0]));
+    assert!(table.rows[0][1].edges.is_none() && table.rows[1][0].edges.is_none());
     assert_eq!((table.rows.len(), table.columns()), (2, 2));
     let Block::Para(total) = &table.rows[1][0].blocks[0] else { panic!("a paragraph") };
     assert_eq!(total.runs[0].style.background, Some([255, 242, 204]));
@@ -654,4 +657,140 @@ fn hostile_borders_are_capped() {
     }
     check(&doc.blocks, 0);
     assert!(doc.text().contains("deep"));
+}
+
+/// A picture file's first bytes as RTF writes them: two hex digits to the byte.
+fn hexed(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn rtf_pictures_are_kept_as_bytes_at_the_size_they_ask_for() {
+    let png = [0x89u8, b'P', b'N', b'G', 13, 10, 26, 10, 1, 2, 3];
+    let hex = hexed(&png);
+    let (head, tail) = hex.split_at(7);
+    let rtf = format!(
+        "{{\\rtf1\\ansi\\pard a{{\\pict\\pngblip\\picw96\\pich64 {head}\r\n{tail}}}\
+         b{{\\*\\shppict{{\\pict{{\\*\\picprop{{\\sp{{\\sn x}}{{\\sv 4142}}}}}}\\jpegblip\\picwgoal2880\\pichgoal960\\picscalex50\\picscaley200 ffd8ff}}}}\
+         {{\\nonshppict{{\\pict\\wmetafile8 0102}}}}\
+         c{{\\pict\\wmetafile8\\picwgoal1500\\pichgoal750 010203}}d{{\\pict\\pngblip {hex}}}{{\\v{{\\pict\\pngblip {hex}}}}}\\par}}"
+    );
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    assert_eq!(doc.text(), "abcd");
+    let runs: Vec<_> = paras(&doc)[0].runs.iter().filter_map(|r| r.picture.clone().map(|p| (p, r.extent))).collect();
+    assert_eq!(
+        runs,
+        [
+            // At its own size: the size in pixels a picture file says it has is the file's to say.
+            (Picture::Inline(Some(0)), (0, 0)),
+            // Twips to pixels, scaled as asked.
+            (Picture::Inline(Some(1)), (96, 128)),
+            // A metafile is not read: a place of the size asked for.
+            (Picture::Inline(None), (100, 50)),
+            // The same picture again is kept once.
+            (Picture::Inline(Some(0)), (0, 0)),
+        ]
+    );
+    assert_eq!(doc.written.len(), 2);
+    assert_eq!(&*doc.written[0], &png[..]);
+    assert_eq!(&*doc.written[1], &[0xff, 0xd8, 0xff][..]);
+
+    // Data that is not hex digits, half a byte, raw bytes: a place, and no bytes kept.
+    for data in ["89504e4x", "89504", "\\bin4 abcd", ""] {
+        let doc = crate::rtf::parse(format!("{{\\rtf1 a{{\\pict\\pngblip {data}}}b\\par}}").as_bytes());
+        assert!(doc.written.is_empty(), "{data}");
+        assert_eq!(paras(&doc)[0].runs.iter().filter_map(|r| r.picture.clone()).collect::<Vec<_>>(), [Picture::Inline(None)], "{data}");
+    }
+}
+
+#[test]
+fn a_large_rtf_picture_does_not_cut_the_text_after_it_short() {
+    // More hex digits than the cap on text: they are data, and the text after them is read.
+    let mut rtf = String::from("{\\rtf1\\ansi\\pard before{\\pict\\pngblip ");
+    rtf.push_str(&"89504e47".repeat(400_000));
+    rtf.push_str("}{\\*\\themedata ");
+    rtf.push_str(&"504b0304".repeat(300_000));
+    rtf.push_str("} after\\par}");
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    assert!(!doc.truncated);
+    assert_eq!(doc.text(), "before after");
+    assert_eq!(doc.written.first().map(|p| p.len()), Some(1_600_000));
+}
+
+#[test]
+fn rtf_cells_keep_their_lines_fills_places_and_merges() {
+    use crate::rich::{Line, VAlign};
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\colortbl;\\red204\\green0\\blue0;\\red255\\green230\\blue153;}\
+          \\trowd\\trgaph108\\clbrdrt\\brdrs\\brdrw60\\clbrdrl\\brdrs\\clbrdrb\\brdrdb\\brdrw15\\clbrdrr\\brdrdash\\brdrw15\\brdrcf1\\clcbpat2\\clvertalb\\cellx2000\
+          \\clbrdrl\\brdrdot\\clbrdrt\\brdrnone\\clbrdrb\\brdrs\\brdrw9999\\clvertalc\\cellx4000\\intbl a\\cell b\\cell\\row\
+          \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\clvmgf\\cellx2000\\clbrdrt\\brdrs\\cellx4000\\intbl c\\cell d\\cell\\row\
+          \\trowd\\clbrdrb\\brdrs\\brdrw30\\clvmrg\\cellx2000\\cellx4000\\intbl\\cell e\\cell\\row\
+          \\trowd\\clvmrg\\cellx2000\\clvmrg\\cellx4000\\intbl f\\cell g\\cell\\row\\pard\\brdrb\\brdrs\\brdrw90 after\\par}",
+    );
+    let t = tables(&doc)[0];
+    let a = &t.rows[0][0];
+    let edges = a.edges.expect("lines");
+    assert_eq!(edges.map(|e| e.width), [4, 1, 3, 1], "twips to pixels; a double line is three wide");
+    assert_eq!(edges.map(|e| e.line), [Line::Solid, Line::Dashed, Line::Double, Line::Solid]);
+    assert_eq!((edges[1].color, edges[0].color), (Some([204, 0, 0]), None));
+    assert_eq!((a.background, a.valign, a.padding), (Some([255, 230, 153]), VAlign::Bottom, Some((1, 7))));
+    // The line between two cells is drawn once, and no line is no line; widths are capped.
+    let b = &t.rows[0][1];
+    assert_eq!(b.edges.map(|e| e.map(|e| e.width)), Some([0, 0, 12, 0]));
+    assert_eq!((b.valign, b.padding), (VAlign::Middle, Some((1, 7))));
+    // A line under every cell of a row is the line above the next one.
+    assert_eq!(t.rows[1][0].edges.map(|e| e.map(|e| e.width)), Some([0, 0, 2, 0]), "top shared; bottom is the last part's");
+    assert_eq!(t.rows[1][1].edges, None, "its only line was the one it shares: {:?}", t.rows[1][1].edges);
+    // The merged cell covers three rows and the cells under it are gone; a cell that continues
+    // nothing is a cell of its own.
+    assert_eq!(t.rows[1][0].rows, 3);
+    assert_eq!(t.rows.iter().map(Vec::len).collect::<Vec<_>>(), [2, 2, 1, 1]);
+    assert_eq!(t.places(), [vec![0, 1], vec![0, 1], vec![1], vec![1]]);
+    assert_eq!(doc.text().lines().last(), Some("after"));
+    // A paragraph's border is not the border of the cell defined last.
+    assert!(t.rows[3][0].edges.is_none());
+}
+
+#[test]
+fn hostile_rtf_pictures_and_tables_are_capped() {
+    let mut rtf = String::from("{\\rtf1\\ansi{\\colortbl;\\red1\\green2\\blue3;}");
+    // More pictures than are kept, each different, with sizes and scales out of range.
+    for i in 0..300 {
+        rtf.push_str(&format!("{{\\pict\\pngblip\\picwgoal2147483647\\pichgoal-5\\picscalex2147483647\\picscaley-2147483648 89504e47{i:08x}}}"));
+    }
+    // Rows of cells merged down from nothing, without end, with borders of every width.
+    for i in 0..2000 {
+        rtf.push_str("\\trowd\\trgaph2147483647");
+        for c in 0..80 {
+            rtf.push_str(&format!("\\clbrdrt\\brdrdb\\brdrw{}\\brdrcf9999\\clbrdrl\\brdrw-7\\clvmrg\\clcbpat-1\\cellx{}", i * 97, c * 100 - 300));
+        }
+        rtf.push_str("\\intbl x\\cell y\\cell\\row");
+    }
+    rtf.push_str("\\trowd\\clvmgf\\cellx-2147483648\\clvmgf\\cellx2147483647\\intbl a\\cell b\\cell\\row{\\pict\\pngblip 8950");
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    assert!(doc.written.len() <= 64);
+    fn check(blocks: &[Block]) {
+        for block in blocks {
+            match block {
+                Block::Para(p) => assert!(p.runs.iter().all(|r| r.extent.0 <= 4096 && r.extent.1 <= 4096)),
+                Block::Table(t) => {
+                    assert_eq!(t.places().len(), t.rows.len());
+                    for cell in t.rows.iter().flatten() {
+                        assert!(cell.rows <= 1000 && cell.width <= 4096);
+                        assert!(cell.edges.is_none_or(|e| e.iter().all(|e| e.width <= 12)));
+                        assert!(cell.padding.is_some_and(|(v, h)| v <= 64 && h <= 64));
+                        check(&cell.blocks);
+                    }
+                }
+                Block::Rule => {}
+            }
+        }
+    }
+    check(&doc.blocks);
+    // One cell merged down a thousand rows and more stays within the cap.
+    let mut rtf = String::from("{\\rtf1\\trowd\\clvmgf\\cellx1000\\cellx2000\\intbl a\\cell b\\cell\\row");
+    rtf.push_str(&"\\trowd\\clvmrg\\cellx1000\\cellx2000\\intbl\\cell c\\cell\\row".repeat(1500));
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    assert!(tables(&doc).iter().all(|t| t.rows.iter().flatten().all(|c| c.rows <= 1000)));
 }

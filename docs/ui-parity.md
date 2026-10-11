@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 9 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at seven message bodies; layout only.
+**Status:** revision 10 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -36,7 +36,7 @@ and only the ribbon panel's height and contents change. MailCraft follows that.
 
 ## Message bodies
 
-Two messages from MailCraft's own sample mailbox and five probe messages (all synthetic, written by
+Two messages from MailCraft's own sample mailbox and six probe messages (all synthetic, written by
 us) were saved as `.msg` and opened in an Outlook Classic message window, one at a time, then closed
 without saving. The window was compared with MailCraft's reading pane showing the same message.
 Nothing from the owner's mailbox was involved.
@@ -82,12 +82,18 @@ Nothing from the owner's mailbox was involved.
 | Cell width as a percentage | that share of the table | the same, for tables that have a width | same |
 | Style sheet (`<style>`) | rules for an element name, a class, an id, or a name with a class are followed; only the **first** class an element names counts; rules with several classes, with one element inside another, and inside `@media` are not | the same | same |
 | Link colour | the link colour whatever the text around it has; a colour set on the link itself is kept | the same, with our own link colour | same |
-| RTF table | cell widths from the row definition (15 twips to the pixel); only the borders the RTF names | the same widths; every cell boxed when any border is named | close |
+| RTF table | cell widths from the row definition (15 twips to the pixel); only the borders the RTF names | the same | same |
+| RTF cell lines | each side as named: width, colour, and solid, double, dashed or dotted; a line between two cells is drawn once | the same; dots are 2 px long | close |
+| RTF cell with thick lines | the row grows by the lines | the same | same |
+| RTF cell fill and place (`\clcbpat`, `\clvertalc`, `\clvertalb`) | the fill covers the cell; text stands at the top, middle or bottom | the same | same |
+| RTF cells merged down (`\clvmgf`, `\clvmrg`) | one cell over the rows, its fill over all of them | the same | same |
+| Room round an RTF table and in its cells | the table stands right under the paragraph before it; rows are as tall as their text | the same, with 1 px above and below the text and 2 px beside it | close |
+| RTF picture (`\pict` with PNG data) | in the line of text on its baseline, at its own size, or at the goal size times the scale | the same; JPEG too | same |
 | RTF left indent | 720 twips is 48 | 720 twips is 48 | same |
 | RTF highlight | a bright marker colour from a fixed palette | the colour the RTF's colour table gives | differs |
 | Message window type | an RTF-only `.msg` is shown as rich text only when it is marked as in sync (see [file-format-parity.md](file-format-parity.md)) | written so | same |
 
-Not followed yet, in order of how much they show: RTF borders per cell edge; the space Outlook
+Not followed yet, in order of how much they show: the space Outlook
 leaves between a paragraph and a table; a left border standing out in the margin; lines shared by
 neighbouring cells (`border-collapse`). They are in [gaps.md](gaps.md), item 3.
 
@@ -106,6 +112,7 @@ neighbouring cells (`border-collapse`). They are in [gaps.md](gaps.md), item 3.
 
 ## Revision history
 
+- 10 · 2026-10-11 — a sixth probe message compared, with an RTF body: pictures, cell lines per side, fills, places and cells merged down.
 - 9 · 2026-10-11 — a fifth probe message compared: what follows a picture at the side, breaks that clear, borders set in styles, table border widths and colours, cells that span rows.
 - 8 · 2026-10-11 — a fourth probe message compared: fonts by name and their fallbacks, pictures in the line of text and at its side, pictures written into the body.
 - 7 · 2026-10-11 — three probe messages compared: picture frames, cell padding and spacing, row fills, vertical places, percentage widths, style sheets, link colour.

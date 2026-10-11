@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 10 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 11 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 102, all passing |
+| Tests | 107, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -49,7 +49,9 @@
    into the body (`data:`) are shown.
 7. Done: italic faces of named fonts, what follows a picture at the side standing beside it,
    borders set in styles, cells that span rows.
-8. Next: RTF pictures and RTF borders per cell edge; then printing.
+8. Done: PNG and JPEG pictures written into RTF bodies, and RTF cells with their own lines,
+   fills, places and merges down.
+9. Next: printing; then pictures an RTF body holds as attached objects, and metafiles.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -111,3 +113,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   than 1 draws a thick line round the table. `rowspan` is followed: cells under a cell that
   reaches down move aside (HTML 4.01 11.2.6.1) and rows grow to hold a tall one. Border widths,
   spans and padding are capped where they are read.
+- **2026-10-11** - M2.8: RTF pictures and RTF tables, checked against Outlook with a sixth probe
+  message of our own (RTF 1.9.1, "Pictures" and "Table Definitions"). A `\pict` that holds PNG or
+  JPEG data is kept as its bytes and shown in the line of text, at the size its goal and scale ask
+  for; metafiles and bitmaps leave a place of that size. A picture's hex digits and skipped
+  destinations no longer count towards the cap on text, which used to cut a message short after a
+  large picture. Cells draw only the lines the row names, per side, with their width, colour and
+  kind (solid, double, dashed, dotted); lines between cells that touch are drawn once. Cell fills
+  (`\clcbpat`), places (`\clvertal*`), side room (`\trgaph`) and cells merged down (`\clvmgf`,
+  `\clvmrg`) are followed, and an RTF table stands right under the paragraph before it. A new
+  example, `msg_with_rtf`, gives a `.msg` of ours an RTF body for such comparisons.

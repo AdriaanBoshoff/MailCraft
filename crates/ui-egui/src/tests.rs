@@ -154,7 +154,11 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     let mut ui = MailUi::new(Session::with_sample());
     ui.execute("mail.select", &json!({ "folder": "Inbox/Receipts", "index": 0 })).unwrap();
     let doc = ui.body_doc().unwrap();
-    assert!(doc.blocks.iter().any(|b| matches!(b, mailcraft_formats::rich::Block::Table(t) if t.border && t.rows.len() == 3)));
+    assert!(
+        doc.blocks.iter().any(
+            |b| matches!(b, mailcraft_formats::rich::Block::Table(t) if t.rows.len() == 3 && t.rows.iter().flatten().all(|c| c.edges.is_some()))
+        )
+    );
     assert!(doc.text().contains("parking.example.net/help"));
     let ctx = egui::Context::default();
     install_fonts(&ctx);
@@ -425,4 +429,39 @@ fn borders_and_cells_over_several_rows_take_the_room_they_ask_for() {
     let thick = drawn_height("<table border=8 cellspacing=0><tr><td>a</table>", 600.0);
     let thin = drawn_height("<table border=1 cellspacing=0><tr><td>a</table>", 600.0);
     assert!((thick - thin - 14.0).abs() < 1.5, "{thick} against {thin}");
+}
+
+#[test]
+fn hostile_rtf_bodies_draw_without_panicking() {
+    let hex: String = sample_picture().iter().map(|b| format!("{b:02x}")).collect();
+    let bodies = [
+        // Pictures at every size, in and out of cells, and one that is not a picture.
+        format!(
+            "{{\\rtf1\\pard a{{\\pict\\pngblip\\picwgoal99999999\\pichgoal15 {hex}}}{{\\pict\\pngblip\\picscalex1\\picscaley10000\\picwgoal300\\pichgoal300 {hex}}}\
+             {{\\pict\\pngblip 00ff00ff}}\\par\\trowd\\cellx300\\cellx600\\intbl{{\\pict\\pngblip\\picwgoal9000\\pichgoal9000 {hex}}}\\cell x\\cell\\row}}"
+        ),
+        // Lines of every kind and width round cells merged down past the end of the table.
+        "{\\rtf1\\trowd\\clbrdrt\\brdrdb\\brdrw9999\\clbrdrl\\brdrdot\\brdrw9999\\clbrdrb\\brdrdash\\brdrw9999\\clbrdrr\\brdrs\\brdrw9999\\clvmgf\\clvertalb\\cellx15\
+         \\clbrdrb\\brdrdot\\clvmgf\\cellx30\\cellx9000\\intbl a\\line b\\cell c\\cell d\\cell\\row"
+            .to_string()
+            + &"\\trowd\\clvmrg\\cellx15\\clvmrg\\cellx30\\clbrdrt\\brdrdot\\brdrw15\\cellx9000\\intbl\\cell\\cell e\\line f\\cell\\row".repeat(300)
+            + "}",
+        "{\\rtf1\\trowd\\trgaph99999\\clvmrg\\cellx-500\\clvmrg\\cellx-900\\clvmgf\\cellx0\\intbl a\\cell b\\cell c\\cell\\row\\trowd\\clvmrg\\cellx0\\intbl\\cell\\row}".to_string(),
+    ];
+    let tokens = theme::Tokens::named(false);
+    for rtf in &bodies {
+        let doc = mailcraft_formats::rtf::parse(rtf.as_bytes());
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut shown = pictures::Pictures::default();
+        shown.load(&ctx, 1, &doc, &mailcraft_model::Item::new_mail());
+        assert!(shown.written(0).is_none_or(|p| p.size.x > 0.0));
+        for width in [0.0, 30.0, 800.0] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(width);
+                body::draw(ui, &doc, &tokens, &shown, &faces::Faces::default());
+            });
+            output.textures_delta.clear();
+        }
+    }
 }

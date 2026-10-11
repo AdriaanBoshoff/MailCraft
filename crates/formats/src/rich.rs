@@ -174,6 +174,8 @@ pub struct Table {
     pub frame: Edges,
     /// The colour of the lines `border` asks for; `None` is the reader's.
     pub line: Option<Rgb>,
+    /// The table stands right under what is before it, with no room left between them.
+    pub snug: bool,
 }
 
 /// How wide a table asks to be.

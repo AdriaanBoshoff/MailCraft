@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 9 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 10 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -25,9 +25,11 @@
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
    Message bodies). RTF bodies
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
-   styles, fonts by name, colours, alignment, indents, links and simple tables; not yet: RTF pictures and embedded
-   objects (a placeholder), list numbering beyond the text the writer left, nested tables,
-   borders per cell edge, merged cells, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
+   styles, fonts by name, colours, alignment, indents, links, PNG and JPEG pictures written into the
+   body, and tables with each cell's own lines, fill, place and merge down; not yet: pictures the
+   message holds as attached objects (`\objattph`, [MS-OXRTFEX]) and metafile or bitmap pictures (a
+   placeholder), `\bin` picture data, list numbering beyond the text the writer left, nested tables,
+   cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing does not exist.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`mailcraft-cli mcp`, `--control`) are not built.
@@ -62,6 +64,7 @@
 
 ## Revision history
 
+- 10 · 2026-10-11 — RTF pictures (PNG, JPEG) and RTF cell lines, fills, places and merges done (item 3).
 - 9 · 2026-10-11 — italic faces, text beside a picture across blocks, borders set in styles and cells that span rows done (item 3).
 - 8 · 2026-10-11 — fonts by name, pictures in the line of text and at its side, and pictures written into the body done (item 3).
 - 7 · 2026-10-11 — style sheets, cell padding and spacing, row fills, vertical places, percentage widths and picture frames done (item 3).
