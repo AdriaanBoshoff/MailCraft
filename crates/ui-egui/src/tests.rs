@@ -26,7 +26,8 @@ fn tabs_parse_by_label_and_dialogs_only_queue_requests() {
     let mut ui = MailUi::new(Session::with_sample());
     ui.execute("ui.openDialog", &Value::Null).unwrap();
     ui.execute("ui.saveAttachmentDialog", &json!({ "index": 2 })).unwrap();
-    assert_eq!(ui.requests, vec![UiRequest::OpenFile, UiRequest::SaveAttachment(2)]);
+    ui.execute("ui.saveAllAttachmentsDialog", &Value::Null).unwrap();
+    assert_eq!(ui.requests, vec![UiRequest::OpenFile, UiRequest::SaveAttachment(2), UiRequest::SaveAllAttachments]);
     ui.execute("ui.ribbonTab", &json!({ "tab": "view" })).unwrap();
     assert_eq!(ui.tab(), Tab::View);
 }

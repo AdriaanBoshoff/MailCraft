@@ -329,7 +329,14 @@ pub fn sample_store(now: i64) -> MemStore {
             age: 2 * DAY,
             read: false,
         };
-        s.push_item(junk, lure.item(now));
+        let mut lure = lure.item(now);
+        lure.attachments.push(Attachment::file(
+            "Mailbox-quota.pdf.htm",
+            "text/html",
+            b"<html><body><p>Sign in to keep your mailbox.</p><form><input name=\"user\"><input type=\"password\" name=\"pass\"></form></body></html>".to_vec(),
+        ));
+        lure.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(0x10));
+        s.push_item(junk, lure);
     }
     s
 }

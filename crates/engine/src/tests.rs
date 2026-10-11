@@ -688,6 +688,184 @@ fn messages_save_and_reopen_as_msg_and_eml() {
 }
 
 #[test]
+fn attachment_names_are_made_safe_and_told_apart() {
+    use crate::attachments::{Caution, caution, ending, safe_name};
+    for (name, want) in [
+        ("report.pdf", "report.pdf"),
+        ("Report Final.PDF", "Report Final.PDF"),
+        ("", "attachment"),
+        ("   ", "attachment"),
+        ("...", "attachment"),
+        ("\u{0}\u{7}", "attachment"),
+        // One name, never a path.
+        ("..\\..\\Windows\\system.ini", "_.._Windows_system.ini"),
+        ("../../etc/passwd", "_.._etc_passwd"),
+        ("C:\\Users\\me\\x.txt", "C__Users_me_x.txt"),
+        ("a<b>c:d\"e|f?g*h.txt", "a_b_c_d_e_f_g_h.txt"),
+        ("/", "_"),
+        // Nothing Windows drops or hides.
+        ("notes.txt. . .", "notes.txt"),
+        (".hidden", "hidden"),
+        ("  spaced   out  .txt ", "spaced out.txt"),
+        ("line\r\nbreak\t.txt", "linebreak.txt"),
+        ("invoice.pdf                                        .exe", "invoice.pdf.exe"),
+        // Device names are not opened as devices.
+        ("CON", "_CON"),
+        ("nul.txt", "_nul.txt"),
+        ("Com1.tar.gz", "_Com1.tar.gz"),
+        ("LPT9", "_LPT9"),
+        ("console.txt", "console.txt"),
+        // Characters that reverse or hide are left out: the name is what it is.
+        ("invoice\u{202e}fdp.exe", "invoicefdp.exe"),
+        ("a\u{200b}b\u{feff}.txt", "ab.txt"),
+    ] {
+        assert_eq!(safe_name(name), want, "{name:?}");
+    }
+    // A long name is cut in its stem; its ending stays.
+    let long = safe_name(&format!("{}.docx", "long name ".repeat(40)));
+    assert!(long.chars().count() <= 120 && long.ends_with(".docx") && long.starts_with("long name long"), "{long}");
+    let long = safe_name(&"é".repeat(5000));
+    assert_eq!(long.chars().count(), 119);
+    assert_eq!(safe_name(&format!("a.{}", "x".repeat(300))).chars().count(), 119, "an ending too long to be one is part of the name");
+
+    for (name, want) in
+        [("a.PDF", Some("pdf")), ("a.tar.gz", Some("gz")), ("a.exe. .", Some("exe")), ("a", None), (".txt", None), ("a.", None), ("a.b c", None)]
+    {
+        assert_eq!(ending(name).as_deref(), want, "{name:?}");
+    }
+
+    let program: Vec<u8> = b"MZ".iter().copied().chain(std::iter::repeat_n(0, 100)).collect();
+    let runs = |e: &str| Some(Caution::Runs { ending: e.into() });
+    for (name, data, want) in [
+        ("report.pdf", &b"%PDF-1.7"[..], None),
+        ("notes.txt", b"MZ is how this note starts", None),
+        ("photo.jpeg", b"", None),
+        ("archive.tar.gz", b"", None),
+        ("v1.2 notes", b"", None),
+        ("setup.exe", &program[..], runs("exe")),
+        ("Setup.EXE", b"", runs("exe")),
+        ("run.bat. .", b"", runs("bat")),
+        ("shortcut.lnk", b"", runs("lnk")),
+        ("script.js", b"", runs("js")),
+        ("budget.xlsm", b"", Some(Caution::Macros { ending: "xlsm".into() })),
+        ("form.html", b"", Some(Caution::Page { ending: "html".into() })),
+        ("drawing.svg", b"", Some(Caution::Page { ending: "svg".into() })),
+        ("invoice.pdf.exe", b"", Some(Caution::TwoEndings { reads: "pdf".into(), is: "exe".into() })),
+        ("invoice.pdf          .scr", b"", Some(Caution::TwoEndings { reads: "pdf".into(), is: "scr".into() })),
+        ("statement.docx.htm", b"", Some(Caution::TwoEndings { reads: "docx".into(), is: "htm".into() })),
+        ("photos.zip.docm", b"", Some(Caution::TwoEndings { reads: "zip".into(), is: "docm".into() })),
+        ("my.setup.exe", b"", runs("exe")),
+        ("invoice\u{202e}fdp.exe", b"", Some(Caution::Reversed { is: Some("exe".into()) })),
+        ("\u{202e}", b"", Some(Caution::Reversed { is: None })),
+        ("report.pdf", &program[..], Some(Caution::Program { named: Some("pdf".into()) })),
+        ("readme", &program[..], Some(Caution::Program { named: None })),
+        ("tool.dll", &program[..], runs("dll")),
+    ] {
+        assert_eq!(caution(name, data), want, "{name:?}");
+    }
+    assert_eq!(Caution::TwoEndings { reads: "pdf".into(), is: "exe".into() }.words(), "The name reads as a .pdf file, but it is a .exe file.");
+
+    // Hostile: nothing here panics, and a safe name is always one that can be written.
+    let pieces =
+        ["", ".", "..", "/", "\\", ":", " ", "\u{0}", "\u{202e}", "\u{200b}", "CON", "nul.", "é", "a", ".exe", ".pdf", "$", "\u{1f600}", "\r\n"];
+    for a in pieces {
+        for b in pieces {
+            for c in pieces {
+                let name = format!("{a}{b}{c}");
+                let safe = safe_name(&name);
+                assert!(!safe.is_empty() && safe.chars().count() <= 120, "{name:?}");
+                assert!(
+                    !safe.contains(['/', '\\', ':', '\u{0}', '\u{202e}']) && !safe.starts_with(['.', ' ']) && !safe.ends_with(['.', ' ']),
+                    "{name:?} -> {safe:?}"
+                );
+                assert_eq!(safe_name(&safe), safe, "safe names stay as they are: {name:?}");
+                let _ = caution(&name, name.as_bytes());
+                let _ = ending(&name);
+            }
+        }
+    }
+    let _ = caution(&".exe".repeat(100_000), b"MZ");
+}
+
+#[test]
+fn saving_all_attachments_replaces_no_file() {
+    use mailcraft_model::Attachment;
+    let dir = std::env::temp_dir().join(format!("mailcraft-engine-attachments-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let mut inner = mailcraft_model::Item::default();
+    inner.props.set_str(mailcraft_model::pid::SUBJECT, "A note: inside");
+    {
+        let item = s.open.as_mut().unwrap();
+        assert_eq!(item.attachments.len(), 1, "the sample's launch timeline");
+        item.attachments.push(Attachment::file("launch-timeline.csv", "text/csv", b"second".to_vec()));
+        item.attachments.push(Attachment::file("LAUNCH-TIMELINE.CSV", "text/csv", b"third".to_vec()));
+        item.attachments.push(Attachment::file("..\\..\\escape.txt", "text/plain", b"stays here".to_vec()));
+        item.attachments.push(Attachment::file("nul", "", b"not a device".to_vec()));
+        let mut placed = Attachment::file("logo.png", "image/png", b"picture".to_vec());
+        placed.props.set_str(mailcraft_model::pid::ATTACH_CONTENT_ID, "logo@example.org");
+        item.attachments.push(placed);
+        let mut note = Attachment::file("A note: inside", "", Vec::new());
+        note.embedded = Some(Box::new(inner));
+        item.attachments.push(note);
+    }
+    // A file that was there before stays as it was.
+    std::fs::write(dir.join("launch-timeline.csv"), b"mine").unwrap();
+    let saved = run(&mut s, "file.saveAllAttachments", json!({"folder": dir}));
+    assert_eq!(saved["count"], 6);
+    assert_eq!(s.status, format!("Saved 6 attachments to {}", dir.display()));
+    let names: Vec<String> = saved["untrusted_content"]["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| std::path::Path::new(p.as_str().unwrap()).file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["launch-timeline (2).csv", "launch-timeline (3).csv", "LAUNCH-TIMELINE (4).CSV", "_.._escape.txt", "_nul", "A note_ inside.msg"]
+    );
+    assert_eq!(std::fs::read(dir.join("launch-timeline.csv")).unwrap(), b"mine");
+    assert!(std::fs::read_to_string(dir.join("launch-timeline (2).csv")).unwrap().starts_with("milestone,owner,due"));
+    assert_eq!(std::fs::read(dir.join("LAUNCH-TIMELINE (4).CSV")).unwrap(), b"third");
+    assert_eq!(std::fs::read(dir.join("_.._escape.txt")).unwrap(), b"stays here");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 7, "nothing was written anywhere else");
+    let mut other = Session::new();
+    run(&mut other, "file.open", json!({"path": dir.join("A note_ inside.msg")}));
+    assert_eq!(other.open.as_ref().unwrap().subject(), "A note: inside");
+
+    // Pictures placed in the body come along when asked for; again nothing is replaced.
+    assert_eq!(run(&mut s, "file.saveAllAttachments", json!({"folder": dir, "inline": true}))["count"], 7);
+    assert_eq!(std::fs::read(dir.join("logo.png")).unwrap(), b"picture");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 14);
+
+    // One attachment into a folder goes under its own name; to a path, where it is told to.
+    let one = run(&mut s, "file.saveAttachment", json!({"index": 3, "path": dir}));
+    assert!(one["untrusted_content"]["path"].as_str().unwrap().ends_with("_.._escape (3).txt"), "{one}");
+    run(&mut s, "file.saveAttachment", json!({"index": 1, "path": dir.join("chosen.csv")}));
+    assert_eq!(std::fs::read(dir.join("chosen.csv")).unwrap(), b"second");
+
+    assert!(matches!(s.run("file.saveAllAttachments", &json!({"folder": dir.join("missing")})), Err(EngineError::BadParams(_))));
+    assert!(matches!(s.run("file.saveAllAttachments", &json!({"folder": dir.join("chosen.csv")})), Err(EngineError::BadParams(_))));
+    assert!(s.run("file.saveAllAttachments", &Value::Null).is_err());
+
+    // A message without attachments saves none and says so.
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 1}));
+    assert_eq!(run(&mut s, "file.saveAllAttachments", json!({"folder": dir}))["count"], 0);
+    assert_eq!(s.status, "This message has no attachments to save");
+
+    // What a reader should know is said with the attachment.
+    run(&mut s, "mail.select", json!({"folder": "Junk Email", "index": 0}));
+    let told = s.inspect();
+    let attachment = &told["open"]["attachments"][0];
+    assert_eq!(attachment["name"], "Mailbox-quota.pdf.htm");
+    assert_eq!(attachment["caution"], "The name reads as a .pdf file, but it is a .htm file.");
+    assert_eq!(attachment["file"], true);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn closing_data_files_keeps_the_session_usable() {
     let mut s = session();
     run(&mut s, "file.openSample", Value::Null);

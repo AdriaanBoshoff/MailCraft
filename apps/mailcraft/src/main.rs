@@ -63,10 +63,21 @@ impl App {
                     }
                 }
                 UiRequest::SaveAttachment(index) => {
-                    let name =
-                        self.ui.session.open.as_ref().and_then(|it| it.attachments.get(index)).map(|a| safe_file_name(&a.name())).unwrap_or_default();
+                    let name = self
+                        .ui
+                        .session
+                        .open
+                        .as_ref()
+                        .and_then(|it| it.attachments.get(index))
+                        .map(mailcraft_engine::attachments::file_name)
+                        .unwrap_or_default();
                     if let Some(path) = rfd::FileDialog::new().set_title("Save attachment").set_file_name(name).save_file() {
                         self.run("file.saveAttachment", json!({ "index": index, "path": path }));
+                    }
+                }
+                UiRequest::SaveAllAttachments => {
+                    if let Some(folder) = rfd::FileDialog::new().set_title("Save all attachments in").pick_folder() {
+                        self.run("file.saveAllAttachments", json!({ "folder": folder }));
                     }
                 }
                 UiRequest::Attach => {

@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 17 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 18 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 134, all passing |
+| Tests | 136, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -189,3 +189,15 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   A name and its own sub-sites count as one place, and a file's name is not taken for a site.
   Nothing is opened, fetched or resolved to tell. The sample's Junk Email folder has a message
   with each kind.
+- **2026-10-11** - M2.15: saving attachments, the third of the pass. Outlook saves an attachment
+  under the name the message gave it and asks before replacing a file. MailCraft has Save All
+  Attachments (`file.saveAllAttachments`, a folder; from the File menu and beside the
+  attachments) and goes further: every name is made safe first (one name and never a path, no
+  device names, no hidden or direction-reversing characters, runs of spaces closed up, a length
+  every file system takes, the ending kept), no file is ever replaced (a taken name gets a
+  number), and an attached message is saved as `.msg`. An attachment a reader should think twice
+  about is marked before it is pointed at and says why in a sentence: a name that reads as one
+  kind of file and is another (`invoice.pdf.exe`), a program or script, a document that carries
+  macros, a page that opens in a browser, a name with reversing characters, and content that is
+  a program under another name. A long name is cut in its middle, so its ending always shows.
+  Nothing is opened or run to tell.

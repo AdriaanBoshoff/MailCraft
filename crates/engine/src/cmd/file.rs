@@ -1,10 +1,11 @@
 //! File commands: opening data files and loose messages, saving a message, closing a data file.
 
-use super::{CommandSpec, always, has_selection, need_str, ok, p_str, p_u64};
+use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_str, p_u64};
 use crate::io::{self, Opened};
-use crate::{CmdResult, EngineError, Session};
+use crate::{CmdResult, EngineError, Session, attachments};
 use mailcraft_model::{FolderId, MemStore, StoreError};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Loose `.msg`/`.eml` files open into this in-memory store.
@@ -48,9 +49,19 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Save",
             shortcut: "",
-            params: r#"{"index": attachment number, "path": target file}"#,
+            params: r#"{"index": attachment number, "path": target file, or a folder to save it in under its own name}; returns {"untrusted_content": {"path"}}"#,
             enabled: has_selection,
             run: save_attachment,
+        },
+        CommandSpec {
+            id: "file.saveAllAttachments",
+            label: "Save All Attachments",
+            tab: "File",
+            group: "Save",
+            shortcut: "",
+            params: r#"{"folder": an existing folder, "inline": also pictures placed in the body (default false)}; no file is replaced; returns {"count", "untrusted_content": {"paths"}}"#,
+            enabled: has_selection,
+            run: save_all_attachments,
         },
         CommandSpec {
             id: "file.print",
@@ -133,12 +144,50 @@ fn save_attachment(s: &mut Session, p: &Value) -> CmdResult {
         .attachments
         .get(index)
         .ok_or_else(|| EngineError::BadParams(format!("there is no attachment {index}; the message has {}", item.attachments.len())))?;
+    // A folder takes the attachment under its own name, made safe, beside what is there.
+    let target = if path.is_dir() {
+        attachments::free_path(path, &attachments::file_name(att), &mut HashSet::new()).ok_or_else(|| full(path))?
+    } else {
+        path.to_path_buf()
+    };
+    save_one(att, &target)?;
+    s.status = format!("Saved {}", target.display());
+    Ok(json!({"untrusted_content": {"path": target.display().to_string()}}))
+}
+
+fn full(folder: &Path) -> EngineError {
+    EngineError::BadParams(format!("{} has too many files of that name", folder.display()))
+}
+
+fn save_one(att: &mailcraft_model::Attachment, path: &Path) -> Result<(), EngineError> {
     match &att.embedded {
-        Some(inner) => io::save_item(inner, path)?,
-        None => io::write_atomic(path, &att.data)?,
+        Some(inner) => io::save_item(inner, path),
+        None => io::write_atomic(path, &att.data),
     }
-    s.status = format!("Saved {}", path.display());
-    ok()
+}
+
+/// Save every attachment of the open message into a folder, each under its own name made safe.
+/// No file is replaced: a name that is taken gets a number.
+fn save_all_attachments(s: &mut Session, p: &Value) -> CmdResult {
+    let folder = Path::new(need_str(p, "folder")?);
+    if !folder.is_dir() {
+        return Err(EngineError::BadParams(format!("{} is not a folder", folder.display())));
+    }
+    let inline = p_bool(p, "inline").unwrap_or(false);
+    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
+    let mut taken = HashSet::new();
+    let mut paths = Vec::new();
+    for att in item.attachments.iter().filter(|a| inline || attachments::is_file(a)) {
+        let target = attachments::free_path(folder, &attachments::file_name(att), &mut taken).ok_or_else(|| full(folder))?;
+        save_one(att, &target)?;
+        paths.push(target.display().to_string());
+    }
+    s.status = match paths.len() {
+        0 => "This message has no attachments to save".to_string(),
+        1 => format!("Saved 1 attachment to {}", folder.display()),
+        n => format!("Saved {n} attachments to {}", folder.display()),
+    };
+    Ok(json!({"count": paths.len(), "untrusted_content": {"paths": paths}}))
 }
 
 /// Print the open message, in Memo Style, to a PDF file.

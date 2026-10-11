@@ -485,18 +485,16 @@ impl MailUi {
         }
 
         // Attachments: a click only asks where to save. Nothing is opened or run.
-        let files: Vec<(usize, String, usize)> = item
-            .attachments
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| a.content_id().is_none() || a.embedded.is_some())
-            .map(|(i, a)| (i, a.name(), a.size()))
+        // The name is shown as it would be saved, so nothing in it is hidden or reversed.
+        let files: Vec<(usize, String, usize, Option<String>)> = mailcraft_engine::attachments::files(item)
+            .map(|(i, a)| (i, mailcraft_engine::attachments::file_name(a), a.size(), mailcraft_engine::attachments::caution_of(a).map(|c| c.words())))
             .take(32)
             .collect();
         let mut save: Option<usize> = None;
+        let mut save_all = false;
         if !files.is_empty() {
             let mut ax = left;
-            for (index, name, size) in &files {
+            for (index, name, size, caution) in &files {
                 let label = format!("{}  ({})", one_line(name), human_size(*size));
                 let w = (text_width(&p, &label, font(12.0)) + 36.0).min(width);
                 if ax + w > rect.right() - pad && ax > left {
@@ -506,14 +504,41 @@ impl MailUi {
                 let chip = Rect::from_min_size(pos2(ax, y), vec2(w, 28.0));
                 let resp = ui.interact(chip, egui::Id::new(("attachment", *index)), Sense::click());
                 p.rect_filled(chip, 3.0, if resp.hovered() { t.hover } else { t.pane });
-                p.rect_stroke(chip, 3.0, (1.0, t.line), egui::StrokeKind::Inside);
-                icons::paint(&p, Rect::from_center_size(pos2(chip.left() + 14.0, chip.center().y), vec2(14.0, 14.0)), Icon::Clip, t.text_dim);
-                clip_text(&p, pos2(chip.left() + 26.0, chip.center().y - 8.0), w - 32.0, &label, font(12.0), t.text);
+                // An attachment a reader should think twice about says so before it is pointed at.
+                let (line, icon, tint) = match caution {
+                    Some(_) => ((1.5, t.danger), Icon::Importance, t.danger),
+                    None => ((1.0, t.line), Icon::Clip, t.text_dim),
+                };
+                p.rect_stroke(chip, 3.0, line, egui::StrokeKind::Inside);
+                icons::paint(&p, Rect::from_center_size(pos2(chip.left() + 14.0, chip.center().y), vec2(14.0, 14.0)), icon, tint);
+                // A long name is cut in its middle: the ending is what tells the kind of file.
+                let room = w - 32.0;
+                let label = if text_width(&p, &label, font(12.0)) > room { crate::middle_cut(&p, &label, room, font(12.0)) } else { label };
+                clip_text(&p, pos2(chip.left() + 26.0, chip.center().y - 8.0), room, &label, font(12.0), t.text);
                 if resp.clicked() {
                     save = Some(*index);
                 }
-                resp.on_hover_text("Save this attachment to a file");
+                resp.on_hover_text(match caution {
+                    Some(words) => format!("{words}\nSave this attachment to a file. Nothing is opened or run from here."),
+                    None => "Save this attachment to a file. Nothing is opened or run from here.".to_string(),
+                });
                 ax += w + 8.0;
+            }
+            if files.len() > 1 {
+                let label = "Save all…";
+                let w = text_width(&p, label, font(12.0)) + 20.0;
+                if ax + w > rect.right() - pad && ax > left {
+                    ax = left;
+                    y += 32.0;
+                }
+                let chip = Rect::from_min_size(pos2(ax, y), vec2(w, 28.0));
+                let resp = ui.interact(chip, egui::Id::new("attachments-all"), Sense::click());
+                if resp.hovered() {
+                    p.rect_filled(chip, 3.0, t.hover);
+                }
+                p.text(chip.center(), egui::Align2::CENTER_CENTER, label, font(12.0), t.accent);
+                save_all = resp.clicked();
+                resp.on_hover_text("Save every attachment into a folder. No file there is replaced.");
             }
             y += 38.0;
         }
@@ -569,6 +594,9 @@ impl MailUi {
         }
         if let Some(index) = save {
             self.act("ui.saveAttachmentDialog", json!({ "index": index }));
+        }
+        if save_all {
+            self.act("ui.saveAllAttachmentsDialog", Value::Null);
         }
     }
 

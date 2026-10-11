@@ -4,6 +4,7 @@
 //! the CLI and agents all go through [`Session::run`]; nothing here opens a dialog or a socket.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod attachments;
 pub mod catalog;
 pub mod cmd;
 pub mod io;
@@ -488,7 +489,10 @@ impl Session {
                 "read": it.is_read(),
                 "message_class": it.message_class(),
                 "time": it.time(),
-                "attachments": it.attachments.iter().map(|a| json!({ "name": a.name(), "size": a.size(), "mime": a.mime() })).collect::<Vec<_>>(),
+                "attachments": it.attachments.iter().map(|a| json!({
+                    "name": a.name(), "size": a.size(), "mime": a.mime(), "file": attachments::is_file(a),
+                    "caution": attachments::caution_of(a).map(|c| c.words()),
+                })).collect::<Vec<_>>(),
                 "untrusted_content": {
                     "subject": it.subject(), "from": it.sender_name(), "from_email": it.sender_email(),
                     "to": it.display_recipients(mailcraft_model::RECIP_TO), "cc": it.display_recipients(mailcraft_model::RECIP_CC),

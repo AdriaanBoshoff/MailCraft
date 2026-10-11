@@ -65,6 +65,7 @@ pub enum UiRequest {
     SaveAs,
     Print,
     SaveAttachment(usize),
+    SaveAllAttachments,
     Attach,
     Quit,
 }
@@ -82,6 +83,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.saveAsDialog", label: "Save As…", params: "" },
     UiCommand { id: "ui.printDialog", label: "Print…", params: "" },
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
+    UiCommand { id: "ui.saveAllAttachmentsDialog", label: "Save All Attachments…", params: "" },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
     UiCommand { id: "ui.toggleFolder", label: "Expand or Collapse Folder", params: r#"{"store": index, "folderId": id}"# },
     UiCommand { id: "ui.prompt", label: "Ask for a Name", params: r#"{"command": "folder.new" | "folder.rename"}"# },
@@ -167,6 +169,23 @@ pub(crate) fn clip_text(p: &Painter, pos: Pos2, width: f32, text: &str, font: Fo
     let used = galley.size().x;
     p.galley(pos, galley, color);
     used
+}
+
+/// `text` cut in its middle to fit `width`: its start and its end are kept, since the end of a
+/// file name is what tells its kind.
+pub(crate) fn middle_cut(p: &Painter, text: &str, width: f32, font: FontId) -> String {
+    let chars: Vec<char> = one_line(text).chars().take(400).collect();
+    let tail = chars.len().min(24);
+    let end: String = chars.iter().skip(chars.len() - tail).collect();
+    let mut head = chars.len() - tail;
+    while head > 0 {
+        head -= 1;
+        let cut: String = chars.iter().take(head).chain(['…'].iter()).collect::<String>() + &end;
+        if head == 0 || text_width(p, &cut, font.clone()) <= width {
+            return cut;
+        }
+    }
+    end
 }
 
 pub(crate) fn text_width(p: &Painter, text: &str, font: FontId) -> f32 {
@@ -276,6 +295,7 @@ impl MailUi {
             "ui.saveAttachmentDialog" => {
                 self.requests.push(UiRequest::SaveAttachment(number("index").and_then(|n| usize::try_from(n).ok()).unwrap_or(0)))
             }
+            "ui.saveAllAttachmentsDialog" => self.requests.push(UiRequest::SaveAllAttachments),
             "ui.attachDialog" => self.requests.push(UiRequest::Attach),
             "ui.toggleFolder" => {
                 let key = (number("store").and_then(|n| usize::try_from(n).ok()).unwrap_or(0), number("folderId").ok_or("\"folderId\" is missing")?);
