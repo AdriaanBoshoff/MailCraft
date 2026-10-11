@@ -394,33 +394,31 @@ impl MailUi {
         ui.painter().rect_filled(full, 0.0, t.window);
         self.shortcuts(ui);
 
-        let simple = self.simplified();
-        let title = Rect::from_min_size(full.min, vec2(full.width(), if simple { t.simple_title_h } else { t.title_h }));
+        let title = Rect::from_min_size(full.min, vec2(full.width(), t.title_h));
         let status = Rect::from_min_max(pos2(full.left(), full.bottom() - t.status_h), full.max);
         self.title_bar(ui, title);
         if self.tab == Tab::File {
             let tabs = Rect::from_min_size(title.left_bottom(), vec2(full.width(), t.tabs_h));
             self.tab_strip(ui, tabs);
             self.backstage(ui, Rect::from_min_max(tabs.left_bottom(), full.max));
-        } else if simple {
+        } else {
             // The module strip runs the full height on the left; tabs, ribbon and panes sit beside it.
-            let nav = Rect::from_min_max(title.left_bottom(), pos2(full.left() + t.simple_nav_w, status.top()));
+            // Both ribbon layouts share this shell; only the panel's height and contents differ.
+            let simple = self.simplified();
+            let nav = Rect::from_min_max(title.left_bottom(), pos2(full.left() + t.nav_w, status.top()));
             self.nav_strip(ui, nav);
             let tabs = Rect::from_min_max(nav.right_top(), pos2(full.right(), nav.top() + t.tabs_h));
             self.tab_strip(ui, tabs);
             let top = tabs.bottom() + 2.0;
-            let ribbon = Rect::from_min_max(pos2(tabs.left(), top), pos2(full.right() - 16.0, top + t.simple_ribbon_h));
-            self.ribbon_simple(ui, ribbon);
+            let height = if simple { t.simple_ribbon_h } else { t.ribbon_h };
+            let ribbon = Rect::from_min_max(pos2(tabs.left(), top), pos2(full.right() - 16.0, top + height));
+            if simple {
+                self.ribbon_simple(ui, ribbon);
+            } else {
+                self.ribbon(ui, ribbon);
+            }
             let body = Rect::from_min_max(pos2(tabs.left(), ribbon.bottom() + 7.0), status.right_top());
-            self.body(ui, body, false);
-            self.status_bar(ui, status);
-        } else {
-            let tabs = Rect::from_min_size(title.left_bottom(), vec2(full.width(), t.tabs_h));
-            self.tab_strip(ui, tabs);
-            let ribbon = Rect::from_min_size(tabs.left_bottom(), vec2(full.width(), t.ribbon_h));
-            self.ribbon(ui, ribbon);
-            let body = Rect::from_min_max(ribbon.left_bottom(), status.right_top());
-            self.body(ui, body, true);
+            self.body(ui, body);
             self.status_bar(ui, status);
         }
         self.menu_popup(&ctx);
@@ -511,14 +509,10 @@ impl MailUi {
         let store = self.session.current.and_then(|(s, _)| self.session.stores.get(s)).map(|s| s.display_name()).unwrap_or_default();
         let caption = if store.is_empty() { format!("{place} - MailCraft") } else { format!("{place} - {store} - MailCraft") };
 
-        let search = if self.simplified() {
-            // Lined up with the message list's left edge.
-            let left = rect.left() + t.simple_nav_w + if self.session.folder_pane { t.folder_w } else { 0.0 };
-            let left = left.min(rect.right() - 170.0).max(rect.left() + 44.0);
-            Rect::from_min_size(pos2(left, rect.center().y - 15.0), vec2((rect.right() - left - 150.0).clamp(120.0, 304.0), 30.0))
-        } else {
-            Rect::from_center_size(rect.center(), vec2((rect.width() * 0.36).clamp(160.0, 520.0), 24.0))
-        };
+        // Lined up with the message list's left edge.
+        let left = rect.left() + t.nav_w + if self.session.folder_pane { t.folder_w } else { 0.0 };
+        let left = left.min(rect.right() - 170.0).max(rect.left() + 44.0);
+        let search = Rect::from_min_size(pos2(left, rect.center().y - 15.0), vec2((rect.right() - left - 150.0).clamp(120.0, 304.0), 30.0));
         clip_text(&p, pos2(rect.left() + 40.0, rect.center().y - 8.0), search.left() - rect.left() - 52.0, &caption, font(12.5), t.title_text);
         p.rect_filled(search, 4.0, t.title_field);
         icons::paint(&p, Rect::from_center_size(pos2(search.left() + 14.0, search.center().y), vec2(13.0, 13.0)), Icon::Search, t.title_text);

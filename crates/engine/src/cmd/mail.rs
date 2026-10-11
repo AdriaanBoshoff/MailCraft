@@ -13,7 +13,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"index": row number} or {"id": item id}; optional "folder": path to go to first"#,
+            params: r#"{"index": row number} or {"id": item id}; optional "folder": path to go to first (alone, it only goes there)"#,
             enabled: has_folder,
             run: select,
         },
@@ -163,7 +163,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
 }
 
 fn select(s: &mut Session, p: &Value) -> CmdResult {
-    if let Some(path) = p_str(p, "folder") {
+    let went = p_str(p, "folder");
+    if let Some(path) = went {
         let store = s.current.map(|(i, _)| i).unwrap_or(0);
         let folder = s.folder_by_path(store, path).ok_or_else(|| EngineError::BadParams(format!("there is no folder \"{path}\"")))?;
         s.select_folder(store, folder)?;
@@ -173,6 +174,8 @@ fn select(s: &mut Session, p: &Value) -> CmdResult {
     } else if let Some(i) = p_u64(p, "index") {
         let i = usize::try_from(i).map_err(|_| EngineError::BadParams("index is too large".into()))?;
         s.rows.get(i).map(|r| r.id).ok_or_else(|| EngineError::BadParams(format!("there is no row {i}; the list has {}", s.rows.len())))?
+    } else if went.is_some() {
+        return ok();
     } else {
         return Err(EngineError::BadParams("\"index\" or \"id\" is required".into()));
     };

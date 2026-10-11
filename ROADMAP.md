@@ -1,6 +1,6 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 3 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 4 · 2026-10-11
 
 ## Headline numbers
 
@@ -57,3 +57,6 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   quotations and tables, in both colour sets. Scripts, style sheets, frames and forms are dropped;
   remote pictures and tracking pixels are counted and never fetched; hidden text stays hidden. New
   `formats` crate, and `ui.bodyFormat` to read as plain text instead.
+- **2026-10-11** - M1.7: the classic ribbon was compared with Outlook's and rebuilt: both ribbon
+  layouts now share one shell (title bar, full-height module strip, tab row) and the classic ribbon
+  is a rounded panel 98 high. `mail.select` with only a folder goes to that folder.

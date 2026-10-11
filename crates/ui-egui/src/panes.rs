@@ -63,15 +63,9 @@ fn human_size(bytes: usize) -> String {
 }
 
 impl MailUi {
-    /// `with_nav` draws the module strip inside `rect`; the simplified layout draws it itself.
-    pub(crate) fn body(&mut self, ui: &mut Ui, rect: Rect, with_nav: bool) {
+    pub(crate) fn body(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
-        let mut rest = rect;
-        if with_nav {
-            let nav = Rect::from_min_size(rect.min, vec2(t.nav_w, rect.height()));
-            self.nav_strip(ui, nav);
-            rest = Rect::from_min_max(nav.right_top(), rect.max);
-        }
+        let rest = rect;
         if self.session.module != Module::Mail {
             let p = ui.painter_at(rest);
             p.rect_filled(rest, 0.0, t.surface);
@@ -139,7 +133,7 @@ impl MailUi {
             (Module::People, Icon::People, "People"),
             (Module::Tasks, Icon::Tasks, "Tasks"),
         ];
-        let pitch = if self.simplified() { 48.0 } else { 44.0 };
+        let pitch = 48.0;
         for (n, (module, icon, label)) in modules.into_iter().enumerate() {
             let r = Rect::from_min_size(pos2(rect.left(), rect.top() + 8.0 + n as f32 * pitch), vec2(rect.width() - 1.0, 40.0));
             let resp = ui.interact(r, egui::Id::new(("nav", label)), Sense::click());

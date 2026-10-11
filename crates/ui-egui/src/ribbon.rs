@@ -190,13 +190,13 @@ impl MailUi {
 
     pub(crate) fn ribbon(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
-        let p = ui.painter_at(rect);
-        p.rect_filled(rect, 0.0, t.surface);
-        p.hline(rect.x_range(), rect.bottom() - 0.5, (1.0, t.line));
+        let p = ui.painter_at(rect.expand(1.0));
+        p.rect_filled(rect, 6.0, t.surface);
+        p.rect_stroke(rect, 6.0, (1.0, t.line), egui::StrokeKind::Inside);
         let groups = self.groups();
-        let top = rect.top() + 4.0;
+        let top = rect.top() + 5.0;
         let label_y = rect.bottom() - 11.0;
-        let mut x = rect.left() + 6.0;
+        let mut x = rect.left() + 8.0;
         for (name, buttons) in groups {
             let start = x;
             let mut i = 0;

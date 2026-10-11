@@ -116,6 +116,11 @@ fn select_can_go_to_a_folder_first() {
     assert_eq!(s.open.as_ref().unwrap().subject(), "RE: Launch checklist: three items left");
     assert!(s.run("mail.select", &json!({ "folder": "No/Such", "index": 0 })).is_err());
     assert_eq!(s.current_folder().unwrap().kind, FolderKind::Sent);
+    // A folder alone goes there and opens nothing.
+    run(&mut s, "mail.select", json!({ "folder": "Inbox" }));
+    assert_eq!(s.current_folder().unwrap().kind, FolderKind::Inbox);
+    assert!(s.open.is_none());
+    assert!(s.run("mail.select", &json!({})).is_err());
 }
 
 #[test]

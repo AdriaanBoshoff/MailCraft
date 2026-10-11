@@ -35,12 +35,11 @@ pub struct Tokens {
 
     pub title_h: f32,
     pub tabs_h: f32,
+    /// Ribbon panel height: classic (labelled groups) and simplified (one line).
     pub ribbon_h: f32,
-    /// Simplified (single-line) ribbon: title bar, ribbon panel and module strip sizes.
-    pub simple_title_h: f32,
     pub simple_ribbon_h: f32,
-    pub simple_nav_w: f32,
     pub status_h: f32,
+    /// Module strip width.
     pub nav_w: f32,
     pub folder_w: f32,
     pub list_w: f32,
@@ -116,14 +115,12 @@ impl Tokens {
             bar_text: Color32::WHITE,
             dark: false,
 
-            title_h: 34.0,
+            title_h: 48.0,
             tabs_h: 28.0,
-            ribbon_h: 94.0,
-            simple_title_h: 48.0,
+            ribbon_h: 98.0,
             simple_ribbon_h: 48.0,
-            simple_nav_w: 64.0,
             status_h: 22.0,
-            nav_w: 46.0,
+            nav_w: 64.0,
             folder_w: 216.0,
             list_w: 348.0,
         }
