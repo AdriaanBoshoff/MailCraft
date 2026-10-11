@@ -96,6 +96,12 @@ fn hostile_bodies_draw_without_panicking() {
         "<table><tr><td colspan=60000>wide</td><td>x</td></tr><tr><td></td></tr></table><hr><img src=cid:x alt=\"\u{202e}alt\">".to_string(),
         "<a href=\"javascript:alert(1)\">link</a> <font color=\"#ffffff\">white</font><span style=\"background:#000\">black</span>".to_string(),
         "<pre>".to_string() + &"long ".repeat(20_000) + "</pre>",
+        // Tables with a width, a place and filled cells, at sizes no pane has.
+        "<table width=99999 align=right><tr><td bgcolor=#000 width=4096>x<td colspan=9 bgcolor=red>y<table width=100%><tr><td>z</table></table>"
+            .to_string(),
+        "<table width=1 align=center border=1><tr><td width=0 bgcolor=#fff>a<td width=-5>b<td width=1e39>c</table>".to_string(),
+        "<table style=\"max-width:600px;margin:0 auto\"><tr>".to_string() + &"<td width=4096 bgcolor=#123456>w</td>".repeat(400) + "</tr></table>",
+        "<table width=600 align=center><tr><td bgcolor=#1f4e79>".repeat(40) + "deep",
     ];
     for dark in [false, true] {
         let tokens = theme::Tokens::named(dark);

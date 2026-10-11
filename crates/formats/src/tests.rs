@@ -61,7 +61,7 @@ fn inline_css_and_font_tags() {
 #[test]
 fn lists_headings_quotes_and_rules() {
     let doc = parse(
-        "<h2>Title</h2><ul><li>One<li>Two<ol start=3><li>Three</li><li>Four</li></ol></li></ul><blockquote>Quoted<blockquote>Deeper</blockquote></blockquote><hr><pre>a\n  b\tc</pre>",
+        "<h2>Title</h2><ul><li>One<li>Two<ol start=3><li>Three</li><li>Four</li></ol></li></ul><blockquote type=cite>Quoted<blockquote style=\"border-left:2px solid #ccc\">Deeper</blockquote></blockquote><blockquote>Set in</blockquote><hr><pre>a\n  b\tc</pre>",
     );
     let p = paras(&doc);
     let got: Vec<(String, ParaKind, u8, u8)> = p.iter().map(|p| (p.text(), p.kind.clone(), p.indent, p.quote)).collect();
@@ -75,12 +75,13 @@ fn lists_headings_quotes_and_rules() {
             ("Four".to_string(), ParaKind::Item("4.".to_string()), 2, 0),
             ("Quoted".to_string(), ParaKind::Body, 0, 1),
             ("Deeper".to_string(), ParaKind::Body, 0, 2),
+            ("Set in".to_string(), ParaKind::Body, 1, 0),
             ("a\n  b    c".to_string(), ParaKind::Pre, 0, 0),
         ]
     );
     assert!(p[0].runs[0].style.bold);
     assert!(doc.blocks.iter().any(|b| matches!(b, Block::Rule)));
-    assert!(p[7].runs[0].style.mono);
+    assert!(p[8].runs[0].style.mono);
 }
 
 #[test]
@@ -153,7 +154,8 @@ fn near_white_backgrounds_are_the_page() {
         Some(Block::Para(p)) => p.runs[0].style.clone(),
         _ => panic!("expected text"),
     };
-    assert_eq!((run(0).background, run(0).color), (Some([0x1F, 0x4E, 0x79]), Some([255, 255, 255])));
+    assert_eq!((run(0).background, run(0).color), (None, Some([255, 255, 255])), "the colour fills the cell, not the text");
+    assert_eq!((t.rows[0][0].background, t.rows[0][1].background), (Some([0x1F, 0x4E, 0x79]), None));
     assert_eq!(run(1).background, None);
 }
 
@@ -282,4 +284,31 @@ fn a_picture_keeps_the_size_the_body_asks_for() {
     );
     let extents: Vec<(u16, u16)> = paras(&doc)[0].runs.iter().filter(|r| r.picture.is_some()).map(|r| r.extent).collect();
     assert_eq!(extents, [(240, 96), (0, 0), (0, 4096), (0, 0)], "a size below nothing drops the picture; one beyond any number is no size");
+}
+
+#[test]
+fn tables_keep_their_width_their_place_and_their_cell_sizes() {
+    use crate::rich::TableWidth;
+    let table = |html: &str| match parse(html).blocks.into_iter().next() {
+        Some(Block::Table(t)) => t,
+        other => panic!("expected a table, got {other:?}"),
+    };
+    let t = table("<table width=600 align=center><tr><td bgcolor=#1F4E79>Banner<tr><td>Body</table>");
+    assert_eq!((t.width, t.align, t.columns(), t.rows.len()), (TableWidth::Pixels(600), Align::Center, 1, 2));
+    let t = table("<table style=\"width:100%;MAX-WIDTH: 480px !important; margin:0 auto\"><tr><td width=120>a<td width=\"30%\">b</table>");
+    assert_eq!((t.width, t.align), (TableWidth::Pixels(480), Align::Center));
+    assert_eq!((t.rows[0][0].width, t.rows[0][1].width), (120, 0));
+    let t = table("<table width=\"100%\"><tr><td>a<td>b</table>");
+    assert_eq!((t.width, t.align), (TableWidth::Fill, Align::Left));
+    let t = table("<table width=\"50%\" style=\"margin-left:auto\"><tr><td width=99999999>a<td width=-3>b</table>");
+    assert_eq!((t.width, t.align, t.rows[0][0].width, t.rows[0][1].width), (TableWidth::Content, Align::Left, 4096, 0));
+    // One column and nothing to draw: still only layout.
+    assert!(matches!(parse("<table width=\"100%\"><tr><td>a<tr><td>b</table>").blocks.first(), Some(Block::Para(_))));
+
+    let rtf = crate::rtf::parse(
+        b"{\\rtf1 \\trowd\\cellx4200\\cellx6000\\intbl a\\cell b\\cell\\row\\trowd\\cellx-50\\cellx99999999\\intbl c\\cell d\\cell e\\cell\\row}",
+    );
+    let Some(Block::Table(t)) = rtf.blocks.first() else { panic!("expected a table") };
+    let widths: Vec<Vec<u16>> = t.rows.iter().map(|r| r.iter().map(|c| c.width).collect()).collect();
+    assert_eq!(widths, [vec![280, 120], vec![0, 4096, 0]]);
 }

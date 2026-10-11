@@ -7,7 +7,7 @@
 //! Element and attribute meanings follow the HTML Living Standard (sections 4 and 15, "Rendering");
 //! only the presentational subset mail uses is understood, and only inline `style` declarations.
 
-use crate::rich::{Align, Block, Cell, Doc, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table};
+use crate::rich::{Align, Block, Cell, Doc, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth};
 use mailcraft_model::html::entity;
 use std::sync::Arc;
 
@@ -26,8 +26,9 @@ const MAX_ATTR_LEN: usize = 2048;
 const MAX_ALT_LEN: usize = 200;
 /// Largest width or height, in pixels, a picture may ask to be shown at.
 const MAX_PICTURE_SIDE: f32 = 4096.0;
-/// Relative sizes (`em`, `%`, `<small>`) start from this many points when no size is set.
-const BASE_PT: f32 = 10.0;
+/// Relative sizes (`em`, `%`, `<small>`, headings) start from this many points when no size is
+/// set: the size Outlook Classic shows unstyled HTML text at.
+const BASE_PT: f32 = 12.0;
 
 /// Elements whose content is dropped without being read.
 const RAW: &[&str] = &["script", "style", "head", "title", "iframe", "object", "embed", "svg", "template", "select", "textarea", "noframes"];
@@ -151,6 +152,8 @@ struct Open {
 struct TableBuild {
     rows: Vec<Vec<Cell>>,
     border: bool,
+    width: TableWidth,
+    align: Align,
     /// Length of the element stack just after the table's own entry.
     open_len: usize,
     cell: Option<CellBuild>,
@@ -161,6 +164,8 @@ struct CellBuild {
     open_len: usize,
     header: bool,
     span: u16,
+    background: Option<Rgb>,
+    width: u16,
 }
 
 struct ParaHead {
@@ -428,6 +433,13 @@ impl Builder {
                     self.fmt.style.bold = true;
                 }
                 self.common(name, attrs);
+                // A background set on the cell, or inherited by it, is the cell's and not its text's.
+                let background = self.fmt.style.background.take();
+                let width = attr(attrs, "width").and_then(pixels).unwrap_or(0);
+                if let Some(cell) = self.tables.last_mut().and_then(|t| t.cell.as_mut()) {
+                    cell.background = background;
+                    cell.width = width;
+                }
                 return;
             }
             "tbody" | "thead" | "tfoot" | "caption" | "colgroup" => return,
@@ -498,7 +510,15 @@ impl Builder {
                 style.size = Some(BASE_PT * [2.0, 1.5, 1.17, 1.0, 0.83, 0.67].get(usize::from(level) - 1).copied().unwrap_or(1.0));
             }
             "center" => self.fmt.align = Align::Center,
-            "blockquote" => self.fmt.quote = self.fmt.quote.saturating_add(1).min(8),
+            // A quotation of earlier mail is marked as one (a bar); any other is only set in.
+            "blockquote" => {
+                let has = |name: &str, what: &str| attr(attrs, name).is_some_and(|v| v.to_ascii_lowercase().contains(what));
+                if has("type", "cite") || has("style", "border-left") || has("class", "quote") {
+                    self.fmt.quote = self.fmt.quote.saturating_add(1).min(8);
+                } else {
+                    self.fmt.indent = self.fmt.indent.saturating_add(1).min(12);
+                }
+            }
             "dd" => self.fmt.indent = self.fmt.indent.saturating_add(1).min(12),
             "pre" | "xmp" | "listing" | "plaintext" => {
                 self.fmt.pre = true;
@@ -707,7 +727,21 @@ impl Builder {
         self.fmt.align = Align::Left;
         let border = attr(attrs, "border").is_some_and(|v| v.trim().trim_end_matches("px").parse::<f32>().is_ok_and(|n| n > 0.0));
         self.common("table", attrs);
-        self.tables.push(TableBuild { rows: Vec::new(), border, open_len: self.open.len(), cell: None });
+        let css = attr(attrs, "style").unwrap_or("");
+        let auto = |prop: &str| css_value(css, prop).is_some_and(|v| v.split_whitespace().any(|part| part == "auto"));
+        let table_align = match attr(attrs, "align").and_then(align) {
+            Some(a) => a,
+            None if auto("margin") || (auto("margin-left") && auto("margin-right")) => Align::Center,
+            None => Align::Left,
+        };
+        self.tables.push(TableBuild {
+            rows: Vec::new(),
+            border,
+            width: table_width(attrs),
+            align: table_align,
+            open_len: self.open.len(),
+            cell: None,
+        });
     }
 
     fn open_cell(&mut self, header: bool, span: u16) {
@@ -718,7 +752,7 @@ impl Builder {
         if t.rows.is_empty() {
             t.rows.push(Vec::new());
         }
-        t.cell = Some(CellBuild { saved, open_len, header, span });
+        t.cell = Some(CellBuild { saved, open_len, header, span, background: None, width: 0 });
         self.sinks.push(Vec::new());
         self.gap = false;
     }
@@ -733,7 +767,7 @@ impl Builder {
         // The document's own list is never popped: a cell always has a sink above it.
         let blocks = if self.sinks.len() > 1 { self.sinks.pop().unwrap_or_default() } else { Vec::new() };
         if let Some(row) = self.tables.last_mut().and_then(|t| t.rows.last_mut()) {
-            row.push(Cell { blocks, header: cell.header, span: cell.span });
+            row.push(Cell { blocks, header: cell.header, span: cell.span, background: cell.background, width: cell.width });
         }
     }
 
@@ -745,15 +779,17 @@ impl Builder {
         if rows.is_empty() {
             return;
         }
-        if rows.iter().all(|r| r.iter().filter(|c| !c.blocks.is_empty()).count() <= 1) {
-            // A layout table with one column: its content reads as ordinary blocks.
+        // A width, a place on the page or a filled cell is something to draw; without any of them
+        // a table with one column is only layout, and its content reads as ordinary blocks.
+        let shaped = matches!(t.width, TableWidth::Pixels(_)) || t.align != Align::Left || rows.iter().flatten().any(|c| c.background.is_some());
+        if !shaped && rows.iter().all(|r| r.iter().filter(|c| !c.blocks.is_empty()).count() <= 1) {
             for cell in rows.drain(..).flatten() {
                 for block in cell.blocks {
                     self.push_block(block);
                 }
             }
         } else {
-            self.push_block(Block::Table(Table { rows, border: t.border }));
+            self.push_block(Block::Table(Table { rows, border: t.border, width: t.width, align: t.align }));
         }
         self.gap = true;
     }
@@ -882,6 +918,36 @@ fn align(v: &str) -> Option<Align> {
         "right" | "end" => Some(Align::Right),
         _ => None,
     }
+}
+
+/// A length in pixels, as an attribute or a CSS value gives it. A percentage is not one.
+fn pixels(v: &str) -> Option<u16> {
+    let n = v.trim().trim_end_matches("px").trim_end().parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 1.0)?;
+    Some(n.round().min(MAX_PICTURE_SIDE) as u16)
+}
+
+/// The value of one property in an inline style, lower case.
+fn css_value(css: &str, prop: &str) -> Option<String> {
+    let (_, value) = css.split(';').take(64).filter_map(|d| d.split_once(':')).find(|(p, _)| p.trim().eq_ignore_ascii_case(prop))?;
+    Some(value.to_ascii_lowercase().trim().trim_end_matches("!important").trim().to_string())
+}
+
+/// The width a table asks for: a limit in pixels first, then its width.
+fn table_width(attrs: &[(String, String)]) -> TableWidth {
+    let css = attr(attrs, "style").unwrap_or("");
+    let asked = [css_value(css, "max-width"), css_value(css, "width"), attr(attrs, "width").map(str::to_string)];
+    for v in asked.into_iter().flatten() {
+        match v.trim().strip_suffix('%') {
+            Some(share) if share.trim().parse::<f32>().is_ok_and(|p| p >= 100.0) => return TableWidth::Fill,
+            Some(_) => {}
+            None => {
+                if let Some(px) = pixels(&v) {
+                    return TableWidth::Pixels(px);
+                }
+            }
+        }
+    }
+    TableWidth::Content
 }
 
 /// A near-white background is the page itself, not a highlight.

@@ -111,6 +111,7 @@ pub fn sample_store(now: i64) -> MemStore {
     let mut permit = permit.item(now);
     permit.props.remove(pid::BODY);
     permit.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(PERMIT_RTF.as_bytes())));
+    permit.props.set(pid::RTF_IN_SYNC, PropValue::Bool(true));
     s.push_item(receipts, permit);
 
     let mut launch = Mail {

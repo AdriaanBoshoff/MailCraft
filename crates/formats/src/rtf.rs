@@ -15,6 +15,7 @@ const MAX_RUNS: usize = 200_000;
 const MAX_COLORS: usize = 1024;
 const MAX_FONTS: usize = 4096;
 const MAX_LINK: usize = 2048;
+const MAX_EDGES: usize = 64;
 
 pub fn parse(rtf: &[u8]) -> Doc {
     match encapsulated(rtf) {
@@ -73,6 +74,8 @@ struct Builder {
     row: Vec<Cell>,
     cell: Vec<Block>,
     border: bool,
+    /// Right edges of the cells of the row being defined, in twips (`\cellx`).
+    edges: Vec<i32>,
     runs: Vec<Run>,
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
@@ -209,10 +212,16 @@ impl Builder {
             // Twips; half an inch is one level.
             "li" => cur.indent = u8::try_from((param.unwrap_or(0).max(0) / 720).min(8)).unwrap_or(0),
             "intbl" => cur.in_table = true,
+            "trowd" => self.edges.clear(),
+            "cellx" if self.edges.len() < MAX_EDGES => self.edges.push(param.unwrap_or(0)),
             "cell" => {
                 self.end_para(cur, true, false);
                 let blocks = std::mem::take(&mut self.cell);
-                self.row.push(Cell { blocks, header: false, span: 1 });
+                // 15 twips to the pixel.
+                let right = self.edges.get(self.row.len()).copied().unwrap_or(0);
+                let left = self.row.len().checked_sub(1).and_then(|i| self.edges.get(i)).copied().unwrap_or(0);
+                let width = u16::try_from((right.saturating_sub(left) / 15).clamp(0, 4096)).unwrap_or(0);
+                self.row.push(Cell { blocks, span: 1, width, ..Cell::default() });
             }
             "row" => self.end_row(),
             "clbrdrt" | "clbrdrl" | "clbrdrb" | "clbrdrr" => self.border = true,
@@ -262,7 +271,7 @@ impl Builder {
     fn end_row(&mut self) {
         if !self.cell.is_empty() {
             let blocks = std::mem::take(&mut self.cell);
-            self.row.push(Cell { blocks, header: false, span: 1 });
+            self.row.push(Cell { blocks, span: 1, ..Cell::default() });
         }
         if !self.row.is_empty() {
             self.rows.push(std::mem::take(&mut self.row));
@@ -274,7 +283,7 @@ impl Builder {
         if self.rows.is_empty() {
             return;
         }
-        let table = Table { rows: std::mem::take(&mut self.rows), border: std::mem::take(&mut self.border) };
+        let table = Table { rows: std::mem::take(&mut self.rows), border: std::mem::take(&mut self.border), ..Table::default() };
         if table.columns() > 1 {
             self.blocks.push(Block::Table(table));
         } else {

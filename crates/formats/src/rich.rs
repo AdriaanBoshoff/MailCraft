@@ -105,6 +105,20 @@ pub enum Picture {
 pub struct Table {
     pub rows: Vec<Vec<Cell>>,
     pub border: bool,
+    pub width: TableWidth,
+    /// Where the table stands when it is narrower than the room it has.
+    pub align: Align,
+}
+
+/// How wide a table asks to be.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TableWidth {
+    /// As wide as what it holds.
+    #[default]
+    Content,
+    Pixels(u16),
+    /// All the room there is.
+    Fill,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -113,6 +127,10 @@ pub struct Cell {
     pub header: bool,
     /// Columns the cell covers, at least 1.
     pub span: u16,
+    /// Fills the whole cell, behind its text.
+    pub background: Option<Rgb>,
+    /// Width the cell asks for, in pixels; 0 where it gives none.
+    pub width: u16,
 }
 
 impl Doc {

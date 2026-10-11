@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 6 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 7 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 80, all passing |
+| Tests | 81, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -39,7 +39,10 @@
 2. Done: bodies stored as compressed RTF ([MS-OXRTFCP]) are decoded; RTF that wraps HTML or text
    ([MS-OXRTFEX]) is read as what it wraps, ordinary RTF is drawn formatted.
 3. Done: pictures the message carries as attachments are decoded in-process and drawn in the body.
-4. Next: checking the HTML and RTF renderings against Outlook's display of the same message.
+4. Done: an HTML and an RTF message of ours compared with Outlook's display of the same `.msg`;
+   text size, table widths and placement, cell fills, indents and quotations follow it
+   ([docs/ui-parity.md](docs/ui-parity.md), Message bodies).
+5. Next: a box for pictures that are not loaded, row backgrounds and cell padding, then style sheets.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -71,3 +74,8 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   attachments the body points at are decoded, only as PNG, JPEG, GIF or BMP, with file size,
   dimensions and memory capped first; anything else stays a placeholder and nothing is fetched or
   handed to another program. The sample order mail carries a picture drawn in code.
+- **2026-10-11** - M2.4: bodies follow Outlook's layout. Two sample messages were written as `.msg`,
+  opened in Outlook Classic and compared with the reading pane. Unstyled HTML text is 12 pt; tables
+  keep the width they ask for, stand left, centred or right, and fill their cells; a plain
+  blockquote is set in and only quoted mail gets a bar; RTF cells take their widths from the row
+  definition. An RTF-only message is now marked in sync, which Outlook needs to show it at all.

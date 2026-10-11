@@ -25,6 +25,7 @@ pub mod pid {
     pub const MESSAGE_SIZE: u16 = 0x0E08;
     pub const HASATTACH: u16 = 0x0E1B;
     pub const NORMALIZED_SUBJECT: u16 = 0x0E1D;
+    pub const RTF_IN_SYNC: u16 = 0x0E1F;
     pub const ATTACH_SIZE: u16 = 0x0E20;
     pub const ATTACH_NUM: u16 = 0x0E21;
     pub const BODY: u16 = 0x1000;

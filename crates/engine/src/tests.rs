@@ -315,6 +315,8 @@ fn a_message_kept_only_as_rtf_has_text_a_preview_and_survives_as_html() {
     run(&mut s, "mail.select", json!({ "folder": "Inbox/Receipts", "index": 0 }));
     let item = s.open.as_ref().unwrap();
     assert!(item.props.get(pid::BODY).is_none() && item.props.get(pid::HTML).is_none());
+    // Without this Outlook Classic shows an RTF-only message with an empty body.
+    assert_eq!(item.props.get(pid::RTF_IN_SYNC), Some(&PropValue::Bool(true)));
     let text = item.body_text();
     assert!(text.starts_with("Riverside Car Park\nReceipt for permit RP-20418, paid by card."), "{text}");
     assert!(text.contains("Monthly permit, bay 14\t62.00"));
