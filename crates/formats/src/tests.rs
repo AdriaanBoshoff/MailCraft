@@ -1049,3 +1049,184 @@ fn a_link_that_is_not_what_its_text_says_is_told_apart() {
     assert_eq!(text_around(&[], 3), "");
     assert_eq!(concern_at(&[], 0), None);
 }
+
+/// The words of a record's parameters.
+fn words(list: &[i16]) -> Vec<u8> {
+    list.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// The colour of one pixel of a BMP file of 24 bits to the pixel.
+fn pixel(bmp: &[u8], x: usize, y: usize) -> [u8; 3] {
+    let (w, h) = bmp_size(bmp);
+    let at = 54 + (h - 1 - y) * ((w * 3 + 3) & !3) + x * 3;
+    [bmp[at + 2], bmp[at + 1], bmp[at]]
+}
+
+fn bmp_size(bmp: &[u8]) -> (usize, usize) {
+    let n = |at: usize| u32::from_le_bytes(bmp[at..at + 4].try_into().unwrap()) as usize;
+    assert_eq!((&bmp[..2], n(2), n(10)), (&b"BM"[..], bmp.len(), 54));
+    (n(18), n(22))
+}
+
+/// Records that set a window of a hundred units each way, and a red brush.
+fn red_window() -> Vec<(u16, Vec<u8>)> {
+    vec![(0x020B, words(&[0, 0])), (0x020C, words(&[100, 100])), (0x02FC, vec![0, 0, 255, 0, 0, 0, 0, 0]), (0x012D, words(&[0]))]
+}
+
+const RED: [u8; 3] = [255, 0, 0];
+const WHITE: [u8; 3] = [255; 3];
+
+#[test]
+fn a_metafile_that_is_a_drawing_is_drawn() {
+    use crate::metafile::wmf_picture;
+    // A red box with the pen's black line round it, drawn at twice the size it is shown at.
+    let mut records = red_window();
+    records.push((0x041B, words(&[80, 80, 20, 20])));
+    let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+    assert_eq!(bmp_size(&bmp), (100, 100));
+    assert_eq!(pixel(&bmp, 50, 50), RED);
+    assert_eq!(pixel(&bmp, 5, 5), WHITE);
+    assert_eq!(pixel(&bmp, 90, 50), WHITE);
+    let edge = pixel(&bmp, 20, 50);
+    assert!(edge != RED && edge != WHITE && edge[1] == 0, "{edge:?}");
+
+    // No size asked for: a placeable metafile says its own (an inch by half an inch).
+    let mut placeable = vec![0xD7, 0xCD, 0xC6, 0x9A, 0, 0];
+    placeable.extend(words(&[0, 0, 1440, 720, 1440]));
+    placeable.resize(22, 0);
+    placeable.extend(wmf(&[(0x0418, words(&[720, 1440, 0, 0]))]));
+    let bmp = wmf_picture(&placeable, None).unwrap();
+    assert_eq!(bmp_size(&bmp), (96, 48));
+    // The ellipse is filled with the white brush and lined in black: its ends are dark.
+    assert_eq!(pixel(&bmp, 48, 24), WHITE);
+    assert!(pixel(&bmp, 0, 24)[0] < 200 && pixel(&bmp, 95, 24)[0] < 200);
+    assert_eq!(pixel(&bmp, 1, 1), WHITE);
+    // A plain one that says nothing has its shape, at a size that can be looked at.
+    let wide = wmf(&[(0x020C, words(&[50, 200])), (0x0213, words(&[50, 200]))]);
+    assert_eq!(bmp_size(&wmf_picture(&wide, None).unwrap()), (600, 150));
+
+    // One square inside another, both drawn the same way round: the inner one is a hole when
+    // every other part is filled, and filled when all that is wound round is.
+    let nested = |mode: i16| {
+        let mut records = red_window();
+        records.push((0x0106, words(&[mode])));
+        records.push((0x0538, words(&[2, 4, 4, 10, 10, 90, 10, 90, 90, 10, 90, 40, 40, 60, 40, 60, 60, 40, 60])));
+        wmf_picture(&wmf(&records), Some((50, 50))).unwrap()
+    };
+    assert_eq!((pixel(&nested(1), 50, 50), pixel(&nested(1), 25, 50)), (WHITE, RED));
+    assert_eq!((pixel(&nested(2), 50, 50), pixel(&nested(2), 25, 50)), (RED, RED));
+
+    // A pen that draws nothing, a pie, and a state that is saved and put back: what is cut
+    // off inside it is whole again after.
+    let mut records = red_window();
+    records.extend([
+        (0x02FA, vec![5, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        (0x012D, words(&[1])),
+        (0x001E, Vec::new()),
+        (0x0416, words(&[50, 50, 0, 0])),
+        (0x041B, words(&[100, 100, 0, 0])),
+        (0x0127, words(&[-1])),
+        (0x081A, words(&[100, 75, 75, 100, 100, 100, 50, 50])),
+    ]);
+    let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+    assert_eq!((pixel(&bmp, 20, 20), pixel(&bmp, 80, 20), pixel(&bmp, 20, 80)), (RED, WHITE, WHITE));
+    // The pie runs from the right of its ellipse round to the bottom, against the clock: all
+    // of it but the quarter at the lower right.
+    assert_eq!((pixel(&bmp, 65, 65), pixel(&bmp, 85, 85)), (RED, WHITE));
+    assert_eq!((pixel(&bmp, 65, 85), pixel(&bmp, 85, 65)), (RED, RED));
+}
+
+#[test]
+fn a_metafile_that_cannot_be_drawn_whole_is_not_drawn() {
+    use crate::metafile::wmf_picture;
+    let boxed = (0x041B, words(&[80, 80, 20, 20]));
+    let with = |extra: (u16, Vec<u8>)| {
+        let mut records = red_window();
+        records.extend([boxed.clone(), extra]);
+        wmf_picture(&wmf(&records), None)
+    };
+    assert!(with((0x0102, words(&[1]))).is_some());
+    // Text, a bitmap beside the drawing, a pen that inverts, a region cut out, a hatched brush
+    // that is filled with, a colour that is a number in a palette.
+    assert_eq!(with((0x0A32, words(&[10, 10, 1, 0, 0x41]))), None);
+    assert_eq!(with(stretch(&small_dib())), None);
+    assert_eq!(with((0x0104, words(&[6]))), None);
+    assert_eq!(with((0x0415, words(&[50, 50, 0, 0]))), None);
+    assert_eq!(
+        wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x02FC, vec![2, 0, 255, 0, 0, 0, 0, 0]), (0x012D, words(&[0])), boxed.clone()]), None),
+        None
+    );
+    assert_eq!(wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x02FC, vec![0, 0, 5, 0, 0, 1, 0, 0]), boxed.clone()]), None), None);
+    // Nothing drawn, no window to draw in, a window of no size, an object that was never made,
+    // a state put back that was never saved.
+    assert_eq!(wmf_picture(&wmf(&red_window()), None), None);
+    assert_eq!(wmf_picture(&wmf(std::slice::from_ref(&boxed)), None), None);
+    assert_eq!(wmf_picture(&wmf(&[(0x020C, words(&[0, 100])), boxed.clone()]), None), None);
+    assert_eq!(with((0x012D, words(&[7]))), None);
+    assert_eq!(with((0x0127, words(&[-1]))), None);
+}
+
+#[test]
+fn hostile_drawings_never_panic() {
+    use crate::metafile::wmf_picture;
+    let mut records = red_window();
+    records.extend([
+        (0x02FA, vec![0, 0, 9, 0, 0, 0, 0, 0, 255, 0]),
+        (0x012D, words(&[1])),
+        (0x001E, Vec::new()),
+        (0x0416, words(&[90, 90, 10, 10])),
+        (0x0410, words(&[1, 2, 1, 2])),
+        (0x020F, words(&[5, 5])),
+        (0x0214, words(&[10, 10])),
+        (0x0213, words(&[90, 90])),
+        (0x0325, words(&[3, 0, 0, 50, 50, 100, 0])),
+        (0x0324, words(&[3, 0, 0, 50, 50, 100, 0])),
+        (0x0538, words(&[1, 3, 0, 0, 50, 50, 100, 0])),
+        (0x0418, words(&[80, 80, 20, 20])),
+        (0x061C, words(&[20, 20, 80, 80, 20, 20])),
+        (0x0817, words(&[0, 50, 50, 0, 100, 100, 0, 0])),
+        (0x0830, words(&[0, 50, 50, 0, 100, 100, 0, 0])),
+        (0x041F, vec![0, 255, 0, 0, 30, 0, 30, 0]),
+        (0x0127, words(&[1])),
+        (0x01F0, words(&[0])),
+    ]);
+    let file = wmf(&records);
+    assert!(wmf_picture(&file, Some((40, 40))).is_some());
+    // Cut short anywhere, and with any one byte turned over or made the largest it can be.
+    for end in 0..file.len() {
+        let _ = wmf_picture(&file[..end], Some((24, 24)));
+        for with in [file[end] ^ 0xFF, 0xFF, 0x80, 0] {
+            let mut changed = file.clone();
+            changed[end] = with;
+            for bmp in [wmf_picture(&changed, Some((24, 24))), wmf_picture(&changed, Some((u32::MAX, 1)))].into_iter().flatten() {
+                let (w, h) = bmp_size(&bmp);
+                assert!(w <= 800 && h <= 800);
+            }
+        }
+    }
+    // More points than a record holds; more polygons than there are; a great many objects.
+    assert_eq!(wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x0324, words(&[-1, 0, 0]))]), None), None);
+    assert_eq!(wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x0538, words(&[-1, 3]))]), None), None);
+    let many: Vec<_> = (0..5000).map(|_| (0x02FBu16, Vec::new())).collect();
+    assert_eq!(wmf_picture(&wmf(&many), None), None);
+    // A drawing that would take too long: a great many long lines of the widest pen.
+    let mut slow = vec![(0x020C, words(&[100, 100])), (0x02FA, vec![0, 0, 100, 0, 0, 0, 0, 0, 0, 0]), (0x012D, words(&[0]))];
+    let mut zigzag = vec![2000i16];
+    zigzag.extend((0..2000).flat_map(|i| [if i % 2 == 0 { 0 } else { 100 }, i % 100]));
+    slow.extend((0..200).map(|_| (0x0325, words(&zigzag))));
+    let started = std::time::Instant::now();
+    let _ = wmf_picture(&wmf(&slow), Some((400, 400)));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}
+
+#[test]
+fn rtf_shows_a_metafile_that_is_a_drawing() {
+    let mut records = red_window();
+    records.push((0x041B, words(&[80, 80, 20, 20])));
+    let rtf = format!("{{\\rtf1\\ansi\\pard a{{\\pict\\wmetafile8\\picwgoal600\\pichgoal300 {}}}b\\par}}", hexed(&wmf(&records)));
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    let run = paras(&doc)[0].runs.iter().find(|r| r.picture.is_some()).unwrap();
+    assert_eq!((run.picture.clone(), run.extent), (Some(Picture::Inline(Some(0))), (40, 20)));
+    assert_eq!(bmp_size(&doc.written[0]), (80, 40));
+    assert_eq!(pixel(&doc.written[0], 40, 20), RED);
+}

@@ -65,6 +65,8 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard\\par\\li720 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
 \\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\
 \\pard\\par\\qc \\objattph\\'20\\par\r\n\
+\\pard\\par Bay 14 is the green one, third from the way in:\\par\r\n\
+\\pard\\qc {\\pict\\wmetafile8\\picw6350\\pich3175\\picwgoal3600\\pichgoal1800 @MAP@}\\par\r\n\
 \\pard\\par Questions? See {\\field{\\*\\fldinst HYPERLINK \"https://parking.example.net/help\"}{\\fldrslt{\\ul\\cf1 parking.example.net/help}}}.\\par}";
 
 /// A shop's order mail the way such mail is built: a layout table, a banner, a data table, a
@@ -123,7 +125,7 @@ pub fn sample_store(now: i64) -> MemStore {
     let permit = Mail { from: PARKING, to: &[ME], cc: &[], subject: "Your parking permit receipt", body: "", html: None, age: 12 * DAY, read: true };
     let mut permit = permit.item(now);
     permit.props.remove(pid::BODY);
-    permit.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(PERMIT_RTF.as_bytes())));
+    permit.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(PERMIT_RTF.replace("@MAP@", &hex(&bay_map())).as_bytes())));
     permit.props.set(pid::RTF_IN_SYNC, PropValue::Bool(true));
     // An attachment that has its place in the body's text, as RTF mail keeps them.
     let mut card = Attachment::file("permit-RP-20418.txt", "text/plain", b"Riverside Car Park\r\nPermit RP-20418, bay 14\r\n".to_vec());
@@ -410,6 +412,78 @@ fn png(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> 
     chunk(b"IDAT", &zlib);
     chunk(b"IEND", &[]);
     out
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    })
+}
+
+/// The map of the sample receipt: a Windows metafile that is a drawing ([MS-WMF] 2.3), written
+/// here. A deck with a row of bays, one of them green, a pillar, and an arrow at the way in.
+pub(crate) fn bay_map() -> Vec<u8> {
+    let words = |list: &[i16]| list.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+    let pen = |style: u16, width: i16, [r, g, b]: [u8; 3]| {
+        let mut body = style.to_le_bytes().to_vec();
+        body.extend(words(&[width, 0]));
+        body.extend([r, g, b, 0]);
+        (0x02FAu16, body)
+    };
+    let brush = |[r, g, b]: [u8; 3]| (0x02FCu16, vec![0, 0, r, g, b, 0, 0, 0]);
+    let select = |object: i16| (0x012Du16, words(&[object]));
+    // What each record does, and its parameters: the last one written first.
+    let mut records = vec![
+        (0x0103, words(&[8])),
+        (0x020B, words(&[0, 0])),
+        (0x020C, words(&[120, 240])),
+        // 0: the deck's edge; 1: the deck; 2: a bay's lines; 3: an empty bay; 4: bay 14;
+        // 5: no line; 6: the arrow and the pillar.
+        pen(0, 3, [0x5F, 0x5F, 0x5F]),
+        brush([0xEC, 0xEC, 0xE6]),
+        pen(0, 1, [0x8A, 0x8A, 0x8A]),
+        brush([0xFF, 0xFF, 0xFF]),
+        brush([0x2E, 0x7A, 0x4F]),
+        pen(5, 0, [0, 0, 0]),
+        brush([0x1F, 0x5A, 0xA0]),
+        select(0),
+        select(1),
+        (0x061C, words(&[20, 20, 114, 234, 6, 6])),
+        select(2),
+    ];
+    for bay in 0..6i16 {
+        let left = 54 + bay * 28;
+        records.push(select(if bay == 2 { 4 } else { 3 }));
+        records.push((0x041B, words(&[60, left + 28, 16, left])));
+    }
+    records.extend([
+        select(5),
+        select(6),
+        // The arrow: a shaft and a head, pointing in from the left.
+        (0x0324, words(&[7, 14, 80, 34, 80, 34, 72, 50, 86, 34, 100, 34, 92, 14, 92])),
+        (0x0418, words(&[104, 206, 84, 186])),
+        select(0),
+        // The lane the arrow leads into.
+        (0x0214, words(&[72, 58])),
+        (0x0213, words(&[72, 176])),
+    ]);
+    let longest = records.iter().map(|(_, body)| 3 + body.len() / 2).max().unwrap_or(3);
+    let total = 9 + records.iter().map(|(_, body)| 3 + body.len() / 2).sum::<usize>() + 3;
+    // [MS-WMF] 2.3.2.2, META_HEADER: kept in memory, nine words, version 3, the file's length
+    // in words, how many objects, and the longest record.
+    let mut file = vec![1, 0, 9, 0, 0, 3];
+    file.extend((total as u32).to_le_bytes());
+    file.extend(7u16.to_le_bytes());
+    file.extend((longest as u32).to_le_bytes());
+    file.extend([0, 0]);
+    for (function, body) in records.iter().chain(&[(0u16, Vec::new())]) {
+        file.extend(((3 + body.len() / 2) as u32).to_le_bytes());
+        file.extend(function.to_le_bytes());
+        file.extend(body);
+    }
+    file
 }
 
 /// The permit card of the sample receipt: a bitmap without a file's header ([MS-WMF] 2.2.2.9),

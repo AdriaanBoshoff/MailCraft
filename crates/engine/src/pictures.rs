@@ -115,10 +115,10 @@ fn object_picture(attachment: &Attachment, object: Option<&mailcraft_msg::ole::O
     let own = object.into_iter().flat_map(|o| &o.pictures).find_map(|p| match p.shape {
         Shape::File => decode(&p.data).map(|_| p.data.clone()),
         Shape::Bitmap => metafile::dib_file(&p.data),
-        Shape::Metafile => metafile::wmf_bitmap(&p.data),
+        Shape::Metafile => metafile::wmf_picture(&p.data, None),
         Shape::Enhanced => metafile::emf_bitmap(&p.data),
     });
-    own.or_else(|| attachment.props.bin(pid::ATTACH_RENDERING).and_then(metafile::wmf_bitmap))
+    own.or_else(|| attachment.props.bin(pid::ATTACH_RENDERING).and_then(|kept| metafile::wmf_picture(kept, None)))
 }
 
 fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&Attachment], depth: usize) {

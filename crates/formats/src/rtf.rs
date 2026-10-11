@@ -488,13 +488,19 @@ impl Builder {
     fn end_picture(&mut self) {
         let Some(pict) = self.pict.take() else { return };
         let whole = !pict.bad && pict.half.is_none() && !pict.bytes.is_empty();
+        // Twips to pixels, scaled as asked; a picture that gives no size is shown at its own.
+        let side = |goal: i32, scale: i32| {
+            let scale = if scale > 0 { i64::from(scale.min(10_000)) } else { 100 };
+            u16::try_from((i64::from(goal.max(0)) * scale / 100 / 15).clamp(0, MAX_PICTURE_SIDE)).unwrap_or(0)
+        };
+        let extent = (side(pict.goal.0, pict.scale.0), side(pict.goal.1, pict.scale.1));
         let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes);
         let file = match pict.kind {
             _ if !whole => None,
             Kind::Unread => None,
             Kind::File => Some(pict.bytes),
             Kind::Bitmap => crate::metafile::dib_file(&pict.bytes),
-            Kind::Wmf => crate::metafile::wmf_bitmap(&pict.bytes),
+            Kind::Wmf => crate::metafile::wmf_picture(&pict.bytes, Some((u32::from(extent.0), u32::from(extent.1)))),
             Kind::Emf => crate::metafile::emf_bitmap(&pict.bytes),
         };
         let place = file.filter(|file| file.len() <= room).and_then(|file| match self.written.iter().position(|kept| **kept == *file) {
@@ -506,12 +512,6 @@ impl Builder {
             }
             None => None,
         });
-        // Twips to pixels, scaled as asked; a picture that gives no size is shown at its own.
-        let side = |goal: i32, scale: i32| {
-            let scale = if scale > 0 { i64::from(scale.min(10_000)) } else { 100 };
-            u16::try_from((i64::from(goal.max(0)) * scale / 100 / 15).clamp(0, MAX_PICTURE_SIDE)).unwrap_or(0)
-        };
-        let extent = (side(pict.goal.0, pict.scale.0), side(pict.goal.1, pict.scale.1));
         self.push(Run { style: pict.style, picture: Some(Picture::Inline(place)), extent, ..Run::default() });
     }
 

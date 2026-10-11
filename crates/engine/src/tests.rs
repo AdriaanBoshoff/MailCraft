@@ -1570,3 +1570,20 @@ fn a_picture_sent_with_a_message_is_an_attachment_the_body_shows_not_a_listed_on
     assert!(item.body_html().unwrap().contains(&format!("cid:{}", proof.content_id().unwrap())));
     assert_eq!(item.visible_attachments().count(), 0, "the body shows it, so the attachment list does not");
 }
+
+#[test]
+fn the_sample_receipt_has_a_drawing_that_is_drawn() {
+    use mailcraft_formats::metafile::wmf_picture;
+    // The map is a metafile of shapes and no bitmap: it is drawn, at its own shape.
+    let map = crate::sample::bay_map();
+    assert_eq!(mailcraft_formats::metafile::wmf_bitmap(&map), None);
+    let bmp = wmf_picture(&map, Some((240, 120))).unwrap();
+    assert_eq!((&bmp[..2], &bmp[18..22], &bmp[22..26]), (&b"BM"[..], &480u32.to_le_bytes()[..], &240u32.to_le_bytes()[..]));
+    // And it stands in the receipt's body as a picture that was read, beside the card.
+    let mut s = session();
+    run(&mut s, "mail.select", json!({ "folder": "Inbox/Receipts", "index": 0 }));
+    let rtf = s.open.as_ref().unwrap().props.bin(mailcraft_model::pid::RTF_COMPRESSED).and_then(mailcraft_model::rtf::decompress).unwrap();
+    let doc = mailcraft_formats::rtf::parse(&rtf);
+    assert_eq!(doc.written.len(), 1);
+    assert_eq!(doc.written[0][..], bmp[..]);
+}

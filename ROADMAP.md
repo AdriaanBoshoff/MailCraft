@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 24 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 25 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 143, all passing |
+| Tests | 148, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -58,8 +58,10 @@
     only a bitmap, are shown.
 12. Done: an attached object of another program is kept whole through `.msg`, and is shown by
     the best picture it has.
-13. Next: a pass over what is already built, to make each feature better than the one it
-    follows; then metafiles that are drawings.
+13. Done: a pass over what is already built, to make each feature better than the one it
+    follows (M2.13 to M2.21).
+14. Done: Windows metafiles that are drawings of lines and filled shapes are drawn.
+15. Next: enhanced metafiles that are drawings; then text in metafiles.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -256,3 +258,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   empty one, and a program or script that mail servers refuse. Save As takes a folder and saves
   the message there under its subject made safe, replacing nothing (`"format"` picks msg, eml
   or oft). Opening a data file that is open already goes to it instead of opening it twice.
+- **2026-10-11** - M2.22: Windows metafiles that are drawings. A picture kept as a metafile that
+  draws lines and filled shapes left only its place; it is now drawn ([MS-WMF] 2.3.3): lines,
+  polylines, polygons and sets of them (filled every other part or all that is wound round),
+  rectangles, rounded ones, ellipses, arcs, pies and chords, single points, with pens and solid
+  brushes that are made, selected and deleted, the window that is set, moved and scaled, states
+  saved and put back, and a clipping box. It works for a picture written into an RTF body, for an
+  attached object's picture of itself and for the small picture a message keeps of an
+  attachment, on screen and in print. Better than the one it follows: edges are smoothed, where
+  Windows plays a metafile back with stepped ones, and the page is made at twice the size it is
+  shown at, so it stays sharp on a dense screen and on paper. A metafile that asks for anything
+  not drawn (text, a bitmap beside the drawing, a patterned or hatched brush, a region, a pen
+  that inverts) is not drawn at all and keeps its place: half a picture is worse. A drawing is
+  held to 800 pixels a side, 50,000 records, 500,000 points and a fixed amount of work, so a
+  hostile one costs little. The sample receipt has a small map drawn this way. Not yet: text in
+  metafiles, and enhanced metafiles (EMF) that are drawings.
