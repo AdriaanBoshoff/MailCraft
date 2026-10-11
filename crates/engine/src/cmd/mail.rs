@@ -1,6 +1,7 @@
 //! Mail commands: selecting, read state, flags, delete, move, categories.
 
 use super::{CommandSpec, always, has_folder, has_selection, has_selection_writable, need_str, ok, p_str, p_u64};
+use crate::undo::Step;
 use crate::{CmdResult, EngineError, Session};
 use mailcraft_model::{Flag, FolderKind, StoreError};
 use serde_json::{Value, json};
@@ -16,6 +17,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"index": row number} or {"id": item id}; optional "folder": path to go to first (alone, it only goes there)"#,
             enabled: has_folder,
             run: select,
+        },
+        CommandSpec {
+            id: "edit.undo",
+            label: "Undo",
+            tab: "",
+            group: "",
+            shortcut: "Ctrl+Z",
+            params: r#"takes back the last change, move or deletion of a message; returns {"undone": the command's label, "left": steps that remain}"#,
+            enabled: can_undo,
+            run: undo,
         },
         CommandSpec { id: "mail.next", label: "Next Item", tab: "", group: "", shortcut: "Down", params: "", enabled: has_folder, run: next },
         CommandSpec {
@@ -208,45 +219,45 @@ fn previous(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 fn mark_read(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected(|it| it.set_read(true))?;
+    s.edit_selected("Mark as Read", |it| it.set_read(true))?;
     ok()
 }
 
 fn mark_unread(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected(|it| it.set_read(false))?;
+    s.edit_selected("Mark as Unread", |it| it.set_read(false))?;
     ok()
 }
 
 fn toggle_read(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected(|it| it.set_read(!it.is_read()))?;
+    s.edit_selected("Unread/ Read", |it| it.set_read(!it.is_read()))?;
     ok()
 }
 
 fn toggle_flag(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected(|it| it.set_flag(if it.flag() == Flag::Flagged { Flag::None } else { Flag::Flagged }))?;
+    s.edit_selected("Follow Up", |it| it.set_flag(if it.flag() == Flag::Flagged { Flag::None } else { Flag::Flagged }))?;
     ok()
 }
 
 fn flag_complete(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected(|it| it.set_flag(Flag::Complete))?;
+    s.edit_selected("Mark Complete", |it| it.set_flag(Flag::Complete))?;
     ok()
 }
 
 fn clear_flag(s: &mut Session, _: &Value) -> CmdResult {
-    s.edit_selected(|it| it.set_flag(Flag::None))?;
+    s.edit_selected("Clear Flag", |it| it.set_flag(Flag::None))?;
     ok()
 }
 
 fn categorize(s: &mut Session, p: &Value) -> CmdResult {
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
-        s.edit_selected(|it| it.categories.clear())?;
+        s.edit_selected("Categorize", |it| it.categories.clear())?;
         return ok();
     }
     let cat = need_str(p, "category")?.trim().to_string();
     if cat.is_empty() || cat.chars().count() > 255 {
         return Err(EngineError::BadParams("a category name is 1 to 255 characters".into()));
     }
-    s.edit_selected(|it| match it.categories.iter().position(|c| c.eq_ignore_ascii_case(&cat)) {
+    s.edit_selected("Categorize", |it| match it.categories.iter().position(|c| c.eq_ignore_ascii_case(&cat)) {
         Some(i) => {
             it.categories.remove(i);
         }
@@ -262,14 +273,14 @@ fn importance(s: &mut Session, p: &Value) -> CmdResult {
         "high" => 2,
         other => return Err(EngineError::BadParams(format!("\"{other}\" is not low, normal or high"))),
     };
-    s.edit_selected(|it| it.props.set(mailcraft_model::pid::IMPORTANCE, mailcraft_model::PropValue::Int32(level)))?;
+    s.edit_selected("Importance", |it| it.props.set(mailcraft_model::pid::IMPORTANCE, mailcraft_model::PropValue::Int32(level)))?;
     ok()
 }
 
-fn move_to_kind(s: &mut Session, kind: FolderKind, name: &str) -> CmdResult {
+fn move_to_kind(s: &mut Session, what: &'static str, kind: FolderKind, name: &str) -> CmdResult {
     let (store, _) = s.current.ok_or(StoreError::NoFolder)?;
     let target = s.find_folder(store, kind).ok_or_else(|| EngineError::Format(format!("this data file has no {name} folder")))?;
-    s.move_selected(target)?;
+    s.move_selected(what, target)?;
     ok()
 }
 
@@ -279,11 +290,13 @@ fn delete(s: &mut Session, _: &Value) -> CmdResult {
     let in_deleted = s.folder_info(store, folder).is_some_and(|f| f.kind == FolderKind::Deleted);
     let deleted = s.find_folder(store, FolderKind::Deleted);
     match deleted {
-        Some(target) if !in_deleted => s.move_selected(target)?,
+        Some(target) if !in_deleted => s.move_selected("Delete", target)?,
         _ => {
             let id = s.selected.ok_or(StoreError::NoItem)?;
             let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
-            st.remove(folder, mailcraft_model::ItemId(id))?;
+            let item = Box::new(st.remove(folder, mailcraft_model::ItemId(id))?);
+            // Gone from the data file, and kept by the session so that it can be taken back.
+            s.did(Step::Removed { what: "Delete", store, folder, was: id, item });
             s.selected = None;
             s.open = None;
             s.refresh_folders(store);
@@ -294,11 +307,11 @@ fn delete(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 fn archive(s: &mut Session, _: &Value) -> CmdResult {
-    move_to_kind(s, FolderKind::Archive, "Archive")
+    move_to_kind(s, "Archive", FolderKind::Archive, "Archive")
 }
 
 fn junk(s: &mut Session, _: &Value) -> CmdResult {
-    move_to_kind(s, FolderKind::Junk, "Junk Email")
+    move_to_kind(s, "Junk", FolderKind::Junk, "Junk Email")
 }
 
 fn move_to(s: &mut Session, p: &Value) -> CmdResult {
@@ -308,8 +321,17 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
         (None, Some(path)) => s.folder_by_path(store, path).ok_or_else(|| EngineError::BadParams(format!("there is no folder \"{path}\"")))?,
         _ => return Err(EngineError::BadParams("\"folder\" (path) or \"folderId\" is required".into())),
     };
-    s.move_selected(target)?;
+    s.move_selected("Move", target)?;
     ok()
+}
+
+fn can_undo(s: &Session) -> bool {
+    !s.undo.is_empty() && s.compose.is_none()
+}
+
+fn undo(s: &mut Session, _: &Value) -> CmdResult {
+    let undone = s.undo_last()?;
+    Ok(json!({ "undone": undone, "left": s.undo.len() }))
 }
 
 fn inspect(s: &mut Session, _: &Value) -> CmdResult {

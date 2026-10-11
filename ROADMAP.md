@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 22 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 23 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 40 of 114 (35%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 140, all passing |
+| Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 142, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -239,3 +239,11 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   size, the oldest and newest message and the totals with the folders inside in one call; a
   rename onto a neighbour's name is refused, and names differing only in case are one name in
   any alphabet, not only in ASCII.
+- **2026-10-11** - M2.20: undo, the eighth of the pass. What is done to a message can be taken
+  back with `edit.undo` (Ctrl+Z), as in Outlook: marking, flagging, categories, importance,
+  moving, archiving, junk and deleting. Beyond Outlook: a hundred steps are kept, not one; a
+  message deleted for good can be taken back for as long as the session lasts; the message is
+  shown where it stands again, as unread as it was; the result says what was undone and how many
+  steps remain, and `session.inspect` what the next one is; a step whose message has since gone
+  says so and is dropped without touching anything else. Found on the way and fixed: a move
+  whose second half failed left the message in neither folder; it now goes back where it was.

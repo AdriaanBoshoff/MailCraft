@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 40, "parity fell to {done} of {total}");
+    assert!(done >= 41, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -303,6 +303,164 @@ fn a_message_is_looked_over_before_it_goes() {
             cautions(&Draft { to: wild.clone(), cc: wild.clone(), bcc: wild.clone(), subject: wild.clone(), body: wild.clone(), ..Draft::default() });
         assert!(found.len() <= 12 && found.iter().all(|c| c.words().chars().count() <= 200), "{}", found.len());
     }
+}
+
+#[test]
+fn what_was_done_to_a_message_can_be_taken_back() {
+    let mut s = session();
+    assert!(!s.is_enabled("edit.undo"));
+    let state = |s: &Session| {
+        let it = s.open.as_ref().unwrap();
+        (it.subject(), it.is_read(), it.flag(), it.categories.clone(), it.props.i32(mailcraft_model::pid::IMPORTANCE))
+    };
+    run(&mut s, "mail.select", json!({"index": 1}));
+    let (id, before) = (s.selected.unwrap(), state(&s));
+    let counts = (folder(&s, "Inbox"), folder(&s, "Deleted Items"), folder(&s, "Archive"));
+
+    // Changes to the message, taken back newest first.
+    run(&mut s, "mail.flag", Value::Null);
+    run(&mut s, "mail.categorize", json!({"category": "Launch"}));
+    run(&mut s, "mail.importance", json!({"level": "high"}));
+    run(&mut s, "mail.markUnread", Value::Null);
+    assert_eq!(s.inspect()["undo"], "Mark as Unread");
+    for (what, left) in [("Mark as Unread", 3), ("Importance", 2), ("Categorize", 1), ("Follow Up", 0)] {
+        assert_eq!(run(&mut s, "edit.undo", Value::Null), json!({"undone": what, "left": left}));
+    }
+    assert_eq!((s.selected, state(&s)), (Some(id), before.clone()));
+    assert!(!s.is_enabled("edit.undo") && s.inspect()["undo"].is_null());
+
+    // A change, then two moves: all three come back, though the message's number changed twice.
+    run(&mut s, "mail.flag", Value::Null);
+    run(&mut s, "mail.archive", Value::Null);
+    run(&mut s, "folder.select", json!({"folder": "Archive"}));
+    let archived = s.rows.iter().find(|r| r.subject == before.0).unwrap().id;
+    run(&mut s, "mail.select", json!({"id": archived}));
+    run(&mut s, "mail.delete", Value::Null);
+    run(&mut s, "folder.select", json!({"folder": "Drafts"}));
+    assert_eq!(run(&mut s, "edit.undo", Value::Null)["undone"], "Delete");
+    assert_eq!(
+        (s.current_folder().unwrap().name.as_str(), s.open.as_ref().unwrap().subject()),
+        ("Archive", before.0.clone()),
+        "it is shown where it is again"
+    );
+    assert_eq!(run(&mut s, "edit.undo", Value::Null)["undone"], "Archive");
+    assert_eq!(s.current_folder().unwrap().name, "Inbox");
+    assert_eq!(run(&mut s, "edit.undo", Value::Null)["undone"], "Follow Up");
+    assert_eq!(state(&s), before);
+    assert_eq!((folder(&s, "Inbox"), folder(&s, "Deleted Items"), folder(&s, "Archive")), counts);
+
+    // An unread message that comes back is still unread.
+    run(&mut s, "view.filterUnread", json!({"on": false}));
+    let unread = s.rows.iter().find(|r| !r.read).unwrap().id;
+    run(&mut s, "mail.select", json!({"id": unread}));
+    run(&mut s, "mail.markUnread", Value::Null);
+    run(&mut s, "mail.junk", Value::Null);
+    run(&mut s, "edit.undo", Value::Null);
+    assert!(!s.open.as_ref().unwrap().is_read() && folder(&s, "Inbox") == counts.0);
+    run(&mut s, "edit.undo", Value::Null);
+
+    // Deleted for good, and taken back whole.
+    run(&mut s, "folder.select", json!({"folder": "Deleted Items"}));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    let whole = s.open.clone().unwrap();
+    run(&mut s, "mail.delete", Value::Null);
+    assert_eq!(folder(&s, "Deleted Items").0, counts.1.0 - 1);
+    assert_eq!(run(&mut s, "edit.undo", Value::Null)["undone"], "Delete");
+    let back = s.open.clone().unwrap();
+    assert_eq!(
+        (back.subject(), back.body_text(), back.attachments.len(), back.recipients.len()),
+        (whole.subject(), whole.body_text(), whole.attachments.len(), whole.recipients.len())
+    );
+    assert_eq!(folder(&s, "Deleted Items"), counts.1);
+
+    // A step whose message is gone says so, is dropped, and leaves the rest alone.
+    run(&mut s, "folder.select", json!({"folder": "Inbox"}));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    run(&mut s, "mail.flag", Value::Null);
+    run(&mut s, "mail.delete", Value::Null);
+    run(&mut s, "folder.select", json!({"folder": "Deleted Items"}));
+    run(&mut s, "folder.empty", Value::Null);
+    let refused = s.run("edit.undo", &Value::Null).unwrap_err().to_string();
+    assert!(refused.contains("Delete can no longer be undone"), "{refused}");
+    assert!(s.run("edit.undo", &Value::Null).unwrap_err().to_string().contains("Follow Up can no longer be undone"));
+    assert!(!s.is_enabled("edit.undo"));
+
+    // Only so many steps are kept, and none while a message is being written.
+    run(&mut s, "folder.select", json!({"folder": "Inbox"}));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    for _ in 0..crate::undo::MAX_STEPS + 20 {
+        run(&mut s, "mail.flag", Value::Null);
+    }
+    assert_eq!(s.undo.len(), crate::undo::MAX_STEPS);
+    run(&mut s, "mail.new", Value::Null);
+    assert!(!s.is_enabled("edit.undo"));
+    run(&mut s, "compose.discard", Value::Null);
+    assert!(s.is_enabled("edit.undo"));
+    run(&mut s, "file.closeStore", Value::Null);
+    assert!(s.undo.is_empty(), "the steps of a closed data file go with it");
+}
+
+/// The sample mailbox, in which nothing can be put into one folder.
+struct Refusing {
+    inner: mailcraft_model::MemStore,
+    full: Option<FolderId>,
+}
+
+impl mailcraft_model::Store for Refusing {
+    fn display_name(&self) -> String {
+        self.inner.display_name()
+    }
+    fn writable(&self) -> bool {
+        true
+    }
+    fn folders(&mut self) -> Result<Vec<mailcraft_model::FolderInfo>, mailcraft_model::StoreError> {
+        self.inner.folders()
+    }
+    fn list(&mut self, folder: FolderId) -> Result<Vec<mailcraft_model::Summary>, mailcraft_model::StoreError> {
+        self.inner.list(folder)
+    }
+    fn load(&mut self, folder: FolderId, id: mailcraft_model::ItemId) -> Result<mailcraft_model::Item, mailcraft_model::StoreError> {
+        self.inner.load(folder, id)
+    }
+    fn update(&mut self, folder: FolderId, id: mailcraft_model::ItemId, item: mailcraft_model::Item) -> Result<(), mailcraft_model::StoreError> {
+        self.inner.update(folder, id, item)
+    }
+    fn add(&mut self, folder: FolderId, item: mailcraft_model::Item) -> Result<mailcraft_model::ItemId, mailcraft_model::StoreError> {
+        if Some(folder) == self.full {
+            return Err(mailcraft_model::StoreError::Format("the folder is full".into()));
+        }
+        self.inner.add(folder, item)
+    }
+    fn remove(&mut self, folder: FolderId, id: mailcraft_model::ItemId) -> Result<mailcraft_model::Item, mailcraft_model::StoreError> {
+        self.inner.remove(folder, id)
+    }
+}
+
+#[test]
+fn a_message_that_cannot_be_put_where_it_is_going_stays_where_it_was() {
+    let mut s = Session::new();
+    s.now = now();
+    let inner = crate::sample::sample_store(s.now);
+    let full = inner.folder_by_kind(FolderKind::Archive);
+    s.add_store(Box::new(Refusing { inner, full }));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    let subject = s.open.as_ref().unwrap().subject();
+    let before = (folder(&s, "Inbox"), folder(&s, "Archive"));
+    assert!(s.run("mail.archive", &Value::Null).unwrap_err().to_string().contains("full"));
+    assert_eq!((folder(&s, "Inbox"), folder(&s, "Archive")), before, "it is in neither folder twice, and in one of them once");
+    assert!(s.rows.iter().any(|r| r.subject == subject) && s.undo.is_empty());
+
+    // The same when taking a move back: what cannot return stays where it is.
+    let mut s = Session::new();
+    s.now = now();
+    let inner = crate::sample::sample_store(s.now);
+    let full = inner.folder_by_kind(FolderKind::Inbox);
+    s.add_store(Box::new(Refusing { inner, full }));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    run(&mut s, "mail.archive", Value::Null);
+    let had = (folder(&s, "Inbox").0, folder(&s, "Archive").0);
+    assert!(s.run("edit.undo", &Value::Null).unwrap_err().to_string().contains("can no longer be undone"));
+    assert_eq!((folder(&s, "Inbox").0, folder(&s, "Archive").0), had);
 }
 
 #[test]

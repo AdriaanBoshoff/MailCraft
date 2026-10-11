@@ -223,6 +223,8 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::BadParams(format!("there is no data file {idx}")));
     }
     s.stores.remove(idx);
+    // The steps name data files by their place in the list, which has just changed.
+    s.undo.clear();
     if idx < s.folders.len() {
         s.folders.remove(idx);
     }

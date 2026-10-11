@@ -1,0 +1,103 @@
+//! Taking back what was done to a message: a change to it, a move, a deletion.
+
+use mailcraft_model::{FolderId, Item, ItemId, StoreError};
+
+use crate::{EngineError, Session};
+
+/// Steps that are kept. An older one is forgotten when a newer one comes.
+pub const MAX_STEPS: usize = 100;
+
+/// Something that was done to a message, with what is needed to take it back.
+#[derive(Clone, Debug)]
+pub enum Step {
+    /// The message was changed where it stands; `before` is what it was.
+    Edited { what: &'static str, store: usize, folder: FolderId, id: u64, before: Box<Item> },
+    /// The message `was` in `from` is now `id` in `to`.
+    Moved { what: &'static str, store: usize, from: FolderId, was: u64, to: FolderId, id: u64 },
+    /// The message `was` in `folder` was removed for good; `item` is all of it.
+    Removed { what: &'static str, store: usize, folder: FolderId, was: u64, item: Box<Item> },
+}
+
+impl Step {
+    /// The command that did it, as its label reads.
+    pub fn what(&self) -> &'static str {
+        match self {
+            Self::Edited { what, .. } | Self::Moved { what, .. } | Self::Removed { what, .. } => what,
+        }
+    }
+}
+
+impl Session {
+    /// Keep `step` as the newest thing that can be taken back.
+    pub fn did(&mut self, step: Step) {
+        if self.undo.len() >= MAX_STEPS {
+            self.undo.remove(0);
+        }
+        self.undo.push(step);
+    }
+
+    /// The message that was `was` in `folder` is `now`: older steps follow it.
+    fn renumber(&mut self, in_store: usize, in_folder: FolderId, was: u64, now: u64) {
+        for step in &mut self.undo {
+            match step {
+                Step::Edited { store, folder, id, .. } | Step::Moved { store, to: folder, id, .. }
+                    if *store == in_store && *folder == in_folder && *id == was =>
+                {
+                    *id = now;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Take back the newest step, and show the message it was done to. A step that can no
+    /// longer be taken back (its message or its folder is gone) is dropped, and says so.
+    pub fn undo_last(&mut self) -> Result<&'static str, EngineError> {
+        let step = self.undo.pop().ok_or_else(|| EngineError::Disabled("Undo".into()))?;
+        let what = step.what();
+        let gone = |e: StoreError| EngineError::Format(format!("{what} can no longer be undone: {e}"));
+        let (at_store, at_folder, at_id) = match step {
+            Step::Edited { store, folder, id, before, .. } => {
+                let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder).map_err(gone)?;
+                st.load(folder, ItemId(id)).map_err(gone)?;
+                st.update(folder, ItemId(id), *before).map_err(gone)?;
+                (store, folder, id)
+            }
+            Step::Moved { store, from, was, to, id, .. } => {
+                if self.folder_info(store, from).is_none() {
+                    return Err(gone(StoreError::NoFolder));
+                }
+                let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder).map_err(gone)?;
+                let item = st.remove(to, ItemId(id)).map_err(gone)?;
+                let back = match st.add(from, item.clone()) {
+                    Ok(back) => back.0,
+                    Err(e) => {
+                        // It stays where it was rather than be nowhere.
+                        st.add(to, item)?;
+                        return Err(gone(e));
+                    }
+                };
+                self.renumber(store, from, was, back);
+                (store, from, back)
+            }
+            Step::Removed { store, folder, was, item, .. } => {
+                let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder).map_err(gone)?;
+                let back = st.add(folder, *item).map_err(gone)?.0;
+                self.renumber(store, folder, was, back);
+                (store, folder, back)
+            }
+        };
+        self.refresh_folders(at_store);
+        if self.current != Some((at_store, at_folder)) {
+            self.select_folder(at_store, at_folder)?;
+        } else {
+            self.reload_rows()?;
+        }
+        // Shown as it is: looking at it again does not mark it read.
+        let st = self.stores.get_mut(at_store).ok_or(StoreError::NoFolder)?;
+        let item = st.load(at_folder, ItemId(at_id))?;
+        self.selected = Some(at_id);
+        self.open = Some(item);
+        Ok(what)
+    }
+}

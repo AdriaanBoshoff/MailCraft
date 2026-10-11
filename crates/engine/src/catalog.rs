@@ -86,6 +86,7 @@ pub const FEATURES: &[Feature] = &[
     f("Mail", "Search", "Scope", "Search All Mailboxes", ""),
     f("Mail", "Search", "Refine", "Refine by From, Subject, Attachments", ""),
     f("Mail", "Search", "Close", "Close Search", "search.clear"),
+    f("Mail", "Quick Access", "", "Undo", "edit.undo"),
     f("Mail", "Navigation", "", "Go to Folder", "folder.select"),
     f("Mail", "Navigation", "", "Switch Module", "nav.module"),
     f("Mail", "Navigation", "", "Next Item", "mail.next"),

@@ -16,6 +16,7 @@ pub mod sample;
 pub mod search;
 #[cfg(test)]
 mod tests;
+pub mod undo;
 
 use mailcraft_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
 use serde_json::{Value, json};
@@ -160,6 +161,8 @@ pub struct Session {
     pub now: i64,
     pub user_name: String,
     pub user_email: String,
+    /// What was done to messages and can be taken back, the newest last.
+    pub undo: Vec<undo::Step>,
 }
 
 impl Default for Session {
@@ -191,6 +194,7 @@ impl Session {
             now: mailcraft_model::time::from_unix(i64::try_from(unix).unwrap_or(0)),
             user_name: "Alex Morgan".to_string(),
             user_email: "alex.morgan@example.org".to_string(),
+            undo: Vec::new(),
         }
     }
 
@@ -390,20 +394,24 @@ impl Session {
     }
 
     /// Change the selected item in its store and refresh the views.
-    pub fn edit_selected(&mut self, edit: impl FnOnce(&mut Item)) -> Result<(), EngineError> {
+    /// `what` is the command's label, for taking it back.
+    pub fn edit_selected(&mut self, what: &'static str, edit: impl FnOnce(&mut Item)) -> Result<(), EngineError> {
         let (s, f) = self.current.ok_or(StoreError::NoFolder)?;
         let id = self.selected.ok_or(StoreError::NoItem)?;
         let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
         let mut item = store.load(f, ItemId(id))?;
+        let before = Box::new(item.clone());
         edit(&mut item);
         store.update(f, ItemId(id), item.clone())?;
         self.open = Some(item);
+        self.did(undo::Step::Edited { what, store: s, folder: f, id, before });
         self.refresh_folders(s);
         self.reload_rows()
     }
 
     /// Move the selected item to another folder of the same store; selection moves to the next row.
-    pub fn move_selected(&mut self, to: FolderId) -> Result<(), EngineError> {
+    /// `what` is the command's label, for taking it back.
+    pub fn move_selected(&mut self, what: &'static str, to: FolderId) -> Result<(), EngineError> {
         let (s, f) = self.current.ok_or(StoreError::NoFolder)?;
         let id = self.selected.ok_or(StoreError::NoItem)?;
         if to == f {
@@ -415,7 +423,17 @@ impl Session {
         let next = self.selected_index().and_then(|i| self.rows.get(i + 1).or_else(|| i.checked_sub(1).and_then(|p| self.rows.get(p)))).map(|r| r.id);
         let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
         let item = store.remove(f, ItemId(id))?;
-        store.add(to, item)?;
+        let moved = match store.add(to, item.clone()) {
+            Ok(moved) => moved.0,
+            Err(e) => {
+                // A message that could not be put where it was going goes back where it was.
+                store.add(f, item)?;
+                self.refresh_folders(s);
+                self.reload_rows()?;
+                return Err(e.into());
+            }
+        };
+        self.did(undo::Step::Moved { what, store: s, from: f, was: id, to, id: moved });
         self.selected = None;
         self.open = None;
         self.refresh_folders(s);
@@ -504,6 +522,7 @@ impl Session {
             })).collect::<Vec<_>>(),
             "search": self.search,
             "unread_only": self.unread_only,
+            "undo": self.undo.last().map(|step| step.what()),
             "composing": self.compose.as_ref().map(|d| json!({
                 "kind": d.kind, "to": d.to, "cc": d.cc, "subject": d.subject, "attachments": d.attachments.len(),
                 "cautions": outgoing::cautions(d).iter().map(|c| c.words()).collect::<Vec<_>>(),

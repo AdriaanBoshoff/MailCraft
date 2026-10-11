@@ -512,6 +512,9 @@ impl MailUi {
         if hit(ctrl, Key::P) && self.session.is_enabled("file.print") {
             run.push(("ui.printDialog", Value::Null));
         }
+        if !typing && hit(ctrl, Key::Z) {
+            run.push(("edit.undo", Value::Null));
+        }
         if !typing {
             for (key, id) in [
                 (Key::ArrowDown, "mail.next"),
