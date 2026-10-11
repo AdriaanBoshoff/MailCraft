@@ -241,6 +241,194 @@ fn sort_search_and_filter() {
 }
 
 #[test]
+fn search_understands_fields_states_dates_and_sizes() {
+    use crate::search::{fold, parse};
+    use mailcraft_model::{Flag, Summary, time};
+    assert_eq!(fold("Zöe ÅNGSTRÖM, Tomás; cafe\u{301} Ærø Łódź ß"), "zoe angstrom, tomas; cafe ærø łodz ß");
+
+    let at = |y, m, d, h| time::from_civil(y, m, d, h, 0, 0, 120);
+    let row = |subject: &str, from: &str, to: &str, time: i64| Summary {
+        subject: subject.into(),
+        from: from.into(),
+        to: to.into(),
+        time,
+        read: true,
+        importance: 1,
+        ..Summary::default()
+    };
+    let rows = [
+        Summary {
+            has_attachments: true,
+            size: 3 << 20,
+            categories: vec!["Red category".into()],
+            ..row("Launch checklist", "Priya Raman", "Alex Morgan", at(2026, 10, 5, 9))
+        },
+        Summary {
+            read: false,
+            flag: Flag::Flagged,
+            size: 900,
+            ..row("RE: Pricing page wording", "Tomás Okafor", "Alex Morgan; Zöe Ångström", at(2026, 10, 4, 23))
+        },
+        Summary {
+            importance: 2,
+            flag: Flag::Complete,
+            preview: "The lift is out until noon: use the stairs".into(),
+            size: 2048,
+            ..row("Lift maintenance", "Facilities Desk", "Everyone", at(2026, 9, 30, 8))
+        },
+        Summary { importance: 0, ..row("from: a subject with a colon, 10:30", "June Park", "Alex Morgan", 0) },
+    ];
+    // Dates are the user's days: here two hours east of UTC.
+    let find = |text: &str| -> Vec<usize> {
+        let query = parse(text, 120);
+        rows.iter().enumerate().filter(|(_, r)| query.matches(r)).map(|(n, _)| n).collect()
+    };
+    let all = vec![0, 1, 2, 3];
+    for (text, want) in [
+        ("", all.clone()),
+        ("   ", all.clone()),
+        // Words: all of them, in any field, in either case, with or without accents.
+        ("alex", vec![0, 1, 3]),
+        ("ALEX pricing", vec![1]),
+        ("tomas", vec![1]),
+        ("Tomás", vec![1]),
+        ("zoe angstrom", vec![1]),
+        ("stairs", vec![2]),
+        ("red", vec![0]),
+        ("\"page wording\"", vec![1]),
+        ("\"wording page\"", vec![]),
+        ("page wording", vec![1]),
+        // Leaving out, and either side.
+        ("alex -pricing", vec![0, 3]),
+        ("alex NOT pricing", vec![0, 3]),
+        ("lift OR launch", vec![0, 2]),
+        ("lift OR", vec![2]),
+        ("OR", all.clone()),
+        ("alex AND pricing", vec![1]),
+        ("\"OR\"", vec![0, 1, 3]),
+        ("or", vec![0, 1, 3]),
+        ("-", vec![]),
+        // Fields.
+        ("from:priya", vec![0]),
+        ("from:\"facilities desk\"", vec![2]),
+        ("to:alex", vec![0, 1, 3]),
+        ("to:alex -from:june", vec![0, 1]),
+        ("subject:lift", vec![2]),
+        ("subject:stairs", vec![]),
+        ("category:red", vec![0]),
+        ("-category:red", vec![1, 2, 3]),
+        // What a message is.
+        ("has:attachment", vec![0]),
+        ("hasattachments:yes", vec![0]),
+        ("hasattachments:no", vec![1, 2, 3]),
+        ("is:unread", vec![1]),
+        ("read:no", vec![1]),
+        ("is:read", vec![0, 2, 3]),
+        ("is:flagged", vec![1]),
+        ("isflagged:yes", vec![1]),
+        ("is:complete", vec![2]),
+        ("is:important", vec![2]),
+        ("importance:high", vec![2]),
+        ("importance:low", vec![3]),
+        ("IS:Unread", vec![1]),
+        // Days, months and years; a message with no time is on none of them.
+        ("on:2026-10-05", vec![0]),
+        ("received:2026-10-04", vec![1]),
+        ("on:2026-10", vec![0, 1]),
+        ("on:2026", vec![0, 1, 2]),
+        ("before:2026-10-05", vec![1, 2]),
+        ("after:2026-10-04", vec![0]),
+        ("after:2026-09", vec![0, 1]),
+        ("before:2026", vec![]),
+        ("after:2026-12", vec![]),
+        ("-on:2026", vec![3]),
+        // Sizes.
+        ("size:>2mb", vec![0]),
+        ("size:<1kb", vec![1, 3]),
+        ("size:1kb", vec![0, 2]),
+        ("size:>=2048", vec![0]),
+        // What is not understood is looked for as it stands: nothing is found, not everything.
+        ("colour:blue", vec![]),
+        ("is:purple", vec![]),
+        ("on:someday", vec![]),
+        ("on:2026-13", vec![]),
+        ("on:2026-10-32", vec![]),
+        ("size:big", vec![]),
+        ("size:>99999999999999999999mb", vec![]),
+        ("from:", vec![3]),
+        ("10:30", vec![3]),
+        ("\"from: a subject\"", vec![3]),
+    ] {
+        assert_eq!(find(text), want, "{text:?}");
+    }
+
+    // Through the command, on the sample mailbox.
+    let mut s = session();
+    let found = run(&mut s, "search.query", json!({"text": "from:priya has:attachment"}));
+    assert_eq!(found, json!({"count": 1}));
+    assert_eq!((s.rows[0].subject.as_str(), s.status.as_str()), ("Launch checklist: three items left", "1 item found"));
+    assert_eq!(run(&mut s, "search.query", json!({"text": "from:tomas OR from:helena"}))["count"], json!(s.rows.len()));
+    assert!(s.rows.len() >= 2 && s.rows.iter().all(|r| r.from.starts_with("Tomás") || r.from.starts_with("Helena")));
+    run(&mut s, "search.query", json!({"text": "no such words anywhere"}));
+    assert_eq!((s.rows.len(), s.status.as_str()), (0, "Nothing found"));
+    run(&mut s, "search.clear", Value::Null);
+    assert_eq!(s.rows.len(), 9);
+}
+
+#[test]
+fn hostile_queries_never_panic() {
+    use crate::search::parse;
+    let row = mailcraft_model::Summary { subject: "é\u{301}\u{0}".into(), time: i64::MAX, size: u32::MAX, ..Default::default() };
+    let pieces = [
+        "\"",
+        "-",
+        ":",
+        "--",
+        "OR",
+        "NOT",
+        "AND",
+        "on:",
+        "9999-12-31",
+        "0000",
+        "size:",
+        ">",
+        "<=",
+        "é",
+        "\u{0}",
+        "\u{202e}",
+        "\u{17f}",
+        "\u{c0}",
+        "\u{180}",
+        "-\"",
+        "a:b:c",
+        "from:\"",
+        "1601",
+        "99999999999999999999",
+    ];
+    for a in pieces {
+        for b in pieces {
+            for text in [
+                format!("{a}{b}"),
+                format!("{a} {b}"),
+                format!("on:{a}{b}"),
+                format!("size:{a}{b}"),
+                format!("-{a}:{b}"),
+                format!("before:{a}-{b} after:{b}-{a}"),
+            ] {
+                for tz in [0, i32::MIN, i32::MAX] {
+                    let _ = parse(&text, tz).matches(&row);
+                }
+            }
+        }
+    }
+    // Far more clauses than are kept: those past the cap are left out, and it still answers.
+    let long = "word ".repeat(10_000);
+    assert!(parse(&long, 0).matches(&mailcraft_model::Summary { subject: "a word".into(), ..Default::default() }));
+    let _ = parse(&"\"".repeat(100_001), 0);
+    let _ = parse(&"OR ".repeat(50_000), 0);
+}
+
+#[test]
 fn folders_can_be_made_renamed_and_deleted_but_not_the_inbox() {
     let mut s = session();
     assert!(!s.is_enabled("folder.rename") && !s.is_enabled("folder.delete"), "the Inbox is not the user's to rename or delete");

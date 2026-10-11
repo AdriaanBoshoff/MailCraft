@@ -74,7 +74,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "Ctrl+E",
-            params: r#"{"text": words to find in the current folder}"#,
+            params: r#"{"text": what to find in the current folder: words, "quoted words", -word, OR, from: to: subject: category: has:attachment is:unread is:flagged is:important before: after: on:2026-10-05 size:>2mb}; returns {"count"}"#,
             enabled: has_folder,
             run: search,
         },
@@ -141,7 +141,16 @@ fn filter_unread(s: &mut Session, p: &Value) -> CmdResult {
 fn search(s: &mut Session, p: &Value) -> CmdResult {
     s.search = p_str(p, "text").unwrap_or("").chars().take(MAX_QUERY).collect();
     s.reload_rows()?;
-    ok()
+    if s.search.trim().is_empty() {
+        return ok();
+    }
+    let count = s.rows.len();
+    s.status = match count {
+        0 => "Nothing found".to_string(),
+        1 => "1 item found".to_string(),
+        n => format!("{n} items found"),
+    };
+    Ok(serde_json::json!({ "count": count }))
 }
 
 fn clear_search(s: &mut Session, _: &Value) -> CmdResult {

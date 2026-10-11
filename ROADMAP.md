@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 15 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 16 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 131, all passing |
+| Tests | 133, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -169,3 +169,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   (2.3.6) that picture is shown, at its full quality, in place of the copy kept for showing; and an
   object that cannot be shown is named with what it calls itself (2.3.8) and not left as a blank
   frame. The sample receipt carries such an object, a permit card drawn in code.
+- **2026-10-11** - M2.13: search, the first of the pass over what is already built. The search
+  box matched one run of letters; it now understands words (all of them), quoted words, `-word`
+  and `NOT`, `OR`, the fields `from:` `to:` `subject:` `category:`, and what a message is:
+  `has:attachment`, `is:unread`, `is:flagged`, `is:important`, `before:` `after:` `on:` with a day,
+  a month or a year, and `size:>2mb`; Outlook's own keywords (`hasattachments:yes`, `read:no`,
+  `isflagged:yes`, `received:`) mean the same. Beyond Outlook: letters match without their accents
+  ("zoe" finds "Zöe"), categories are searched with the rest, nothing needs an index, a keyword
+  that is not understood is looked for as the text it is (so a query never fails and never quietly
+  finds everything), and the command answers with the count. The owner asked (2026-10-11) that
+  every feature, those already built too, be made better than the one it follows where it can be;
+  the pass goes on with links, saving attachments and print.

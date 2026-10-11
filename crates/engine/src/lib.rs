@@ -10,6 +10,7 @@ pub mod io;
 pub mod pictures;
 pub mod print;
 pub mod sample;
+pub mod search;
 #[cfg(test)]
 mod tests;
 
@@ -336,9 +337,9 @@ impl Session {
                 return Err(e.into());
             }
         };
-        let needle = self.search.trim().to_lowercase();
-        if !needle.is_empty() {
-            rows.retain(|r| [&r.subject, &r.from, &r.to, &r.preview].iter().any(|t| t.to_lowercase().contains(&needle)));
+        let query = search::parse(&self.search, self.tz_offset_min);
+        if !query.is_empty() {
+            rows.retain(|r| query.matches(r));
         }
         if self.unread_only {
             rows.retain(|r| !r.read);

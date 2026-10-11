@@ -548,7 +548,11 @@ impl MailUi {
             .text_color(t.title_text)
             .font(font(12.5))
             .desired_width(edit_rect.width());
-        ui.put(edit_rect, edit);
+        ui.put(edit_rect, edit).on_hover_text(
+            "Words are all looked for; \"quoted words\" together; -word leaves messages out; OR takes either.\n\
+             from:  to:  subject:  category:  has:attachment  is:unread  is:flagged  is:important\n\
+             before:2026-10-05  after:2026-09  on:2026  size:>2mb",
+        );
         if self.search != before {
             if self.search.trim().is_empty() {
                 self.act("search.clear", Value::Null);
