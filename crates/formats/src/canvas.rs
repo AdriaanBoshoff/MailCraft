@@ -186,3 +186,50 @@ pub(crate) fn arc(centre: Point, radii: Point, from: f32, to: f32, steps: usize)
         })
         .collect()
 }
+
+/// What a shape is filled with.
+#[derive(Clone, Copy)]
+pub(crate) enum Brush {
+    Null,
+    Solid(Rgb),
+    /// A pattern or a hatching: a shape filled with it is not drawn.
+    Unknown,
+}
+
+/// The longer side of a drawing that says nothing of how large it is.
+const UNSIZED: f32 = 600.0;
+
+/// How many pixels a drawing's page is: twice what it is shown at (`want`), so that it stays
+/// sharp on a dense screen and on paper; else the size it says it has (`natural`); else its
+/// `shape` at a size that can be looked at.
+pub(crate) fn page_size(want: Option<(u32, u32)>, natural: Option<Point>, shape: Point) -> Option<(usize, usize)> {
+    let (w, h) = match (want, natural) {
+        (Some((w, h)), _) if w > 0 && h > 0 => (w.min(4096) as f32 * 2.0, h.min(4096) as f32 * 2.0),
+        (_, Some(natural)) => natural,
+        _ => {
+            let (w, h) = (shape.0.abs(), shape.1.abs());
+            (w * UNSIZED / w.max(h), h * UNSIZED / w.max(h))
+        }
+    };
+    if w.is_nan() || h.is_nan() || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let fit = (MAX_SIDE as f32 / w.max(h)).min(1.0);
+    let side = |v: f32| ((v * fit).round() as usize).clamp(1, MAX_SIDE);
+    Some((side(w), side(h)))
+}
+
+/// Steps round an ellipse that is this large on the page.
+pub(crate) fn steps(radii: Point) -> usize {
+    (radii.0.abs().max(radii.1.abs()) as usize).clamp(16, 200)
+}
+
+/// A box (left, top, right, bottom) whose corners are cut from an ellipse of these radii.
+pub(crate) fn rounded((l, t, r, b): (f32, f32, f32, f32), radii: Point, steps: usize) -> Vec<Point> {
+    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    let mut ring = arc((r - radii.0, t + radii.1), radii, 0.0, FRAC_PI_2, steps);
+    ring.extend(arc((l + radii.0, t + radii.1), radii, FRAC_PI_2, PI, steps));
+    ring.extend(arc((l + radii.0, b - radii.1), radii, PI, PI + FRAC_PI_2, steps));
+    ring.extend(arc((r - radii.0, b - radii.1), radii, PI + FRAC_PI_2, TAU, steps));
+    ring
+}

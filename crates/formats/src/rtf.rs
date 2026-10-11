@@ -495,13 +495,14 @@ impl Builder {
         };
         let extent = (side(pict.goal.0, pict.scale.0), side(pict.goal.1, pict.scale.1));
         let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes);
+        let want = Some((u32::from(extent.0), u32::from(extent.1)));
         let file = match pict.kind {
             _ if !whole => None,
             Kind::Unread => None,
             Kind::File => Some(pict.bytes),
             Kind::Bitmap => crate::metafile::dib_file(&pict.bytes),
-            Kind::Wmf => crate::metafile::wmf_picture(&pict.bytes, Some((u32::from(extent.0), u32::from(extent.1)))),
-            Kind::Emf => crate::metafile::emf_bitmap(&pict.bytes),
+            Kind::Wmf => crate::metafile::wmf_picture(&pict.bytes, want),
+            Kind::Emf => crate::metafile::emf_picture(&pict.bytes, want),
         };
         let place = file.filter(|file| file.len() <= room).and_then(|file| match self.written.iter().position(|kept| **kept == *file) {
             Some(same) => Some(same),

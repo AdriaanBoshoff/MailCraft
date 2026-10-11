@@ -1,8 +1,8 @@
 //! Pictures in the older Windows forms an RTF body and an attachment's rendering are kept in: a
 //! bitmap without a file's header ([MS-WMF] 2.2.2.9, DeviceIndependentBitmap), and a metafile
 //! whose only drawing is one such bitmap ([MS-WMF], [MS-EMF]). Each becomes the bytes of a BMP
-//! file, undecoded. A Windows metafile that is a drawing of lines and filled shapes is drawn
-//! (`wmf`); one that draws anything else is not read: half a picture is worse than its place.
+//! file, undecoded. A metafile that is a drawing of lines and filled shapes is drawn (`wmf`,
+//! `emf`); one that draws anything else is not read: half a picture is worse than its place.
 
 /// Records one metafile is searched through.
 const MAX_RECORDS: usize = 4096;
@@ -170,4 +170,10 @@ pub fn emf_bitmap(data: &[u8]) -> Option<Vec<u8>> {
         at = at.checked_add(size)?;
     }
     None
+}
+
+/// An enhanced metafile → a picture file: the one bitmap it holds, as it is; else its drawing,
+/// made for showing at `want` pixels when that is known.
+pub fn emf_picture(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u8>> {
+    emf_bitmap(data).or_else(|| crate::emf::emf_drawing(data, want))
 }

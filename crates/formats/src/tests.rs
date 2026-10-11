@@ -1230,3 +1230,206 @@ fn rtf_shows_a_metafile_that_is_a_drawing() {
     assert_eq!(bmp_size(&doc.written[0]), (80, 40));
     assert_eq!(pixel(&doc.written[0], 40, 20), RED);
 }
+
+/// The long numbers of a record.
+fn longs(list: &[i32]) -> Vec<u8> {
+    list.iter().flat_map(|n| n.to_le_bytes()).collect()
+}
+
+/// An enhanced metafile of these records (what each is, and what follows its size): a picture
+/// a hundred pixels each way on a screen of 96 to the inch.
+fn emf_of(records: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut file = vec![0u8; 88];
+    for (at, n) in [(0, 1), (4, 88), (16, 99), (20, 99), (32, 2646), (36, 2646), (72, 1920), (76, 1080), (80, 508), (84, 286)] {
+        file[at..at + 4].copy_from_slice(&i32::to_le_bytes(n));
+    }
+    file[40..44].copy_from_slice(b" EMF");
+    for (kind, body) in records.iter().chain(&[(14u32, longs(&[0, 0, 20]))]) {
+        file.extend(kind.to_le_bytes());
+        file.extend(u32::try_from(8 + body.len()).unwrap().to_le_bytes());
+        file.extend(body);
+    }
+    file
+}
+
+/// Records that make a red brush and select it, and select the pen that draws nothing.
+fn red_brush() -> Vec<(u32, Vec<u8>)> {
+    let mut brush = longs(&[1, 0]);
+    brush.extend([255, 0, 0, 0, 0, 0, 0, 0]);
+    vec![(39, brush), (37, longs(&[1])), (37, 0x8000_0008u32.to_le_bytes().to_vec())]
+}
+
+#[test]
+fn an_enhanced_metafile_that_is_a_drawing_is_drawn() {
+    use crate::metafile::emf_picture;
+    let draw = |more: Vec<(u32, Vec<u8>)>, want| {
+        let mut records = red_brush();
+        records.extend(more);
+        emf_picture(&emf_of(&records), want)
+    };
+    let at = |bmp: &[u8], points: [(usize, usize); 2]| points.map(|(x, y)| pixel(bmp, x, y));
+    // A box, at twice the size it is shown at; with no size asked for, at the frame's own.
+    let bmp = draw(vec![(43, longs(&[20, 20, 80, 80]))], Some((50, 50))).unwrap();
+    assert_eq!(bmp_size(&bmp), (100, 100));
+    assert_eq!(at(&bmp, [(50, 50), (10, 10)]), [RED, WHITE]);
+    assert_eq!(bmp_size(&draw(vec![(43, longs(&[20, 20, 80, 80]))], None).unwrap()), (100, 100));
+
+    // A path: a triangle that is closed and filled.
+    let path = vec![
+        (59, Vec::new()),
+        (27, longs(&[10, 10])),
+        (54, longs(&[90, 10])),
+        (54, longs(&[50, 90])),
+        (61, Vec::new()),
+        (60, Vec::new()),
+        (62, longs(&[0, 0, 99, 99])),
+    ];
+    assert_eq!(at(&draw(path.clone(), Some((50, 50))).unwrap(), [(50, 30), (12, 80)]), [RED, WHITE]);
+    // A path that is only begun draws nothing.
+    assert_eq!(draw(path[..6].to_vec(), None), None);
+
+    // The world turned: half the size, and moved to the middle.
+    let turn: Vec<u8> = [0.5f32, 0.0, 0.0, 0.5, 50.0, 50.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let bmp = draw(vec![(35, turn.clone()), (43, longs(&[0, 0, 100, 100]))], Some((50, 50))).unwrap();
+    assert_eq!(at(&bmp, [(75, 75), (25, 25)]), [RED, WHITE]);
+    // The same turn put after one that was there, and a state put back: the box is whole again.
+    let mut after = turn.clone();
+    after.extend(longs(&[3]));
+    let bmp = draw(vec![(33, Vec::new()), (36, after), (34, longs(&[-1])), (43, longs(&[0, 0, 100, 100]))], Some((50, 50))).unwrap();
+    assert_eq!(at(&bmp, [(75, 75), (25, 25)]), [RED, RED]);
+
+    // A window of a thousand units onto a hundred of the device's.
+    let window = vec![(17, longs(&[8])), (9, longs(&[1000, 1000])), (11, longs(&[100, 100])), (43, longs(&[200, 200, 800, 800]))];
+    assert_eq!(at(&draw(window, Some((50, 50))).unwrap(), [(50, 50), (10, 10)]), [RED, WHITE]);
+
+    // Points of short numbers: a polygon, and a curve that runs on from where the pen is.
+    let mut polygon = longs(&[0, 0, 99, 99, 3]);
+    polygon.extend(words(&[10, 10, 90, 10, 50, 90]));
+    assert_eq!(at(&draw(vec![(86, polygon)], Some((50, 50))).unwrap(), [(50, 30), (12, 80)]), [RED, WHITE]);
+    let mut curve = longs(&[0, 0, 99, 99, 3]);
+    curve.extend(words(&[10, 90, 90, 90, 90, 10]));
+    let bmp = draw(vec![(37, 0x8000_0007u32.to_le_bytes().to_vec()), (27, longs(&[10, 10])), (88, curve)], Some((50, 50))).unwrap();
+    // It hangs down from both ends to seventy in the middle.
+    assert!(pixel(&bmp, 50, 70)[0] < 200 && pixel(&bmp, 50, 30) == WHITE && pixel(&bmp, 50, 85) == WHITE);
+
+    // A path that is one box is cut to; a region of no size brings the whole page back.
+    let cut = vec![(59, Vec::new()), (43, longs(&[0, 0, 50, 50])), (60, Vec::new()), (67, longs(&[5])), (43, longs(&[0, 0, 100, 100]))];
+    assert_eq!(at(&draw(cut.clone(), Some((50, 50))).unwrap(), [(25, 25), (75, 75)]), [RED, WHITE]);
+    let mut back = cut;
+    back.extend([(75, longs(&[0, 5])), (43, longs(&[0, 0, 100, 100]))]);
+    assert_eq!(at(&draw(back, Some((50, 50))).unwrap(), [(25, 25), (75, 75)]), [RED, RED]);
+
+    // A pie from the right of its ellipse round to the bottom, against the clock and with it.
+    let pie = |way: i32| draw(vec![(57, longs(&[way])), (47, longs(&[0, 0, 100, 100, 100, 50, 50, 100]))], Some((50, 50))).unwrap();
+    assert_eq!(at(&pie(1), [(30, 30), (70, 70)]), [RED, WHITE]);
+    assert_eq!(at(&pie(2), [(30, 30), (70, 70)]), [WHITE, RED]);
+}
+
+#[test]
+fn an_enhanced_metafile_that_cannot_be_drawn_whole_is_not_drawn() {
+    use crate::metafile::emf_picture;
+    let with = |extra: (u32, Vec<u8>)| {
+        let mut records = red_brush();
+        records.extend([(43, longs(&[20, 20, 80, 80])), extra]);
+        emf_picture(&emf_of(&records), None)
+    };
+    assert!(with((18, longs(&[1]))).is_some());
+    // Text, a bitmap beside the drawing, a region filled, a pen that inverts, a mapping mode in
+    // parts of a millimetre, a box cut out, a drawing from right to left.
+    assert_eq!(with((84, vec![0; 68])), None);
+    assert_eq!(with((81, vec![0; 72])), None);
+    assert_eq!(with((71, vec![0; 24])), None);
+    assert_eq!(with((20, longs(&[6]))), None);
+    assert_eq!(with((17, longs(&[2]))), None);
+    assert_eq!(with((29, longs(&[0, 0, 10, 10]))), None);
+    assert_eq!(with((115, longs(&[1]))), None);
+    // A hatched brush that is filled with; an object that was never made; a state put back
+    // that was never saved; a path that is cut to and is no box.
+    let mut hatched = longs(&[2, 2]);
+    hatched.extend([0; 8]);
+    assert_eq!(emf_picture(&emf_of(&[(39, hatched), (37, longs(&[2])), (43, longs(&[20, 20, 80, 80]))]), None), None);
+    assert_eq!(with((37, longs(&[9]))), None);
+    assert_eq!(with((34, longs(&[-1]))), None);
+    assert_eq!(with((67, longs(&[5]))), None);
+    // Nothing drawn: only what is said beside the drawing, as in a file whose drawing is all
+    // in its comments. No frame and no box that was drawn in.
+    assert_eq!(emf_picture(&emf_of(&[(70, longs(&[4, 0x2B46_4D45]))]), None), None);
+    let mut empty = emf_of(&[(43, longs(&[20, 20, 80, 80]))]);
+    empty[8..40].copy_from_slice(&longs(&[0, 0, -1, -1, 0, 0, 0, 0]));
+    assert_eq!(emf_picture(&empty, None), None);
+}
+
+#[test]
+fn hostile_enhanced_drawings_never_panic() {
+    use crate::metafile::emf_picture;
+    let mut records = red_brush();
+    let turn: Vec<u8> = [0.9f32, 0.1, -0.1, 0.9, 5.0, 5.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let mut pen = longs(&[2, 0, 3, 0]);
+    pen.extend([0, 0, 255, 0]);
+    let mut wide = longs(&[3, 0, 0, 0, 0, 0x0001_0000, 4, 0]);
+    wide.extend([0, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut many = longs(&[0, 0, 99, 99, 2, 6, 3, 3]);
+    many.extend(longs(&[10, 10, 90, 10, 50, 90, 20, 20, 80, 20, 50, 80]));
+    let mut region = longs(&[48, 1, 32, 1, 1, 16, 0, 0, 90, 90]);
+    region.extend(longs(&[5, 5, 90, 90]));
+    records.extend([
+        (38, pen),
+        (37, longs(&[2])),
+        (95, wide),
+        (37, longs(&[3])),
+        (33, Vec::new()),
+        (75, region),
+        (30, longs(&[10, 10, 90, 90])),
+        (8, many.clone()),
+        (7, many),
+        (36, turn.iter().copied().chain(longs(&[2])).collect()),
+        (42, longs(&[20, 20, 80, 80])),
+        (44, longs(&[20, 20, 80, 80, 10, 10])),
+        (45, longs(&[0, 0, 100, 100, 50, 0, 0, 50])),
+        (46, longs(&[0, 0, 100, 100, 50, 0, 0, 50])),
+        (55, longs(&[0, 0, 100, 100, 50, 0, 0, 50])),
+        (59, Vec::new()),
+        (27, longs(&[10, 10])),
+        (6, longs(&[0, 0, 99, 99, 2, 90, 10, 50, 90])),
+        (5, longs(&[0, 0, 99, 99, 3, 40, 80, 20, 60, 10, 10])),
+        (61, Vec::new()),
+        (60, Vec::new()),
+        (63, longs(&[0, 0, 99, 99])),
+        (15, longs(&[30, 30, 0x00FF_0000])),
+        (34, longs(&[1])),
+        (40, longs(&[1])),
+    ]);
+    let file = emf_of(&records);
+    assert!(emf_picture(&file, Some((40, 40))).is_some());
+    // Cut short anywhere, and with any one byte turned over or made the largest it can be.
+    for end in 0..file.len() {
+        let _ = emf_picture(&file[..end], Some((24, 24)));
+        for with in [file[end] ^ 0xFF, 0xFF, 0x80, 0] {
+            let mut changed = file.clone();
+            changed[end] = with;
+            for bmp in [emf_picture(&changed, Some((24, 24))), emf_picture(&changed, None)].into_iter().flatten() {
+                let (w, h) = bmp_size(&bmp);
+                assert!(w <= 800 && h <= 800);
+            }
+        }
+    }
+    // More points than a record holds; more polygons than there are; an object far out.
+    assert_eq!(emf_picture(&emf_of(&[(3, longs(&[0, 0, 99, 99, -1, 0, 0]))]), None), None);
+    assert_eq!(emf_picture(&emf_of(&[(8, longs(&[0, 0, 99, 99, -1, 3, 3]))]), None), None);
+    assert_eq!(emf_picture(&emf_of(&[(39, longs(&[i32::MAX, 0, 0, 0])), (43, longs(&[20, 20, 80, 80]))]), None), None);
+    // A turn that is no number.
+    let nan: Vec<u8> = [f32::NAN, 0.0, 0.0, 1.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    assert_eq!(emf_picture(&emf_of(&[(35, nan), (43, longs(&[20, 20, 80, 80]))]), None), None);
+}
+
+#[test]
+fn rtf_shows_an_enhanced_metafile_that_is_a_drawing() {
+    let mut records = red_brush();
+    records.push((43, longs(&[20, 20, 80, 80])));
+    let rtf = format!("{{\\rtf1\\ansi\\pard a{{\\pict\\emfblip\\picwgoal600\\pichgoal600 {}}}b\\par}}", hexed(&emf_of(&records)));
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    let run = paras(&doc)[0].runs.iter().find(|r| r.picture.is_some()).unwrap();
+    assert_eq!((run.picture.clone(), run.extent), (Some(Picture::Inline(Some(0))), (40, 40)));
+    assert_eq!(bmp_size(&doc.written[0]), (80, 80));
+    assert_eq!(pixel(&doc.written[0], 40, 40), RED);
+}

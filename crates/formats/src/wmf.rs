@@ -3,9 +3,9 @@
 //! asks for anything this does not draw (text, bitmaps, patterned brushes, regions) is not
 //! drawn at all: half a picture is worse than its place.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::TAU;
 
-use crate::canvas::{Canvas, MAX_SIDE, Point, Rgb, arc};
+use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
 use crate::metafile::{size_at, u16_at, u32_at};
 
 /// Records one drawing is read through.
@@ -16,8 +16,6 @@ const MAX_POINTS: usize = 500_000;
 const MAX_OBJECTS: usize = 4096;
 /// States that may be saved one on another.
 const MAX_SAVED: usize = 64;
-/// The longer side of a drawing that says nothing of how large it is.
-const UNSIZED: f32 = 600.0;
 
 /// Records that change nothing that is drawn here: colours and ways of text and of bitmaps,
 /// the palette, and what is said to a printer ([MS-WMF] 2.3.5, 2.3.6).
@@ -36,14 +34,6 @@ fn colour_at(data: &[u8], at: usize) -> Option<Rgb> {
         [r, g, b, flag] if flag != 1 => Some([r, g, b]),
         _ => None,
     }
-}
-
-#[derive(Clone, Copy)]
-enum Brush {
-    Null,
-    Solid(Rgb),
-    /// A pattern or a hatching: a shape filled with it is not drawn.
-    Unknown,
 }
 
 /// A pen is its width in the drawing's own units and its colour; none draws no line.
@@ -96,30 +86,6 @@ struct Page {
     drew: bool,
 }
 
-/// How many pixels the page is: twice what it is shown at, so that it stays sharp on a dense
-/// screen and on paper; else its own size; else its shape at a size that can be looked at.
-fn size(want: Option<(u32, u32)>, natural: Option<Point>, extent: Point) -> Option<(usize, usize)> {
-    let (w, h) = match (want, natural) {
-        (Some((w, h)), _) if w > 0 && h > 0 => (w.min(4096) as f32 * 2.0, h.min(4096) as f32 * 2.0),
-        (_, Some(natural)) => natural,
-        _ => {
-            let (w, h) = (extent.0.abs(), extent.1.abs());
-            (w * UNSIZED / w.max(h), h * UNSIZED / w.max(h))
-        }
-    };
-    if w.is_nan() || h.is_nan() || w <= 0.0 || h <= 0.0 {
-        return None;
-    }
-    let fit = (MAX_SIDE as f32 / w.max(h)).min(1.0);
-    let side = |v: f32| ((v * fit).round() as usize).clamp(1, MAX_SIDE);
-    Some((side(w), side(h)))
-}
-
-/// Steps round an ellipse of these radii.
-fn steps(radii: Point) -> usize {
-    (radii.0.max(radii.1) as usize).clamp(16, 200)
-}
-
 impl Page {
     /// The page's pixels, made when the first thing is drawn: by then the window is known.
     fn ready(&mut self) -> Option<Map> {
@@ -128,7 +94,7 @@ impl Page {
             return None;
         }
         if self.canvas.is_none() {
-            let (w, h) = size(self.want, self.natural, (ex, ey))?;
+            let (w, h) = page_size(self.want, self.natural, (ex, ey))?;
             self.canvas = Canvas::new(w, h);
         }
         let canvas = self.canvas.as_mut()?;
@@ -297,11 +263,7 @@ impl Page {
                 let map = self.ready()?;
                 let (l, t, r, b) = Self::bounds(record, 2, map)?;
                 let radii = ((word(1)? * map.scale.0).abs().min(r - l) / 2.0, (word(0)? * map.scale.1).abs().min(b - t) / 2.0);
-                let n = steps(radii);
-                let mut ring = arc((r - radii.0, t + radii.1), radii, 0.0, FRAC_PI_2, n);
-                ring.extend(arc((l + radii.0, t + radii.1), radii, FRAC_PI_2, PI, n));
-                ring.extend(arc((l + radii.0, b - radii.1), radii, PI, PI + FRAC_PI_2, n));
-                ring.extend(arc((r - radii.0, b - radii.1), radii, PI + FRAC_PI_2, TAU, n));
+                let ring = rounded((l, t, r, b), radii, steps(radii));
                 self.count(ring.len())?;
                 self.shape(&[ring], true, true, map)?;
             }

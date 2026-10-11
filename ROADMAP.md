@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 25 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 26 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 148, all passing |
+| Tests | 152, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -60,8 +60,9 @@
     the best picture it has.
 13. Done: a pass over what is already built, to make each feature better than the one it
     follows (M2.13 to M2.21).
-14. Done: Windows metafiles that are drawings of lines and filled shapes are drawn.
-15. Next: enhanced metafiles that are drawings; then text in metafiles.
+14. Done: Windows metafiles and enhanced metafiles that are drawings of lines, curves and
+    filled shapes are drawn.
+15. Next: text in metafiles; then an icon beside an attachment named in the text.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -273,3 +274,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   held to 800 pixels a side, 50,000 records, 500,000 points and a fixed amount of work, so a
   hostile one costs little. The sample receipt has a small map drawn this way. Not yet: text in
   metafiles, and enhanced metafiles (EMF) that are drawings.
+- **2026-10-11** - M2.23: enhanced metafiles that are drawings ([MS-EMF] 2.3.5). The newer kind
+  of metafile, which is what Office writes for a chart or a shape, is drawn on the same page of
+  pixels as the older: lines, polylines, polygons and sets of them with long or short numbers,
+  curves, rectangles, rounded ones, ellipses, arcs, pies and chords either way round, single
+  points; paths that are begun, closed, filled and drawn along; pens (also the wide ones
+  measured in the drawing's units), solid brushes and the ones every device has; the world's
+  turn set and added to, the window onto the viewport, states saved and put back; clipping to a
+  box, to a path that is a box and to a region of one box. The page is the picture's frame, so
+  what a file draws outside it is cut off as it should be. As with the older kind, edges are
+  smoothed and the page is made at twice the size shown; a metafile that asks for anything not
+  drawn (text, bitmaps, patterned brushes and pens, regions of many boxes, a mapping mode in
+  parts of an inch, right-to-left layout) keeps its place, and so does one whose drawing is all
+  in its comments. Not yet: text in metafiles.

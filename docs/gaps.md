@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 15 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 16 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -26,12 +26,12 @@
    Message bodies). RTF bodies
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
    styles, fonts by name, colours, alignment, indents, links, pictures written into the body (PNG,
-   JPEG, bitmaps, metafiles that hold only one bitmap, and Windows metafiles that are drawings of
-   lines and filled shapes, [MS-WMF] 2.3.3), attachments in their places in the text
+   JPEG, bitmaps, metafiles that hold only one bitmap, and metafiles of either kind that are drawings of
+   lines, curves and filled shapes, [MS-WMF] 2.3.3 and [MS-EMF] 2.3.5), attachments in their places in the text
    (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object by the best picture it has, [MS-OLEDS]
    2.3.4 and 2.3.6, any other by name),
-   and tables with each cell's own lines, fill, place and merge down; not yet: enhanced metafiles that are
-   drawings and any metafile with text in it (a placeholder), an icon beside an
+   and tables with each cell's own lines, fill, place and merge down; not yet: a metafile with text, a bitmap beside its drawing or a patterned brush in it
+   (a placeholder), an icon beside an
    attachment named in the text, `\bin` picture data, list numbering beyond the text the writer left, nested tables,
    cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
@@ -73,6 +73,7 @@
 
 ## Revision history
 
+- 16 · 2026-10-11 — enhanced metafiles that are drawings are drawn (item 3).
 - 15 · 2026-10-11 — Windows metafiles that are drawings are drawn (item 3).
 - 14 · 2026-10-11 — attached objects of other programs are kept through `.msg` and shown by their own pictures (item 3).
 - 13 · 2026-10-11 — RTF bodies show attachments in their places, bitmaps and metafile bitmaps (item 3).
