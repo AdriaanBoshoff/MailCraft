@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 6 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 7 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -13,12 +13,13 @@
    JPEG, GIF first frame, BMP) at the size the body asks for. Not yet: pictures written into the
    body itself (`data:` addresses) and other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a
    labelled placeholder; text running beside a picture (a picture always stands on a row of its
-   own); animation; a backing for see-through pictures on the dark pane; style sheets (`<style>`
-   rules and classes are ignored; only inline styles count); a box of the asked size for a picture
-   that is not loaded; backgrounds on rows and on blocks other than cells; `cellpadding` and
-   `cellspacing`; percentage widths under 100; fonts by name; and opening a link (its address is
-   shown on hover). Tables keep their width, their place and their cell fills, as Outlook shows
-   them ([ui-parity.md](ui-parity.md), Message bodies). RTF bodies
+   own); animation; a backing for see-through pictures on the dark pane; backgrounds on blocks
+   other than cells and rows; borders set in styles; cells that span rows; padding that differs
+   left from right; fonts by name; and opening a link (its address is shown on hover). Style sheets
+   are read as far as Outlook follows them (rules by element name, first class and id); tables keep
+   their width, place, cell fills, padding, spacing and the vertical place of what cells hold; a
+   picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
+   Message bodies). RTF bodies
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
    styles, colours, alignment, indents, links and simple tables; not yet: RTF pictures and embedded
    objects (a placeholder), list numbering beyond the text the writer left, nested tables,
@@ -57,6 +58,7 @@
 
 ## Revision history
 
+- 7 · 2026-10-11 — style sheets, cell padding and spacing, row fills, vertical places, percentage widths and picture frames done (item 3).
 - 6 · 2026-10-11 — bodies compared with Outlook's; table widths, placement and cell fills done (item 3).
 - 5 · 2026-10-11 — pictures attached to the message are drawn (item 3).
 - 4 · 2026-10-11 — RTF bodies are decoded and drawn (item 3).

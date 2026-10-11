@@ -2,7 +2,8 @@
 //!
 //! A link shows where it points when the pointer rests on it and is never followed. A picture is
 //! drawn only when the message carries it as an attachment and it could be decoded
-//! ([`Pictures`]); any other picture is a labelled placeholder. Colours a message asks for are
+//! ([`Pictures`]); any other picture is an empty frame of the size it asks for, or a labelled
+//! placeholder when it asks for none. Colours a message asks for are
 //! kept only where they stay readable on what is behind them. Sizes follow what Outlook Classic
 //! was seen to do with the same message (`docs/ui-parity.md`, "Message bodies").
 
@@ -12,7 +13,7 @@ use crate::{bold, font};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Shape, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
-use mailcraft_formats::rich::{self, Block, Doc, Para, ParaKind, Picture, Run, Script, Table, TableWidth};
+use mailcraft_formats::rich::{self, Block, Doc, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign};
 
 /// Size of text the message gives no size for: 12 points.
 const BODY_PX: f32 = 16.0;
@@ -23,7 +24,10 @@ const QUOTE: f32 = 14.0;
 const MAX_COLUMNS: usize = 12;
 /// Tables nested deeper than this are drawn one cell under another.
 const MAX_TABLE_DEPTH: usize = 6;
-const CELL_PAD: f32 = 5.0;
+/// Largest cell padding and spacing drawn, whatever the message asks for.
+const MAX_CELL_ROOM: u16 = 64;
+/// A picture that is not drawn gets a frame when it asks for at least this size each way.
+const MIN_FRAME: u16 = 24;
 const MIN_COLUMN: f32 = 24.0;
 /// Rows of a table, and blocks of a cell, that are measured to size its columns.
 const MEASURED_ROWS: usize = 100;
@@ -74,12 +78,69 @@ fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
     }
 }
 
-/// The picture a run stands for, when there is one to draw.
-fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<&'a Shown> {
-    match &run.picture {
-        Some(Picture::Attached(id)) => pictures.get(id),
-        _ => None,
+/// What stands on the page where a run has a picture.
+#[derive(Clone, Copy)]
+enum Stand<'a> {
+    Drawn(&'a Shown),
+    /// The picture is not here to draw, but the body says how large it is.
+    Frame,
+}
+
+impl Stand<'_> {
+    /// The size the picture has before the body's wishes and the room are taken into account.
+    fn natural(&self, run: &Run) -> Vec2 {
+        match self {
+            Stand::Drawn(picture) => picture.size,
+            Stand::Frame => vec2(f32::from(run.extent.0), f32::from(run.extent.1)),
+        }
     }
+}
+
+/// The picture a run stands for, or the frame that takes its place; `None` for text, and for a
+/// picture that is shown as a line of text.
+fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
+    let picture = run.picture.as_ref()?;
+    if let Picture::Attached(id) = picture
+        && let Some(drawn) = pictures.get(id)
+    {
+        return Some(Stand::Drawn(drawn));
+    }
+    (run.extent.0 >= MIN_FRAME && run.extent.1 >= MIN_FRAME).then_some(Stand::Frame)
+}
+
+/// What a picture that is not drawn is called.
+fn missing(picture: &Picture) -> &'static str {
+    match picture {
+        Picture::Remote => "Picture not downloaded",
+        Picture::Attached(_) | Picture::Inline => "Picture",
+    }
+}
+
+/// A picture's alternative text, as it is shown.
+fn alt(run: &Run) -> String {
+    run.text.chars().filter(|c| !c.is_control()).take(120).collect()
+}
+
+/// The colour of notes that stand in for content.
+fn faint(look: Look) -> Color32 {
+    if look.on == look.t.surface { look.t.text_faint } else { look.text().gamma_multiply(0.75) }
+}
+
+/// An empty frame where a picture would be: an outline, our own mark for "no picture", and what
+/// the message says the picture shows.
+fn frame(ui: &Ui, run: &Run, at: Rect, look: Look) {
+    let color = faint(look);
+    let painter = ui.painter().with_clip_rect(at.intersect(ui.clip_rect()));
+    painter.rect_stroke(at, 0.0, (1.0, color.gamma_multiply(0.6)), egui::StrokeKind::Inside);
+    // The mark: a small picture frame with a line struck through it.
+    let mark = Rect::from_min_size(at.min + vec2(7.0, 7.0), vec2(14.0, 11.0));
+    painter.rect_stroke(mark, 1.5, (1.0, color), egui::StrokeKind::Inside);
+    painter.line_segment([mark.left_bottom() + vec2(-2.0, 2.0), mark.right_top() + vec2(2.0, -2.0)], (1.2, color));
+    let what = run.picture.as_ref().map_or("Picture", missing);
+    let alt = alt(run);
+    let label = if alt.is_empty() { what.to_string() } else { format!("{what}\n{alt}") };
+    let galley = painter.layout(label, font(11.5), color, (at.width() - 36.0).max(8.0));
+    painter.galley(at.min + vec2(28.0, 5.0), galley, color);
 }
 
 fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool) {
@@ -152,12 +213,12 @@ fn picture_rows(ui: &mut Ui, para: &Para, runs: &[Run], look: Look) {
     let (inset, width) = room(ui, para);
     struct Row<'a> {
         size: Vec2,
-        items: Vec<(&'a Run, &'a Shown, Vec2)>,
+        items: Vec<(&'a Run, Stand<'a>, Vec2)>,
     }
     let mut rows: Vec<Row> = Vec::new();
     for run in runs {
         let Some(picture) = shown(run, look.pictures) else { continue };
-        let size = picture_size(run.extent, picture.size, width);
+        let size = picture_size(run.extent, picture.natural(run), width);
         match rows.last_mut() {
             Some(row) if row.size.x + PICTURE_GAP + size.x <= width => {
                 row.size = vec2(row.size.x + PICTURE_GAP + size.x, row.size.y.max(size.y));
@@ -189,17 +250,26 @@ fn picture_rows(ui: &mut Ui, para: &Para, runs: &[Run], look: Look) {
             if !ui.is_rect_visible(at) {
                 continue;
             }
-            ui.painter().image(picture.texture.id(), at, whole, Color32::WHITE);
+            match picture {
+                Stand::Drawn(drawn) => {
+                    ui.painter().image(drawn.texture.id(), at, whole, Color32::WHITE);
+                }
+                Stand::Frame => frame(ui, run, at, look),
+            }
             if response.hover_pos().is_some_and(|p| at.contains(p)) {
-                let alt: String = run.text.chars().filter(|c| !c.is_control()).take(120).collect();
-                let link: Option<String> = run.style.link.as_deref().map(|l| l.chars().take(300).collect());
-                let tip = match (alt.is_empty(), link) {
-                    (false, Some(link)) => format!("{alt}\n{link}\nLinks are not opened from here."),
-                    (true, Some(link)) => format!("{link}\nLinks are not opened from here."),
-                    (false, None) => alt,
-                    (true, None) => continue,
-                };
-                response.clone().on_hover_text_at_pointer(tip);
+                let mut tip: Vec<String> = Vec::new();
+                if let (Stand::Frame, Some(picture)) = (picture, &run.picture) {
+                    tip.push(missing(picture).to_string());
+                }
+                tip.push(alt(run));
+                if let Some(link) = run.style.link.as_deref() {
+                    tip.push(link.chars().take(300).collect());
+                    tip.push("Links are not opened from here.".to_string());
+                }
+                tip.retain(|line| !line.is_empty());
+                if !tip.is_empty() {
+                    response.clone().on_hover_text_at_pointer(tip.join("\n"));
+                }
             }
         }
         y += row.size.y + PICTURE_GAP;
@@ -298,18 +368,15 @@ fn section(run: &Run, look: Look) -> (String, TextFormat) {
     format.color = color;
     format.background = background;
     if let Some(picture) = &run.picture {
-        let what = match picture {
-            Picture::Remote => "Picture not downloaded",
-            Picture::Attached(_) | Picture::Inline => "Picture",
-        };
-        let alt: String = run.text.chars().filter(|c| !c.is_control()).take(120).collect();
-        format.color = if look.on == look.t.surface { look.t.text_faint } else { look.text().gamma_multiply(0.75) };
+        let what = missing(picture);
+        let alt = alt(run);
+        format.color = faint(look);
         format.background = Color32::TRANSPARENT;
         format.font_id = font(px.min(13.5));
         return (if alt.is_empty() { format!("[{what}]") } else { format!("[{what}: {alt}]") }, format);
     }
     if s.link.is_some() {
-        if s.background.is_none() && contrast(look.t.accent_dark, look.on) >= 3.0 {
+        if s.color.is_none() && s.background.is_none() && contrast(look.t.accent_dark, look.on) >= 3.0 {
             format.color = look.t.accent_dark;
         }
         format.underline = Stroke::new(1.0, format.color);
@@ -372,14 +439,18 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
                 let pictures: f32 = p
                     .runs
                     .iter()
-                    .filter_map(|r| shown(r, look.pictures).map(|s| picture_size(r.extent, s.size, f32::INFINITY).x + PICTURE_GAP))
+                    .filter_map(|r| shown(r, look.pictures).map(|s| picture_size(r.extent, s.natural(r), f32::INFINITY).x + PICTURE_GAP))
                     .sum();
                 inset(p) + ui.painter().layout_job(job).size().x.max(pictures) + 2.0
             }
             Block::Rule => 0.0,
             Block::Table(t) => match t.width {
                 TableWidth::Pixels(w) => f32::from(w),
-                _ if depth < MAX_TABLE_DEPTH && t.columns() <= MAX_COLUMNS => natural_columns(ui, t, look, depth).iter().sum(),
+                TableWidth::Percent(_) | TableWidth::Fill => UNMEASURED,
+                _ if depth < MAX_TABLE_DEPTH && t.columns() <= MAX_COLUMNS => {
+                    let columns = natural_columns(ui, t, look, depth);
+                    columns.iter().sum::<f32>() + spacing(t) * (columns.len() as f32 + 1.0)
+                }
                 _ => UNMEASURED,
             },
         };
@@ -388,6 +459,54 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
         }
     }
     widest
+}
+
+/// Room between a cell's edges and what it holds: left and right, then above and below.
+fn padding(table: &Table, cell: &rich::Cell) -> Vec2 {
+    let (vertical, horizontal) = cell.padding.unwrap_or((table.padding, table.padding));
+    vec2(f32::from(horizontal.min(MAX_CELL_ROOM)), f32::from(vertical.min(MAX_CELL_ROOM)))
+}
+
+/// Room between the cells of a table.
+fn spacing(table: &Table) -> f32 {
+    f32::from(table.spacing.min(MAX_CELL_ROOM))
+}
+
+/// Give the columns that ask for a share of the table's width that share of `room`, and the
+/// room that is left to the others.
+fn shares(table: &Table, widths: &mut [f32], room: f32) {
+    let mut asked = vec![0.0f32; widths.len()];
+    for row in table.rows.iter().take(MEASURED_ROWS) {
+        let mut col = 0usize;
+        for cell in row {
+            if cell.span <= 1
+                && let Some(a) = asked.get_mut(col)
+            {
+                *a = a.max(f32::from(cell.share.min(100)) / 100.0);
+            }
+            col = col.saturating_add(usize::from(cell.span.max(1)));
+        }
+    }
+    let claimed: f32 = asked.iter().sum();
+    if claimed <= 0.0 {
+        return;
+    }
+    // Shares that add up to more than everything are cut down together.
+    let scale = if claimed > 1.0 { 1.0 / claimed } else { 1.0 };
+    let others: f32 = widths.iter().zip(&asked).filter(|(_, a)| **a <= 0.0).map(|(w, _)| *w).sum();
+    let left = (room - room * claimed * scale).max(0.0);
+    for (w, a) in widths.iter_mut().zip(&asked) {
+        if *a > 0.0 {
+            *w = room * a * scale;
+        } else if others > 0.0 {
+            *w *= left / others;
+        }
+    }
+    // With no other column to take what is left, the sharing columns take it.
+    let total: f32 = widths.iter().sum();
+    if total > 0.0 && (others <= 0.0 || left <= 0.0) {
+        widths.iter_mut().for_each(|w| *w *= room / total);
+    }
 }
 
 /// The width each column asks for, or else wants for what it holds.
@@ -401,7 +520,7 @@ fn natural_columns(ui: &Ui, table: &Table, look: Look, depth: usize) -> Vec<f32>
         for cell in row {
             let span = usize::from(cell.span.max(1));
             let on = cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
-            let want = natural_width(ui, &cell.blocks, Look { on, ..look }, depth + 1) + CELL_PAD * 2.0;
+            let want = natural_width(ui, &cell.blocks, Look { on, ..look }, depth + 1) + padding(table, cell).x * 2.0;
             if span == 1 {
                 if let Some(a) = asked.get_mut(col) {
                     *a = a.max(f32::from(cell.width));
@@ -442,17 +561,26 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         return;
     }
     // A table is as wide as it asks to be, or as what it holds, and never wider than the room.
+    // Its cells stand apart by the table's spacing, which also runs round the outside.
     let mut widths = natural_columns(ui, table, look, depth);
     let total: f32 = widths.iter().sum();
+    let gaps = columns as f32 + 1.0;
     let target = match table.width {
         TableWidth::Pixels(w) => f32::from(w).min(available),
+        TableWidth::Percent(share) => available * f32::from(share.clamp(1, 100)) / 100.0,
         TableWidth::Fill => available,
-        TableWidth::Content => total.min(available),
+        TableWidth::Content => (total + spacing(table) * gaps).min(available),
     };
+    // Spacing never takes more than half the table.
+    let gap = spacing(table).min(target / gaps / 2.0).max(0.0);
+    let cells = (target - gap * gaps).max(0.0);
     if total > 0.0 && total.is_finite() {
-        widths.iter_mut().for_each(|w| *w *= target / total);
+        widths.iter_mut().for_each(|w| *w *= cells / total);
     } else {
-        widths = vec![target / columns as f32; columns];
+        widths = vec![cells / columns as f32; columns];
+    }
+    if table.width != TableWidth::Content {
+        shares(table, &mut widths, cells);
     }
     let shift = match table.align {
         rich::Align::Left => 0.0,
@@ -460,33 +588,60 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         rich::Align::Right => (available - target).max(0.0),
     };
 
+    let left = ui.cursor().left();
+    let table_top = ui.cursor().top();
+    ui.add_space(gap);
     for (r, row) in table.rows.iter().enumerate() {
         let top = ui.cursor().top();
-        let left = ui.cursor().left();
-        let mut x = left + shift;
-        let mut bottom = top;
+        // Where each cell stands: its number, left edge, width and padding.
+        let mut placed: Vec<(usize, &rich::Cell, f32, f32, Vec2)> = Vec::with_capacity(row.len());
+        let mut x = left + shift + gap;
         let mut col = 0usize;
-        // Each cell's left edge and width, and where its fill goes once the row's height is known.
-        let mut edges: Vec<(f32, f32, Option<(egui::layers::ShapeIdx, Color32)>)> = Vec::with_capacity(row.len());
         for (c, cell) in row.iter().enumerate() {
             let span = usize::from(cell.span.max(1));
-            let w: f32 = widths.iter().skip(col).take(span).sum();
+            let covered = widths.iter().skip(col).take(span);
+            let w: f32 = covered.clone().sum::<f32>() + gap * (covered.count().max(1) - 1) as f32;
             col = col.saturating_add(span);
             if w <= 0.0 {
                 continue;
             }
-            let fill = cell.background.map(|c| (ui.painter().add(Shape::Noop), Color32::from_rgb(c[0], c[1], c[2])));
-            let on = fill.map_or(look.on, |(_, color)| color);
-            let inner = Rect::from_min_size(pos2(x + CELL_PAD, top + CELL_PAD - 2.0), vec2((w - CELL_PAD * 2.0).max(8.0), 0.0));
-            let mut child = ui.new_child(UiBuilder::new().id_salt(("cell", r, c)).max_rect(inner));
-            child.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            blocks(&mut child, &cell.blocks, Look { on, ..look }, depth + 1);
-            bottom = bottom.max(child.min_rect().bottom());
-            edges.push((x, w, fill));
-            x += w;
+            placed.push((c, cell, x, w, padding(table, cell)));
+            x += w + gap;
         }
-        bottom += CELL_PAD - 2.0;
-        ui.allocate_rect(Rect::from_min_max(pos2(left, top), pos2(left + available, bottom)), Sense::hover());
+        let on = |cell: &rich::Cell| cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
+        let inside =
+            |x: f32, w: f32, pad: Vec2, down: f32| Rect::from_min_size(pos2(x + pad.x, top + pad.y + down), vec2((w - pad.x * 2.0).max(8.0), 0.0));
+        // Cells that do not start at the top are laid out once unseen, to learn how tall each is.
+        // Inside such an unseen pass nothing is seen anyway, so nothing is measured again.
+        let settle = ui.is_visible() && placed.len() > 1 && placed.iter().any(|(_, cell, ..)| cell.valign != VAlign::Top);
+        let mut tall: Vec<f32> = Vec::new();
+        if settle {
+            for (c, cell, x, w, pad) in &placed {
+                let mut child = ui.new_child(UiBuilder::new().id_salt(("cell size", r, *c)).max_rect(inside(*x, *w, *pad, 0.0)).invisible());
+                child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                blocks(&mut child, &cell.blocks, Look { on: on(cell), ..look }, depth + 1);
+                tall.push(child.min_rect().height() + pad.y * 2.0);
+            }
+        }
+        let tallest = tall.iter().copied().fold(0.0f32, f32::max);
+        let mut bottom = top + tallest;
+        // Each cell's left edge and width, and where its fill goes once the row's height is known.
+        let mut edges: Vec<(f32, f32, Option<(egui::layers::ShapeIdx, Color32)>)> = Vec::with_capacity(row.len());
+        for (i, (c, cell, x, w, pad)) in placed.iter().enumerate() {
+            let spare = tall.get(i).map_or(0.0, |own| (tallest - own).max(0.0));
+            let down = match cell.valign {
+                VAlign::Top => 0.0,
+                VAlign::Middle => (spare / 2.0).floor(),
+                VAlign::Bottom => spare,
+            };
+            let fill = cell.background.map(|c| (ui.painter().add(Shape::Noop), Color32::from_rgb(c[0], c[1], c[2])));
+            let mut child = ui.new_child(UiBuilder::new().id_salt(("cell", r, *c)).max_rect(inside(*x, *w, *pad, down)));
+            child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            blocks(&mut child, &cell.blocks, Look { on: on(cell), ..look }, depth + 1);
+            bottom = bottom.max(child.min_rect().bottom() + pad.y);
+            edges.push((*x, *w, fill));
+        }
+        ui.allocate_rect(Rect::from_min_max(pos2(left, top), pos2(left + available, bottom + gap)), Sense::hover());
         for (x, w, fill) in edges {
             let cell = Rect::from_min_max(pos2(x, top), pos2(x + w, bottom));
             if let Some((slot, color)) = fill {
@@ -496,5 +651,10 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
                 ui.painter().rect_stroke(cell, 0.0, (1.0, look.t.text_faint), egui::StrokeKind::Middle);
             }
         }
+    }
+    // Cells that stand apart leave the table's own border to be seen round them.
+    if table.border && gap > 0.0 {
+        let outer = Rect::from_min_max(pos2(left + shift, table_top), pos2(left + shift + target, ui.cursor().top()));
+        ui.painter().rect_stroke(outer, 0.0, (1.0, look.t.text_faint), egui::StrokeKind::Middle);
     }
 }

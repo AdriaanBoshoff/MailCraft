@@ -108,6 +108,10 @@ pub struct Table {
     pub width: TableWidth,
     /// Where the table stands when it is narrower than the room it has.
     pub align: Align,
+    /// Room between a cell's edge and what it holds, in pixels, for cells that set none.
+    pub padding: u16,
+    /// Room between cells, and between the cells and the table's edge, in pixels.
+    pub spacing: u16,
 }
 
 /// How wide a table asks to be.
@@ -117,8 +121,19 @@ pub enum TableWidth {
     #[default]
     Content,
     Pixels(u16),
+    /// This many hundredths of the room there is, 1 to 99.
+    Percent(u8),
     /// All the room there is.
     Fill,
+}
+
+/// Where what a cell holds stands when the cell is taller than it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VAlign {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -131,6 +146,11 @@ pub struct Cell {
     pub background: Option<Rgb>,
     /// Width the cell asks for, in pixels; 0 where it gives none.
     pub width: u16,
+    /// The cell's own padding, above and below, then left and right; `None` is the table's.
+    pub padding: Option<(u16, u16)>,
+    /// Width the cell asks for as hundredths of the table's, 1 to 100; 0 where it gives none.
+    pub share: u8,
+    pub valign: VAlign,
 }
 
 impl Doc {

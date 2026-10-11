@@ -1,14 +1,17 @@
 //! HTML message bodies read into a [`Doc`].
 //!
-//! The reader is tolerant, because mail HTML breaks every rule, and it is inert: scripts, style
-//! sheets, frames, objects and forms are dropped, nothing is fetched, and a link is kept only as
-//! the text of its address. Every size, depth and count that comes from the message is capped.
+//! The reader is tolerant, because mail HTML breaks every rule, and it is inert: scripts,
+//! frames, objects and forms are dropped, nothing is fetched, and a link is kept only as the text
+//! of its address. Every size, depth and count that comes from the message is capped.
 //!
 //! Element and attribute meanings follow the HTML Living Standard (sections 4 and 15, "Rendering");
-//! only the presentational subset mail uses is understood, and only inline `style` declarations.
+//! only the presentational subset mail uses is understood. Style comes from inline `style`
+//! declarations and from the rules of `<style>` sheets that pick elements by name, class or id
+//! (CSS 2.1 section 5, type, class and ID selectors); other selectors and at-rules are skipped.
 
-use crate::rich::{Align, Block, Cell, Doc, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth};
+use crate::rich::{Align, Block, Cell, Doc, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth, VAlign};
 use mailcraft_model::html::entity;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// HTML beyond this many bytes is not read.
@@ -29,9 +32,19 @@ const MAX_PICTURE_SIDE: f32 = 4096.0;
 /// Relative sizes (`em`, `%`, `<small>`, headings) start from this many points when no size is
 /// set: the size Outlook Classic shows unstyled HTML text at.
 const BASE_PT: f32 = 12.0;
+/// Style sheet text beyond this many bytes, and rules beyond this many, are not read.
+const MAX_SHEET: usize = 512 << 10;
+const MAX_RULES: usize = 1024;
+/// Rules that may apply to one element.
+const MAX_MATCHES: usize = 64;
+/// Largest cell padding or spacing, in pixels.
+const MAX_CELL_ROOM: f32 = 64.0;
+/// Cell padding and spacing of a table that sets none (HTML 15.3.10, tables).
+const CELL_PADDING: u16 = 1;
+const CELL_SPACING: u16 = 2;
 
 /// Elements whose content is dropped without being read.
-const RAW: &[&str] = &["script", "style", "head", "title", "iframe", "object", "embed", "svg", "template", "select", "textarea", "noframes"];
+const RAW: &[&str] = &["script", "style", "title", "iframe", "object", "embed", "svg", "template", "select", "textarea", "noframes"];
 const VOID: &[&str] = &["br", "hr", "img", "meta", "link", "input", "col", "wbr", "area", "base", "param", "source", "track"];
 const BLOCK: &[&str] = &[
     "p",
@@ -119,7 +132,11 @@ pub fn parse(html: &str) -> Doc {
         }
         if RAW.contains(&name.as_str()) {
             let end_tag = format!("</{name}");
-            rest = find_ci(rest, &end_tag).and_then(|i| rest.get(i..)).and_then(|from| from.find('>').and_then(|i| from.get(i + 1..))).unwrap_or("");
+            let close = find_ci(rest, &end_tag);
+            if name == "style" {
+                b.sheet.read(rest.get(..close.unwrap_or(rest.len())).unwrap_or(""));
+            }
+            rest = close.and_then(|i| rest.get(i..)).and_then(|from| from.find('>').and_then(|i| from.get(i + 1..))).unwrap_or("");
             continue;
         }
         let attrs = attributes(body.get(name_len..).unwrap_or(""));
@@ -154,6 +171,11 @@ struct TableBuild {
     border: bool,
     width: TableWidth,
     align: Align,
+    padding: u16,
+    spacing: u16,
+    /// Background of the row being read; its cells start from it.
+    row_fill: Option<Rgb>,
+    row_valign: Option<VAlign>,
     /// Length of the element stack just after the table's own entry.
     open_len: usize,
     cell: Option<CellBuild>,
@@ -166,6 +188,9 @@ struct CellBuild {
     span: u16,
     background: Option<Rgb>,
     width: u16,
+    padding: Option<(u16, u16)>,
+    share: u8,
+    valign: VAlign,
 }
 
 struct ParaHead {
@@ -179,6 +204,7 @@ struct ParaHead {
 #[derive(Default)]
 struct Builder {
     doc: Doc,
+    sheet: Sheet,
     /// Block lists being filled: the document, then one per open table cell.
     sinks: Vec<Vec<Block>>,
     open: Vec<Open>,
@@ -419,6 +445,16 @@ impl Builder {
                         t.rows.push(Vec::new());
                     }
                 }
+                let css = self.sheet.declarations(name, attrs);
+                let fill = css_value(&css, "background-color")
+                    .or_else(|| css_value(&css, "background"))
+                    .and_then(|v| color(&v).or_else(|| v.split_whitespace().find_map(color)))
+                    .or_else(|| attr(attrs, "bgcolor").and_then(color));
+                let place = css_value(&css, "vertical-align").as_deref().and_then(valign).or_else(|| attr(attrs, "valign").and_then(valign));
+                if let Some(t) = self.tables.last_mut() {
+                    t.row_fill = fill.and_then(page_or);
+                    t.row_valign = place;
+                }
                 return;
             }
             "td" | "th" => {
@@ -427,18 +463,31 @@ impl Builder {
                     return;
                 }
                 self.close_cell();
+                let row_fill = self.tables.last().and_then(|t| t.row_fill);
+                let row_valign = self.tables.last().and_then(|t| t.row_valign);
                 let span = attr(attrs, "colspan").and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(1).clamp(1, 64);
                 self.open_cell(name == "th", span);
                 if name == "th" {
                     self.fmt.style.bold = true;
                 }
+                if row_fill.is_some() {
+                    self.fmt.style.background = row_fill;
+                }
                 self.common(name, attrs);
                 // A background set on the cell, or inherited by it, is the cell's and not its text's.
                 let background = self.fmt.style.background.take();
-                let width = attr(attrs, "width").and_then(pixels).unwrap_or(0);
+                let css = self.sheet.declarations(name, attrs);
+                let css_width = css_value(&css, "width");
+                let asked = css_width.as_deref().or_else(|| attr(attrs, "width")).unwrap_or("");
+                let padding = css_value(&css, "padding").and_then(|v| cell_padding(&v));
+                // What a cell holds stands in the middle of it unless the cell or its row says otherwise.
+                let place = css_value(&css, "vertical-align").as_deref().and_then(valign).or_else(|| attr(attrs, "valign").and_then(valign));
                 if let Some(cell) = self.tables.last_mut().and_then(|t| t.cell.as_mut()) {
                     cell.background = background;
-                    cell.width = width;
+                    cell.width = pixels(asked).unwrap_or(0);
+                    cell.share = percent(asked).unwrap_or(0);
+                    cell.padding = padding;
+                    cell.valign = place.or(row_valign).unwrap_or(VAlign::Middle);
                 }
                 return;
             }
@@ -489,6 +538,8 @@ impl Builder {
                     let href: String = href.trim().chars().filter(|c| !c.is_control()).collect();
                     if !href.is_empty() && !href.starts_with('#') {
                         style.link = Some(Arc::from(href));
+                        // A link has the link colour unless a colour is set on the link itself.
+                        style.color = None;
                     }
                 }
             }
@@ -513,7 +564,7 @@ impl Builder {
             // A quotation of earlier mail is marked as one (a bar); any other is only set in.
             "blockquote" => {
                 let has = |name: &str, what: &str| attr(attrs, name).is_some_and(|v| v.to_ascii_lowercase().contains(what));
-                if has("type", "cite") || has("style", "border-left") || has("class", "quote") {
+                if has("type", "cite") || has("class", "quote") || self.sheet.declarations(name, attrs).to_ascii_lowercase().contains("border-left") {
                     self.fmt.quote = self.fmt.quote.saturating_add(1).min(8);
                 } else {
                     self.fmt.indent = self.fmt.indent.saturating_add(1).min(12);
@@ -579,14 +630,15 @@ impl Builder {
         if attr(attrs, "hidden").is_some() {
             self.fmt.hidden = true;
         }
-        attr(attrs, "style").and_then(|css| self.css(css))
+        let css = self.sheet.declarations(name, attrs);
+        if css.is_empty() { None } else { self.css(&css) }
     }
 
-    /// Inline style declarations (CSS 2.1 and CSS Text Decoration property names).
+    /// Style declarations, in the order they apply (CSS 2.1 and CSS Text Decoration property names).
     fn css(&mut self, css: &str) -> Option<bool> {
         let mut zero_top = None;
         let mut zero_bottom = None;
-        for decl in css.split(';').take(64) {
+        for decl in css.split(';').take(MAX_DECLARATIONS) {
             let Some((prop, value)) = decl.split_once(':') else { continue };
             let prop = prop.trim().to_ascii_lowercase();
             let value = value.trim().to_ascii_lowercase();
@@ -680,6 +732,12 @@ impl Builder {
                 } else {
                     self.close_cell();
                 }
+                if name == "tr"
+                    && let Some(t) = self.tables.last_mut()
+                {
+                    t.row_fill = None;
+                    t.row_valign = None;
+                }
                 return;
             }
             "tbody" | "thead" | "tfoot" | "caption" | "colgroup" => return,
@@ -727,8 +785,11 @@ impl Builder {
         self.fmt.align = Align::Left;
         let border = attr(attrs, "border").is_some_and(|v| v.trim().trim_end_matches("px").parse::<f32>().is_ok_and(|n| n > 0.0));
         self.common("table", attrs);
-        let css = attr(attrs, "style").unwrap_or("");
-        let auto = |prop: &str| css_value(css, prop).is_some_and(|v| v.split_whitespace().any(|part| part == "auto"));
+        let css = self.sheet.declarations("table", attrs);
+        let auto = |prop: &str| css_value(&css, prop).is_some_and(|v| v.split_whitespace().any(|part| part == "auto"));
+        let room = |name: &str, unset: u16| attr(attrs, name).and_then(cell_room).unwrap_or(unset);
+        // Collapsed borders leave no room between cells (CSS 2.1 section 17.6.2).
+        let collapsed = css_value(&css, "border-collapse").is_some_and(|v| v.starts_with("collapse"));
         let table_align = match attr(attrs, "align").and_then(align) {
             Some(a) => a,
             None if auto("margin") || (auto("margin-left") && auto("margin-right")) => Align::Center,
@@ -737,8 +798,12 @@ impl Builder {
         self.tables.push(TableBuild {
             rows: Vec::new(),
             border,
-            width: table_width(attrs),
+            width: table_width(attrs, &css),
             align: table_align,
+            padding: room("cellpadding", CELL_PADDING),
+            spacing: if collapsed { 0 } else { room("cellspacing", CELL_SPACING) },
+            row_fill: None,
+            row_valign: None,
             open_len: self.open.len(),
             cell: None,
         });
@@ -752,7 +817,7 @@ impl Builder {
         if t.rows.is_empty() {
             t.rows.push(Vec::new());
         }
-        t.cell = Some(CellBuild { saved, open_len, header, span, background: None, width: 0 });
+        t.cell = Some(CellBuild { saved, open_len, header, span, background: None, width: 0, padding: None, share: 0, valign: VAlign::Middle });
         self.sinks.push(Vec::new());
         self.gap = false;
     }
@@ -767,7 +832,16 @@ impl Builder {
         // The document's own list is never popped: a cell always has a sink above it.
         let blocks = if self.sinks.len() > 1 { self.sinks.pop().unwrap_or_default() } else { Vec::new() };
         if let Some(row) = self.tables.last_mut().and_then(|t| t.rows.last_mut()) {
-            row.push(Cell { blocks, header: cell.header, span: cell.span, background: cell.background, width: cell.width });
+            row.push(Cell {
+                blocks,
+                header: cell.header,
+                span: cell.span,
+                background: cell.background,
+                width: cell.width,
+                padding: cell.padding,
+                share: cell.share,
+                valign: cell.valign,
+            });
         }
     }
 
@@ -781,7 +855,9 @@ impl Builder {
         }
         // A width, a place on the page or a filled cell is something to draw; without any of them
         // a table with one column is only layout, and its content reads as ordinary blocks.
-        let shaped = matches!(t.width, TableWidth::Pixels(_)) || t.align != Align::Left || rows.iter().flatten().any(|c| c.background.is_some());
+        let shaped = matches!(t.width, TableWidth::Pixels(_) | TableWidth::Percent(_))
+            || t.align != Align::Left
+            || rows.iter().flatten().any(|c| c.background.is_some());
         if !shaped && rows.iter().all(|r| r.iter().filter(|c| !c.blocks.is_empty()).count() <= 1) {
             for cell in rows.drain(..).flatten() {
                 for block in cell.blocks {
@@ -789,7 +865,7 @@ impl Builder {
                 }
             }
         } else {
-            self.push_block(Block::Table(Table { rows, border: t.border, width: t.width, align: t.align }));
+            self.push_block(Block::Table(Table { rows, border: t.border, width: t.width, align: t.align, padding: t.padding, spacing: t.spacing }));
         }
         self.gap = true;
     }
@@ -926,20 +1002,203 @@ fn pixels(v: &str) -> Option<u16> {
     Some(n.round().min(MAX_PICTURE_SIDE) as u16)
 }
 
-/// The value of one property in an inline style, lower case.
+/// A share of the room in hundredths, 1 to 100, as `25%` gives it.
+fn percent(v: &str) -> Option<u8> {
+    let n = v.trim().strip_suffix('%')?.trim().parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 1.0)?;
+    Some(n.round().min(100.0) as u8)
+}
+
+fn valign(v: &str) -> Option<VAlign> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "top" | "baseline" | "text-top" => Some(VAlign::Top),
+        "middle" | "center" => Some(VAlign::Middle),
+        "bottom" | "text-bottom" => Some(VAlign::Bottom),
+        _ => None,
+    }
+}
+
+/// Cell padding or spacing as a table's attribute gives it, in pixels.
+fn cell_room(v: &str) -> Option<u16> {
+    let n = v.trim().trim_end_matches("px").trim_end().parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+    Some(n.round().min(MAX_CELL_ROOM) as u16)
+}
+
+/// A cell's `padding`: above and below, then left and right. Lengths that depend on the text
+/// size, and percentages, are not understood.
+fn cell_padding(v: &str) -> Option<(u16, u16)> {
+    let length = |part: &str| {
+        let (number, scale) = match part.strip_suffix("pt") {
+            Some(points) => (points, 4.0 / 3.0),
+            None => (part.trim_end_matches("px"), 1.0),
+        };
+        let n = number.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+        Some((n * scale).round().min(MAX_CELL_ROOM) as u16)
+    };
+    let mut parts = v.split_whitespace();
+    let vertical = length(parts.next()?)?;
+    let horizontal = match parts.next() {
+        Some(part) => length(part)?,
+        None => vertical,
+    };
+    Some((vertical, horizontal))
+}
+
+/// The value a list of declarations ends up giving one property, lower case.
 fn css_value(css: &str, prop: &str) -> Option<String> {
-    let (_, value) = css.split(';').take(64).filter_map(|d| d.split_once(':')).find(|(p, _)| p.trim().eq_ignore_ascii_case(prop))?;
+    let (_, value) =
+        css.split(';').take(MAX_DECLARATIONS).filter_map(|d| d.split_once(':')).filter(|(p, _)| p.trim().eq_ignore_ascii_case(prop)).last()?;
     Some(value.to_ascii_lowercase().trim().trim_end_matches("!important").trim().to_string())
 }
 
+/// Declarations of one element that are read: its rules' and its own.
+const MAX_DECLARATIONS: usize = 256;
+
+/// The rules of the message's style sheets that pick elements by name, class or id.
+#[derive(Default)]
+struct Sheet {
+    rules: Vec<Rule>,
+    /// Rule numbers by what picks them out: the id, else the class, else the element name.
+    by_id: HashMap<String, Vec<usize>>,
+    by_class: HashMap<String, Vec<usize>>,
+    by_tag: HashMap<String, Vec<usize>>,
+    bytes: usize,
+}
+
+/// One selector of a rule; empty parts match anything.
+struct Rule {
+    tag: String,
+    class: String,
+    id: String,
+    declarations: Arc<str>,
+}
+
+impl Sheet {
+    /// Read the text of one `<style>` element (CSS 2.1 section 4.1, syntax).
+    fn read(&mut self, css: &str) {
+        let mut end = css.len().min(MAX_SHEET.saturating_sub(self.bytes));
+        while end > 0 && !css.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.bytes = self.bytes.saturating_add(end);
+        // Sheets in mail are often wrapped in an HTML comment.
+        let css = css.get(..end).unwrap_or("").replace("<!--", " ").replace("-->", " ");
+        let mut clean = String::with_capacity(css.len());
+        let mut rest = css.as_str();
+        while let Some(i) = rest.find("/*") {
+            clean.push_str(rest.get(..i).unwrap_or(""));
+            rest = rest.get(i + 2..).and_then(|r| r.find("*/").and_then(|j| r.get(j + 2..))).unwrap_or("");
+        }
+        clean.push_str(rest);
+
+        let mut rest = clean.as_str();
+        while self.rules.len() < MAX_RULES {
+            let Some(open) = rest.find('{') else { break };
+            let prelude = rest.get(..open).unwrap_or("");
+            // An at-rule without a block (`@import ...;`) ends at its semicolon.
+            let prelude = prelude.rfind(';').and_then(|i| prelude.get(i + 1..)).unwrap_or(prelude).trim();
+            let after = rest.get(open + 1..).unwrap_or("");
+            if prelude.starts_with('@') {
+                // `@media`, `@font-face` and the like: skipped with everything inside.
+                let mut depth = 1usize;
+                let close = after.bytes().position(|b| {
+                    match b {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                });
+                rest = close.and_then(|i| after.get(i + 1..)).unwrap_or("");
+                continue;
+            }
+            let close = after.find('}').unwrap_or(after.len());
+            let declarations: Arc<str> = Arc::from(after.get(..close).unwrap_or("").chars().take(MAX_ATTR_LEN).collect::<String>());
+            rest = after.get(close + 1..).unwrap_or("");
+            for selector in prelude.split(',').take(32) {
+                self.add(selector, &declarations);
+            }
+        }
+    }
+
+    /// Keep one selector if it is an element name, a class, an id, or a name with one of each.
+    fn add(&mut self, selector: &str, declarations: &Arc<str>) {
+        let selector = selector.trim();
+        // A link that was not followed is every link here; other states never apply.
+        let (simple, state) = selector.split_once(':').unwrap_or((selector, ""));
+        if !(state.is_empty() || state.eq_ignore_ascii_case("link")) || self.rules.len() >= MAX_RULES {
+            return;
+        }
+        if simple.is_empty() || !simple.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '#' | '-' | '_')) {
+            return;
+        }
+        let tag_len = simple.find(['.', '#']).unwrap_or(simple.len());
+        let tag = simple.get(..tag_len).unwrap_or("").to_ascii_lowercase();
+        let (mut class, mut id) = (String::new(), String::new());
+        let mut marks = simple.get(tag_len..).unwrap_or("");
+        while let Some(kind) = marks.chars().next() {
+            let body = marks.get(1..).unwrap_or("");
+            let len = body.find(['.', '#']).unwrap_or(body.len());
+            let slot = if kind == '.' { &mut class } else { &mut id };
+            if len == 0 || !slot.is_empty() {
+                return;
+            }
+            *slot = body.get(..len).unwrap_or("").to_ascii_lowercase();
+            marks = body.get(len..).unwrap_or("");
+        }
+        let index = self.rules.len();
+        let (map, key) = if !id.is_empty() {
+            (&mut self.by_id, id.clone())
+        } else if !class.is_empty() {
+            (&mut self.by_class, class.clone())
+        } else {
+            (&mut self.by_tag, tag.clone())
+        };
+        map.entry(key).or_default().push(index);
+        self.rules.push(Rule { tag, class, id, declarations: declarations.clone() });
+    }
+
+    /// Every declaration that applies to an element, in the order it applies: rules by element
+    /// name, then by class, then by id, each in the order written, then the element's own `style`
+    /// (CSS 2.1 section 6.4.3, specificity).
+    fn declarations(&self, name: &str, attrs: &[(String, String)]) -> String {
+        let own = attr(attrs, "style").unwrap_or("");
+        if self.rules.is_empty() {
+            return own.to_string();
+        }
+        let id = attr(attrs, "id").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+        // Only the first class an element names picks rules: that is what Outlook Classic was seen to do.
+        let class = attr(attrs, "class").unwrap_or("").split_ascii_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        let lists = [self.by_tag.get(name), self.by_id.get(&id).filter(|_| !id.is_empty()), self.by_class.get(&class).filter(|_| !class.is_empty())];
+        let mut found: Vec<(u8, usize)> = Vec::new();
+        for &index in lists.into_iter().flatten().flat_map(|list| list.iter().take(MAX_MATCHES)) {
+            let Some(rule) = self.rules.get(index) else { continue };
+            if (rule.tag.is_empty() || rule.tag == name) && (rule.class.is_empty() || rule.class == class) {
+                let weight = u8::from(!rule.id.is_empty()) * 4 + u8::from(!rule.class.is_empty()) * 2 + u8::from(!rule.tag.is_empty());
+                found.push((weight, index));
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+        let mut all = String::new();
+        for (_, index) in found.into_iter().take(MAX_MATCHES) {
+            if let Some(rule) = self.rules.get(index) {
+                all.push_str(&rule.declarations);
+                all.push(';');
+            }
+        }
+        all.push_str(own);
+        all
+    }
+}
+
 /// The width a table asks for: a limit in pixels first, then its width.
-fn table_width(attrs: &[(String, String)]) -> TableWidth {
-    let css = attr(attrs, "style").unwrap_or("");
+fn table_width(attrs: &[(String, String)], css: &str) -> TableWidth {
     let asked = [css_value(css, "max-width"), css_value(css, "width"), attr(attrs, "width").map(str::to_string)];
     for v in asked.into_iter().flatten() {
-        match v.trim().strip_suffix('%') {
-            Some(share) if share.trim().parse::<f32>().is_ok_and(|p| p >= 100.0) => return TableWidth::Fill,
-            Some(_) => {}
+        match percent(&v) {
+            Some(100) => return TableWidth::Fill,
+            Some(share) => return TableWidth::Percent(share),
+            None if v.trim().ends_with('%') => {}
             None => {
                 if let Some(px) = pixels(&v) {
                     return TableWidth::Pixels(px);

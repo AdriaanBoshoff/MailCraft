@@ -102,6 +102,16 @@ fn hostile_bodies_draw_without_panicking() {
         "<table width=1 align=center border=1><tr><td width=0 bgcolor=#fff>a<td width=-5>b<td width=1e39>c</table>".to_string(),
         "<table style=\"max-width:600px;margin:0 auto\"><tr>".to_string() + &"<td width=4096 bgcolor=#123456>w</td>".repeat(400) + "</tr></table>",
         "<table width=600 align=center><tr><td bgcolor=#1f4e79>".repeat(40) + "deep",
+        // Room in and between cells, shares of the width and places in the cell, all out of range.
+        "<table border=1 cellpadding=99999 cellspacing=99999 width=40><tr><td style=\"padding:9999px\">a<td valign=bottom>b<br>c<td width=\"900%\">d</table>".to_string(),
+        "<table width=\"1%\" cellspacing=64><tr>".to_string() + &"<td width=\"100%\" valign=bottom>s<br>t</td>".repeat(12) + "</tr></table>",
+        "<table border=1><tr><td>a<br>b<td valign=bottom>".repeat(30) + "deep",
+        "<table width=\"50%\"><tr><td width=\"0%\"><td colspan=64 width=\"100%\" valign=middle>x<td>y</table>".to_string(),
+        // Pictures that are not here, at every size they might ask for.
+        "<p>a<img src=\"https://x.example/a.png\" width=200 height=80 alt=\"\u{202e}alt text that is far longer than the frame it has to fit in\">b\
+         <img src=\"https://x.example/b.png\" width=4096 height=4096><img src=cid:none width=24 height=24><img src=\"data:image/png;base64,AAAA\" width=30 height=99999>\
+         <a href=\"https://x.example/\"><img src=\"https://x.example/c.png\" width=25 height=25 alt=linked></a></p>".to_string(),
+        "<table><tr><td width=30><img src=\"https://x.example/a.png\" width=600 height=300><td bgcolor=#000><img src=\"https://x.example/a.png\" width=60 height=30></table>".to_string(),
     ];
     for dark in [false, true] {
         let tokens = theme::Tokens::named(dark);

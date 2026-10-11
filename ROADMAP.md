@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 7 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 8 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 81, all passing |
+| Tests | 84, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -42,7 +42,9 @@
 4. Done: an HTML and an RTF message of ours compared with Outlook's display of the same `.msg`;
    text size, table widths and placement, cell fills, indents and quotations follow it
    ([docs/ui-parity.md](docs/ui-parity.md), Message bodies).
-5. Next: a box for pictures that are not loaded, row backgrounds and cell padding, then style sheets.
+5. Done: frames for pictures that are not loaded, row backgrounds, cell padding and spacing,
+   vertical places in cells, percentage widths, and style sheets as far as Outlook follows them.
+6. Next: text beside pictures, fonts by name, then pictures written into the body (`data:`).
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -79,3 +81,9 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   keep the width they ask for, stand left, centred or right, and fill their cells; a plain
   blockquote is set in and only quoted mail gets a bar; RTF cells take their widths from the row
   definition. An RTF-only message is now marked in sync, which Outlook needs to show it at all.
+- **2026-10-11** - M2.5: style sheets and table details, checked against Outlook with three probe
+  messages of our own. `<style>` rules by element name, first class and id are followed (and, as in
+  Outlook, nothing else: no second class, no nested selectors, no `@media`). Tables have cell
+  padding and spacing (1 and 2 unless set), collapsed borders, row backgrounds, percentage widths,
+  and cells whose content stands in the middle unless told otherwise. A picture that is not loaded
+  leaves an empty frame of the size it asks for. A link keeps the link colour whatever surrounds it.

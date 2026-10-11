@@ -16,6 +16,8 @@ const MAX_COLORS: usize = 1024;
 const MAX_FONTS: usize = 4096;
 const MAX_LINK: usize = 2048;
 const MAX_EDGES: usize = 64;
+/// Room inside a cell, in pixels, close to the half-gap RTF rows are usually written with.
+const CELL_PADDING: u16 = 5;
 
 pub fn parse(rtf: &[u8]) -> Doc {
     match encapsulated(rtf) {
@@ -283,7 +285,8 @@ impl Builder {
         if self.rows.is_empty() {
             return;
         }
-        let table = Table { rows: std::mem::take(&mut self.rows), border: std::mem::take(&mut self.border), ..Table::default() };
+        let table =
+            Table { rows: std::mem::take(&mut self.rows), border: std::mem::take(&mut self.border), padding: CELL_PADDING, ..Table::default() };
         if table.columns() > 1 {
             self.blocks.push(Block::Table(table));
         } else {

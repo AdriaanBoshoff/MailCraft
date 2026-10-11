@@ -301,7 +301,7 @@ fn tables_keep_their_width_their_place_and_their_cell_sizes() {
     let t = table("<table width=\"100%\"><tr><td>a<td>b</table>");
     assert_eq!((t.width, t.align), (TableWidth::Fill, Align::Left));
     let t = table("<table width=\"50%\" style=\"margin-left:auto\"><tr><td width=99999999>a<td width=-3>b</table>");
-    assert_eq!((t.width, t.align, t.rows[0][0].width, t.rows[0][1].width), (TableWidth::Content, Align::Left, 4096, 0));
+    assert_eq!((t.width, t.align, t.rows[0][0].width, t.rows[0][1].width), (TableWidth::Percent(50), Align::Left, 4096, 0));
     // One column and nothing to draw: still only layout.
     assert!(matches!(parse("<table width=\"100%\"><tr><td>a<tr><td>b</table>").blocks.first(), Some(Block::Para(_))));
 
@@ -311,4 +311,114 @@ fn tables_keep_their_width_their_place_and_their_cell_sizes() {
     let Some(Block::Table(t)) = rtf.blocks.first() else { panic!("expected a table") };
     let widths: Vec<Vec<u16>> = t.rows.iter().map(|r| r.iter().map(|c| c.width).collect()).collect();
     assert_eq!(widths, [vec![280, 120], vec![0, 4096, 0]]);
+}
+
+#[test]
+fn style_sheets_pick_elements_by_name_first_class_and_id() {
+    let doc = parse(
+        "<html><head><title>t</title><style><!--\n\
+         @import url(https://x.example/a.css); /* a note */\n\
+         p.note, h2 { color:#b00020; font-weight:bold }\n\
+         #lead { font-size:18pt }\n\
+         .plain { color:#006400 }\n\
+         .box td, p > b, p.two.marks, p[lang], * { color:#00ff00 }\n\
+         @media screen { p { color:#0000ff } .gone { display:block } }\n\
+         .gone { display:none }\n\
+         p { margin:0; color:#444488 }\n\
+         a:hover { color:#ff0000 } a:link { color:#008080 }\n\
+         --></style></head><body>\
+         <p id=LEAD>lead</p><p class=\"Note other\">note</p><p class=\"other plain\">second</p><p class=gone>hidden</p>\
+         <h2>head</h2><p class=plain style=\"color:#101010\">own</p><p class=two>x <b>b</b> <a href=\"https://x.example/\">link</a></p>",
+    );
+    let p = paras(&doc);
+    assert_eq!(p.iter().map(|p| p.text()).collect::<Vec<_>>(), ["lead", "note", "second", "head", "own", "x b link"]);
+    let color = |i: usize, run: usize| p[i].runs[run].style.color;
+    assert_eq!((p[0].runs[0].style.size, color(0, 0)), (Some(18.0), Some([0x44, 0x44, 0x88])), "the id is matched whatever its case");
+    assert_eq!((color(1, 0), p[1].runs[0].style.bold), (Some([0xb0, 0x00, 0x20]), true), "the first class picks the rule");
+    assert_eq!(color(2, 0), Some([0x44, 0x44, 0x88]), "a second class picks nothing");
+    assert_eq!(color(3, 0), Some([0xb0, 0x00, 0x20]));
+    assert_eq!(color(4, 0), Some([0x10, 0x10, 0x10]), "the element's own style comes last");
+    assert_eq!(color(5, 1), Some([0x44, 0x44, 0x88]), "rules with other selectors, and rules inside at-rules, are skipped");
+    assert_eq!(color(5, 3), Some([0x00, 0x80, 0x80]));
+    assert!(!p[1].gap && !p[2].gap && p[3].gap, "the sheet takes the paragraphs' margins away, not the heading's");
+
+    // A link has the link colour, whatever is around it, unless the link itself is given one.
+    let doc = parse(
+        "<body text=#333333><p><font color=red><a href=\"https://x.example/\">a</a></font> <a href=\"https://x.example/\" style=\"color:red\">b</a></p>",
+    );
+    let runs = &paras(&doc)[0].runs;
+    assert_eq!((runs[0].style.color, runs[2].style.color), (None, Some([255, 0, 0])));
+}
+
+#[test]
+fn cells_keep_their_room_their_fills_and_their_places() {
+    use crate::rich::{TableWidth, VAlign};
+    let table = |html: &str| match parse(html).blocks.into_iter().next() {
+        Some(Block::Table(t)) => t,
+        other => panic!("expected a table, got {other:?}"),
+    };
+    let t = table("<table><tr><td>a<td>b</table>");
+    assert_eq!((t.padding, t.spacing), (1, 2));
+    let t = table(
+        "<table cellpadding=12 cellspacing=\"0px\"><tr><td>a<td style=\"padding:16px 32px 4px\">b<td style=\"padding:6pt\">c<td style=\"padding:1em\">d</table>",
+    );
+    assert_eq!((t.padding, t.spacing), (12, 0));
+    assert_eq!(t.rows[0].iter().map(|c| c.padding).collect::<Vec<_>>(), [None, Some((16, 32)), Some((8, 8)), None]);
+    let t = table("<table cellpadding=99999 cellspacing=-4 style=\"border-collapse:collapse\"><tr><td>a<td>b</table>");
+    assert_eq!((t.padding, t.spacing), (64, 0));
+    let t = table("<table cellspacing=1e39><tr><td>a<td>b</table>");
+    assert_eq!(t.spacing, 2, "a size beyond any number is no size");
+
+    // A row's background is its cells', unless a cell has its own.
+    let t = table(
+        "<style>tr.band { background-color:#ffd966 }</style>\
+         <table><tr bgcolor=#1F4E79><td>a<td bgcolor=#aa0000>b</tr><tr><td>c<td>d</tr><tr class=band><td>e<td>f</table>",
+    );
+    let fills: Vec<Vec<Option<[u8; 3]>>> = t.rows.iter().map(|r| r.iter().map(|c| c.background).collect()).collect();
+    assert_eq!(fills[0], [Some([0x1F, 0x4E, 0x79]), Some([0xaa, 0, 0])]);
+    assert_eq!(fills[1], [None, None]);
+    assert_eq!(fills[2], [Some([0xff, 0xd9, 0x66]); 2]);
+    assert!(
+        t.rows.iter().flatten().all(|c| c.blocks.iter().all(|b| matches!(b, Block::Para(p) if p.runs.iter().all(|r| r.style.background.is_none()))))
+    );
+
+    // What a cell holds stands in the middle unless the cell or its row says otherwise.
+    let t = table(
+        "<table><tr><td>a<td valign=top>b<td valign=BOTTOM>c<td style=\"vertical-align:top\">d</tr>\
+         <tr valign=top><td>e<td valign=middle>f<td valign=sideways>g</table>",
+    );
+    let places: Vec<Vec<VAlign>> = t.rows.iter().map(|r| r.iter().map(|c| c.valign).collect()).collect();
+    assert_eq!(places[0], [VAlign::Middle, VAlign::Top, VAlign::Bottom, VAlign::Top]);
+    assert_eq!(places[1], [VAlign::Top, VAlign::Middle, VAlign::Top]);
+
+    // Widths as shares, of the room and of the table.
+    let t = table("<table style=\"width:50%\"><tr><td width=\"25%\">a<td width=\"75%\">b<td width=\"900%\">c<td width=\"0%\">d</table>");
+    assert_eq!(t.width, TableWidth::Percent(50));
+    assert_eq!(t.rows[0].iter().map(|c| (c.share, c.width)).collect::<Vec<_>>(), [(25, 0), (75, 0), (100, 0), (0, 0)]);
+    let t = table("<style>table.wide { width:400px }</style><table class=wide><tr><td>a<td>b</table>");
+    assert_eq!(t.width, TableWidth::Pixels(400));
+}
+
+#[test]
+fn hostile_style_sheets_are_read_without_harm() {
+    let sheets = [
+        "p {".repeat(5000),
+        "@media x {".repeat(5000),
+        "}".repeat(5000) + "p{color:red}",
+        ".a".repeat(5000) + "{color:red}",
+        (0..3000).map(|i| format!("p.c{i}, #i{i}, p {{ color:#{:06x} }}", i)).collect::<String>(),
+        "p { color:red; ".to_string() + &"x:y;".repeat(100_000) + "}",
+        "/* never closed p { color:red }".to_string(),
+        "\u{e9}\u{e9}.\u{e9}#\u{e9} { color:red } .\u{202e} {} # {} . {} : {} ,,, {}".to_string(),
+        "a:link:hover, a::before, :link, p:LINK { color:red }".to_string(),
+    ];
+    for sheet in &sheets {
+        let doc = parse(&format!("<style>{sheet}</style><p class=\"c1 a\" id=i1>text</p><table><tr class=c2><td id=i2>a<td class=a>b</table>"));
+        assert!(doc.text().contains("text"), "{:?}", doc.text());
+    }
+    // A sheet that is never closed takes the rest of the message with it, as a browser has it.
+    assert!(parse("<p>before</p><style>p { color:red } <p>after</p>").text().contains("before"));
+    // Sheets past the size limit are not read.
+    let big = format!("<style>{}</style><style>p {{ color:red }}</style><p>x</p>", " ".repeat(600 << 10));
+    assert_eq!(paras(&parse(&big))[0].runs[0].style.color, None);
 }

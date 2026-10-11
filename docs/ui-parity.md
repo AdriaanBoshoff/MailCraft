@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 6 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at two message bodies; layout only.
+**Status:** revision 7 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at five message bodies; layout only.
 
 How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -36,10 +36,10 @@ and only the ribbon panel's height and contents change. MailCraft follows that.
 
 ## Message bodies
 
-Two messages from MailCraft's own sample mailbox (synthetic, written by us) were saved as `.msg` and
-opened in an Outlook Classic message window, one at a time, then closed without saving. The window
-was compared with MailCraft's reading pane showing the same message. Nothing from the owner's
-mailbox was involved.
+Two messages from MailCraft's own sample mailbox and three probe messages (all synthetic, written by
+us) were saved as `.msg` and opened in an Outlook Classic message window, one at a time, then closed
+without saving. The window was compared with MailCraft's reading pane showing the same message.
+Nothing from the owner's mailbox was involved.
 
 | What | Outlook Classic (observed) | MailCraft | State |
 |---|---|---|---|
@@ -51,16 +51,26 @@ mailbox was involved.
 | Plain `<blockquote>` | set in about 40 to 48 on the left, no bar | set in 40, no bar | close |
 | Quoted earlier mail (`type=cite`, a left border, a quote class) | a bar on the left | a bar on the left | close |
 | Picture sent with the message (`cid:`) | drawn at the size the body asks for | the same | same |
-| Picture on a server, not loaded | an empty box of the size asked for, with a mark and the alternative text | a line of text with the alternative text | differs |
+| Picture on a server, not loaded, with a size | an empty box of the size asked for, with a mark, a notice and the alternative text, standing in the line of text | an empty frame of that size with our own mark, a notice and the alternative text, on a row of its own | close |
+| Picture on a server, not loaded, without a size | a small box with a mark only | a line of text with the alternative text | differs (ours says what the picture is) |
+| Table, cell padding and spacing | 1 and 2 where the table sets none; `cellpadding` and `cellspacing` followed; with spacing the table's own border is seen round the cells' | the same | same |
+| `border-collapse: collapse` | no room between cells | the same | same |
+| `padding` on a cell | followed, above and below apart from left and right | the same; one value each way (the left and right, top and bottom are not told apart) | close |
+| Background on a row (`bgcolor`, or a style) | fills the row's cells | the same | same |
+| What a cell holds, in a taller cell | in the middle; `valign` and `vertical-align` on the cell or the row followed | the same | same |
+| Table width as a percentage | that share of the window | that share of the room | same |
+| Cell width as a percentage | that share of the table | the same, for tables that have a width | same |
+| Style sheet (`<style>`) | rules for an element name, a class, an id, or a name with a class are followed; only the **first** class an element names counts; rules with several classes, with one element inside another, and inside `@media` are not | the same | same |
+| Link colour | the link colour whatever the text around it has; a colour set on the link itself is kept | the same, with our own link colour | same |
 | RTF table | cell widths from the row definition (15 twips to the pixel); only the borders the RTF names | the same widths; every cell boxed when any border is named | close |
 | RTF left indent | 720 twips is 48 | 720 twips is 48 | same |
 | RTF highlight | a bright marker colour from a fixed palette | the colour the RTF's colour table gives | differs |
 | Message window type | an RTF-only `.msg` is shown as rich text only when it is marked as in sync (see [file-format-parity.md](file-format-parity.md)) | written so | same |
 
-Not followed yet, in order of how much they show: a box for pictures that are not loaded; `bgcolor`
-on a row; `cellpadding` and `cellspacing` (cells have one fixed padding); style sheets (`<style>`
-rules and classes); fonts by name; Outlook's link colour; RTF borders per cell edge; text beside a
-picture. They are in [gaps.md](gaps.md), item 3.
+Not followed yet, in order of how much they show: text beside a picture (a picture or its frame
+always stands on a row of its own); fonts by name; borders set in styles and RTF borders per cell
+edge; the space Outlook leaves between a paragraph and a table; cells that span rows. They are in
+[gaps.md](gaps.md), item 3.
 
 ## Behaviour seen
 
@@ -77,6 +87,7 @@ picture. They are in [gaps.md](gaps.md), item 3.
 
 ## Revision history
 
+- 7 · 2026-10-11 — three probe messages compared: picture frames, cell padding and spacing, row fills, vertical places, percentage widths, style sheets, link colour.
 - 6 · 2026-10-11 — two message bodies compared with Outlook's display of the same `.msg`; Message bodies section added.
 - 5 · 2026-10-11 — attached pictures drawn in the body; row updated.
 - 4 · 2026-10-11 — classic ribbon observed; MailCraft's classic layout rebuilt on the shared shell.
