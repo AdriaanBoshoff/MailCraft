@@ -8,6 +8,8 @@
 //! Fonts are the installed ones, found by name ([`mailcraft_fonts`]); a face that may not be
 //! put into a document is passed over for the next name. Text is set one character to one
 //! glyph, left to right: there is no shaping, no kerning and no right-to-left setting yet.
+//! Pictures stand in the line of text at the size the body asks for; the caller says how large
+//! each is and draws it.
 //!
 //! Everything in a body is hostile: sizes, widths, spans and nesting are capped, and so are the
 //! pages and the glyphs one message may take.
@@ -18,7 +20,7 @@ mod fonts;
 mod memo;
 
 pub use fonts::{Fonts, Loaded};
-pub use mailcraft_formats::rich::{Line, Rgb};
+pub use mailcraft_formats::rich::{Line, Picture, Rgb};
 pub use memo::{Memo, memo};
 
 /// Pages one message may take.
@@ -64,7 +66,7 @@ pub struct Printed {
     pub truncated: bool,
 }
 
-/// One page. Fills lie under lines, and lines under text.
+/// One page. Fills lie under lines, lines under pictures, and pictures under text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Page {
     pub width: f32,
@@ -72,6 +74,7 @@ pub struct Page {
     /// In the order they are to be painted.
     pub fills: Vec<Fill>,
     pub rules: Vec<Rule>,
+    pub pictures: Vec<Placed>,
     pub texts: Vec<Text>,
 }
 
@@ -84,6 +87,16 @@ pub struct Fill {
     pub color: Rgb,
     /// How deep in tables the fill is; a deeper one lies over a shallower one.
     pub depth: u16,
+}
+
+/// A picture and the rectangle it fills, from its top left corner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placed {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub picture: Picture,
 }
 
 /// A straight line.

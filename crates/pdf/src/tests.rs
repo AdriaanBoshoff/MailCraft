@@ -210,3 +210,37 @@ fn damaged_fonts_never_panic() {
     looped[glyf_at + 10..glyf_at + 12].copy_from_slice(&0x0022u16.to_be_bytes());
     assert!(font::file(&looped, 0, &BTreeSet::from([4]), Embedding::Subset).is_some());
 }
+
+#[test]
+fn pictures_are_carried_with_what_shows_through_them() {
+    let mut w = Writer::new();
+    // Drawn before there is a page, and a picture that is not of the file: nothing.
+    w.picture(ImageId(3), 0.0, 0.0, 1.0, 1.0);
+    let solid = w.image(2, 1, &[255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
+    let clear = w.image(1, 2, &[1, 2, 3, 255, 4, 5, 6, 0]).unwrap();
+    assert!(w.page(200.0, 100.0));
+    w.picture(solid, 10.0, 20.0, 50.0, 25.0);
+    w.picture(clear, f32::NAN, f32::INFINITY, -4.0, 1e30);
+    w.picture(ImageId(9), 0.0, 0.0, 1.0, 1.0);
+    let file = w.finish("p").unwrap();
+    assert!(has(&file, "/XObject << /Im0 ") && has(&file, "/Subtype /Image /Width 2 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Filter"));
+    assert!(has(&file, "/Width 1 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray") && has(&file, "/SMask "));
+    assert_eq!(file.windows(6).filter(|w| w == b"/SMask").count(), 1);
+    let unpacked = streams(&file);
+    assert!(unpacked.contains(&vec![255, 0, 0, 0, 0, 255]) && unpacked.contains(&vec![1, 2, 3, 4, 5, 6]) && unpacked.contains(&vec![255, 0]));
+    let page = unpacked.iter().find(|s| has(s, " Do Q")).unwrap();
+    let ops = String::from_utf8_lossy(page);
+    assert!(ops.contains("q 50 0 0 25 10 55 cm /Im0 Do Q"), "{ops}");
+    assert!(!ops.contains("Im9") && !ops.contains("NaN") && !ops.contains("inf"));
+
+    // Sizes that do not hold, and more than there may be.
+    let mut w = Writer::new();
+    assert_eq!(w.image(0, 1, &[]), Err(PdfError::Image));
+    assert_eq!(w.image(2, 2, &[0; 15]), Err(PdfError::Image));
+    assert_eq!(w.image(u32::MAX, u32::MAX, &[0; 4]), Err(PdfError::Image));
+    assert_eq!(w.image(MAX_IMAGE_SIDE + 1, 1, &[0; 4]), Err(PdfError::Image));
+    for _ in 0..MAX_IMAGES {
+        w.image(1, 1, &[0; 4]).unwrap();
+    }
+    assert_eq!(w.image(1, 1, &[0; 4]), Err(PdfError::TooManyImages));
+}

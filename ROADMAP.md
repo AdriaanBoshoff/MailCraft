@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 12 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 13 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 121, all passing |
+| Tests | 123, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -53,7 +53,8 @@
    fills, places and merges down.
 9. Done: a message prints to a PDF file in Memo Style (`file.print`), text, tables and borders;
    pictures are not printed yet.
-10. Next: pictures in print; pictures an RTF body holds as attached objects, and metafiles.
+10. Done: pictures in print - attached and written-in pictures are drawn on the page.
+11. Next: pictures an RTF body holds as attached objects, and metafiles.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -135,3 +136,10 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   over. Not yet: pictures (their place is named), kerning, shaping and right-to-left text, a
   printer other than a PDF file, and a comparison with what Outlook prints. Tests use a font
   built in code, so nothing is bundled.
+- **2026-10-11** - M2.10: pictures in print. A picture a message carries (an attachment the body
+  names by content id, or one written into the body) is drawn on the printed page at the size the
+  body asks for, made smaller to fit the column and the page; what shows through it is kept (a
+  soft mask in the PDF file). Each picture goes into the file once. Decoding moved from the
+  window into the engine (`engine::pictures`), so the reading pane and print share one set of
+  limits. A picture on a server is never fetched and stays named in words. Not yet: a picture at
+  the side with text beside it (it is printed in the line), and a picture cut over a page end.

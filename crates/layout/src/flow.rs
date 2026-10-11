@@ -9,7 +9,7 @@ use std::sync::Arc;
 use mailcraft_formats::rich::{Align, Block, Cell, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Script, Table, TableWidth, VAlign};
 
 use crate::fonts::{Fonts, Pick};
-use crate::{Fill, MAX_PAGES, Page, Paper, Rule, Text};
+use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Text};
 
 /// Points to the pixel.
 const PX: f32 = 0.75;
@@ -74,6 +74,10 @@ struct Glyph {
     advance: f32,
     look: usize,
     kind: Kind,
+    /// A picture: its place among the paragraph's pictures. Its width is the advance.
+    picture: Option<usize>,
+    /// A picture's height; nothing for text.
+    tall: f32,
 }
 
 /// How a run's glyphs look.
@@ -88,8 +92,8 @@ struct Look {
     rise: f32,
 }
 
-/// How many fills, lines and texts a page held at some moment.
-type Mark = (usize, usize, usize);
+/// How many fills, lines, texts and pictures a page held at some moment.
+type Mark = (usize, usize, usize, usize);
 
 pub(crate) struct Flow<'f, 'l> {
     pub fonts: &'f mut Fonts<'l>,
@@ -101,6 +105,7 @@ pub(crate) struct Flow<'f, 'l> {
     /// No font at all could be found for some text.
     pub no_font: bool,
     glyphs_left: usize,
+    sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>,
 }
 
 fn px(v: u16) -> f32 {
@@ -209,12 +214,12 @@ struct Waiting<'a> {
 }
 
 impl<'f, 'l> Flow<'f, 'l> {
-    pub fn new(fonts: &'f mut Fonts<'l>, paper: Paper, base: Base) -> Self {
+    pub fn new(fonts: &'f mut Fonts<'l>, paper: Paper, base: Base, sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>) -> Self {
         let sane = |v: f32, least: f32, most: f32| if v.is_finite() { v.clamp(least, most) } else { least };
         let width = sane(paper.width, 72.0, 14_400.0);
         let height = sane(paper.height, 72.0, 14_400.0);
         let margin = sane(paper.margin, 0.0, width.min(height) / 3.0);
-        Self { fonts, paper: Paper { width, height, margin }, pages: Vec::new(), base, full: false, no_font: false, glyphs_left: MAX_GLYPHS }
+        Self { fonts, paper: Paper { width, height, margin }, pages: Vec::new(), base, full: false, no_font: false, glyphs_left: MAX_GLYPHS, sizes }
     }
 
     pub fn top(&self) -> f32 {
@@ -258,7 +263,7 @@ impl<'f, 'l> Flow<'f, 'l> {
     }
 
     fn mark(&self, page: usize) -> Mark {
-        self.pages.get(page).map_or((0, 0, 0), |p| (p.fills.len(), p.rules.len(), p.texts.len()))
+        self.pages.get(page).map_or((0, 0, 0, 0), |p| (p.fills.len(), p.rules.len(), p.texts.len(), p.pictures.len()))
     }
 
     /// Move what was put on a page between two moments down by `by`.
@@ -274,6 +279,9 @@ impl<'f, 'l> Flow<'f, 'l> {
         for text in page.texts.get_mut(from.2..to.2).unwrap_or_default() {
             text.y += by;
         }
+        for picture in page.pictures.get_mut(from.3..to.3).unwrap_or_default() {
+            picture.y += by;
+        }
     }
 
     fn rule(&mut self, page: usize, from: (f32, f32), to: (f32, f32), width: f32, color: Rgb, line: Line) {
@@ -282,10 +290,29 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
     }
 
-    /// The glyphs of a paragraph and the looks they point at.
-    fn glyphs(&mut self, para: &Para) -> (Vec<Glyph>, Vec<Look>) {
+    /// The size a picture is printed at, in points: what the body asks for, else its own, never
+    /// wider than `room` or taller than a page.
+    fn picture_size(&self, asked: (u16, u16), natural: (u16, u16), room: f32) -> (f32, f32) {
+        let natural = (f32::from(natural.0.max(1)), f32::from(natural.1.max(1)));
+        let (w, h) = (f32::from(asked.0), f32::from(asked.1));
+        let (w, h) = match (w > 0.0, h > 0.0) {
+            (true, true) => (w, h),
+            (true, false) => (w, natural.1 * w / natural.0),
+            (false, true) => (natural.0 * h / natural.1, h),
+            (false, false) => natural,
+        };
+        let (w, h) = (w * PX, h * PX);
+        let page = (self.bottom() - self.top()).max(1.0);
+        let fit = (room.max(1.0) / w).min(page / h).min(1.0);
+        ((w * fit).max(0.1), (h * fit).max(0.1))
+    }
+
+    /// The glyphs of a paragraph that has `room` across, the looks they point at, and the
+    /// pictures among them.
+    fn glyphs<'p>(&mut self, para: &'p Para, room: f32) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
         let mut out: Vec<Glyph> = Vec::new();
         let mut looks: Vec<Look> = Vec::new();
+        let mut pictures: Vec<&'p Picture> = Vec::new();
         for run in &para.runs {
             let s = &run.style;
             let mut size = s.size.filter(|v| v.is_finite()).unwrap_or(self.base.size).clamp(4.0, 96.0);
@@ -310,8 +337,28 @@ impl<'f, 'l> Flow<'f, 'l> {
                 back: s.background,
                 rise,
             };
-            // A picture is not printed yet: its place is named, as the reading pane names one
-            // it cannot show.
+            // A picture that can be printed stands in the line like one tall glyph.
+            if let Some(picture) = &run.picture
+                && let Some(natural) = (self.sizes)(picture)
+            {
+                let mut chain = self.fonts.chain(&self.base.family.clone(), false, false, false);
+                if let Some((pick, glyph)) = self.fonts.resolve(&mut chain, ' ')
+                    && out.len() < MAX_PARA_GLYPHS
+                    && self.glyphs_left > 0
+                {
+                    self.glyphs_left -= 1;
+                    let (wide, tall) = self.picture_size(run.extent, natural, room);
+                    let plain = Look { under: false, strike: false, back: None, rise: 0.0, ..look };
+                    let at = looks.iter().position(|l| *l == plain).unwrap_or_else(|| {
+                        looks.push(plain);
+                        looks.len() - 1
+                    });
+                    out.push(Glyph { ch: '\u{fffc}', pick, glyph, advance: wide, look: at, kind: Kind::Ink, picture: Some(pictures.len()), tall });
+                    pictures.push(picture);
+                    continue;
+                }
+            }
+            // One that cannot is named in words, as the reading pane names one it cannot show.
             let named;
             let text: &str = match &run.picture {
                 Some(picture) => {
@@ -335,7 +382,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             for ch in text.chars() {
                 if out.len() >= MAX_PARA_GLYPHS || self.glyphs_left == 0 {
                     self.full = true;
-                    return (out, looks);
+                    return (out, looks, pictures);
                 }
                 let (shown, kind, times) = match ch {
                     '\n' => (' ', Kind::Break, 1.0),
@@ -353,14 +400,14 @@ impl<'f, 'l> Flow<'f, 'l> {
                 let Some((pick, glyph)) = self.fonts.resolve(&mut chain, shown) else {
                     self.no_font = true;
                     self.full = true;
-                    return (out, looks);
+                    return (out, looks, pictures);
                 };
                 self.glyphs_left -= 1;
                 let advance = self.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, look.size)) * times;
-                out.push(Glyph { ch: if kind == Kind::Break { '\n' } else { ch }, pick, glyph, advance, look: at, kind });
+                out.push(Glyph { ch: if kind == Kind::Break { '\n' } else { ch }, pick, glyph, advance, look: at, kind, picture: None, tall: 0.0 });
             }
         }
-        (out, looks)
+        (out, looks, pictures)
     }
 
     /// Height, depth and line room of text in the base font at `size`.
@@ -387,7 +434,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
         let inset = Self::inset(para, width);
         let (left, room) = (x + inset, (width - inset).max(24.0));
-        let (glyphs, looks) = self.glyphs(para);
+        let (glyphs, looks, pictures) = self.glyphs(para, room);
         let own_size = looks.first().map_or(self.base.size, |l| l.size);
         for (n, (from, to)) in lines(&glyphs, room).into_iter().enumerate() {
             let line = glyphs.get(from..to).unwrap_or_default();
@@ -396,6 +443,10 @@ impl<'f, 'l> Flow<'f, 'l> {
             let line = line.get(..seen).unwrap_or_default();
             let (mut ascent, mut descent, mut gap) = (0.0f32, 0.0f32, 0.0f32);
             for g in line {
+                if g.picture.is_some() {
+                    ascent = ascent.max(g.tall);
+                    continue;
+                }
                 let size = looks.get(g.look).map_or(own_size, |l| l.size);
                 if let Some((a, d, l)) = self.fonts.face(g.pick.face).map(|f| f.line(size)) {
                     (ascent, descent, gap) = (ascent.max(a), descent.max(d), gap.max(l));
@@ -420,7 +471,16 @@ impl<'f, 'l> Flow<'f, 'l> {
             // Glyphs that follow one another in one face and one look make one piece.
             let mut i = 0usize;
             while let Some(first) = line.get(i) {
-                let same = |g: &Glyph| g.pick == first.pick && g.look == first.look;
+                if let Some(picture) = first.picture.and_then(|n| pictures.get(n)) {
+                    let placed = Placed { x: pen, y: baseline - first.tall, width: first.advance, height: first.tall, picture: (*picture).clone() };
+                    if let Some(page) = self.page(at.page) {
+                        page.pictures.push(placed);
+                    }
+                    pen += first.advance;
+                    i += 1;
+                    continue;
+                }
+                let same = |g: &Glyph| g.pick == first.pick && g.look == first.look && g.picture.is_none();
                 let piece = line.get(i..).unwrap_or_default();
                 let count = piece.iter().take_while(|g| same(g)).count().max(1);
                 let piece = piece.get(..count).unwrap_or_default();
@@ -524,10 +584,15 @@ impl<'f, 'l> Flow<'f, 'l> {
     /// The narrowest and the widest a paragraph can usefully be: its longest word, and its
     /// longest line when nothing is wrapped.
     fn para_wants(&mut self, para: &Para) -> (f32, f32) {
-        let (glyphs, _) = self.glyphs(para);
+        let (glyphs, ..) = self.glyphs(para, f32::MAX);
         let (mut word, mut line, mut least, mut most) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for g in &glyphs {
             match g.kind {
+                // A picture is made smaller where there is less room than it wants.
+                Kind::Ink if g.picture.is_some() => {
+                    word += g.advance.min(MIN_COLUMN);
+                    line += g.advance;
+                }
                 Kind::Ink => {
                     word += g.advance;
                     line += g.advance;

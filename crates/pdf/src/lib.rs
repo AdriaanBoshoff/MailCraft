@@ -1,4 +1,4 @@
-//! Writes pages of text, fills and lines to a PDF file.
+//! Writes pages of text, fills, lines and pictures to a PDF file.
 //!
 //! A [`Writer`] is told the fonts, then page after page what stands on it, in points from the
 //! page's top left corner; [`Writer::finish`] gives the file. Text is given as glyphs of a font
@@ -7,7 +7,7 @@
 //! ([`mailcraft_fonts::embedding`]).
 //!
 //! The file layout is from ISO 32000-1 (PDF 1.7): 7.5 (file structure), 7.7 (document
-//! structure), 8 (graphics), 9.4 (text objects), 9.7 (composite fonts), 9.8 (font descriptors),
+//! structure), 8 (graphics), 8.9 (images), 9.4 (text objects), 9.7 (composite fonts), 9.8 (font descriptors),
 //! 9.9 (embedded font programs), 9.10 (extraction of text content).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -26,6 +26,10 @@ pub type Rgb = [u8; 3];
 pub const MAX_PAGES: usize = 5000;
 /// Fonts in one file.
 pub const MAX_FONTS: usize = 256;
+/// Pictures in one file, the longest side of one, and the bytes of all of them unpacked.
+pub const MAX_IMAGES: usize = 256;
+pub const MAX_IMAGE_SIDE: u32 = 8192;
+const MAX_IMAGE_BYTES: usize = 512 << 20;
 /// Bytes of drawing instructions on one page.
 const MAX_PAGE_BYTES: usize = 16 << 20;
 /// Glyphs in one piece of text.
@@ -41,11 +45,19 @@ pub enum PdfError {
     TooManyFonts,
     #[error("the PDF file would be too large")]
     TooLarge,
+    #[error("the picture cannot be put into a PDF file")]
+    Image,
+    #[error("too many pictures for one PDF file")]
+    TooManyImages,
 }
 
 /// A font of this file, from [`Writer::font`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FontId(usize);
+
+/// A picture of this file, from [`Writer::image`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageId(usize);
 
 /// How a line is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -82,6 +94,15 @@ struct Font {
     used: BTreeMap<u16, char>,
 }
 
+/// A picture's samples: three bytes of colour for each pixel, and where any pixel lets what
+/// is under it show, a byte for each of how much it covers.
+struct Image {
+    width: u32,
+    height: u32,
+    rgb: Vec<u8>,
+    alpha: Option<Vec<u8>>,
+}
+
 struct Page {
     width: f32,
     height: f32,
@@ -91,6 +112,8 @@ struct Page {
 #[derive(Default)]
 pub struct Writer {
     fonts: Vec<Font>,
+    images: Vec<Image>,
+    image_bytes: usize,
     pages: Vec<Page>,
 }
 
@@ -165,6 +188,50 @@ impl Writer {
         let _ = writeln!(ops, "{} RG {} w {dash} {} {} m {} {} l S", rgb(color), num(w), num(from.0), num(h - from.1), num(to.0), num(h - to.1));
     }
 
+    /// Take a picture into the file: `rgba` holds red, green, blue and cover for each pixel, row
+    /// after row from the top. An error when the bytes are not `width` by `height` pixels, or
+    /// the picture or all of them together are too large.
+    pub fn image(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<ImageId, PdfError> {
+        if self.images.len() >= MAX_IMAGES {
+            return Err(PdfError::TooManyImages);
+        }
+        if width == 0 || height == 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
+            return Err(PdfError::Image);
+        }
+        let pixels = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| PdfError::Image)?;
+        if pixels.checked_mul(4) != Some(rgba.len()) {
+            return Err(PdfError::Image);
+        }
+        let bytes = pixels.saturating_mul(4);
+        if self.image_bytes.saturating_add(bytes) > MAX_IMAGE_BYTES {
+            return Err(PdfError::TooLarge);
+        }
+        let mut rgb = Vec::with_capacity(pixels.saturating_mul(3));
+        let mut alpha = Vec::with_capacity(pixels);
+        for pixel in rgba.chunks_exact(4) {
+            rgb.extend(pixel.iter().take(3));
+            alpha.push(pixel.get(3).copied().unwrap_or(255));
+        }
+        let alpha = alpha.iter().any(|a| *a != 255).then_some(alpha);
+        self.image_bytes += bytes;
+        self.images.push(Image { width, height, rgb, alpha });
+        Ok(ImageId(self.images.len() - 1))
+    }
+
+    /// Draw a picture into the rectangle given by its top left corner and size. Dropped when
+    /// the picture is not of this file.
+    pub fn picture(&mut self, image: ImageId, x: f32, y: f32, width: f32, height: f32) {
+        if image.0 >= self.images.len() {
+            return;
+        }
+        let Some(page) = self.open() else { return };
+        let side = |v: f32| if v.is_finite() { v.clamp(0.01, MAX_MEASURE) } else { 0.01 };
+        let (width, height) = (side(width), side(height));
+        let bottom = page.height - y - height;
+        // An image fills the unit square; the matrix puts that square on the page (8.9.5).
+        let _ = writeln!(page.ops, "q {} 0 0 {} {} {} cm /Im{} Do Q", num(width), num(height), num(x), num(bottom), image.0);
+    }
+
     /// Draw a piece of text. Dropped when the font is not of this file.
     pub fn text(&mut self, piece: Piece) {
         let Some(font) = self.fonts.get_mut(piece.font.0) else { return };
@@ -203,7 +270,27 @@ impl Writer {
         for (n, id) in font_ids.iter().enumerate() {
             let _ = write!(resources, " /F{n} {id} 0 R");
         }
-        resources.push_str(" >> >>");
+        resources.push_str(" >>");
+        if !self.images.is_empty() {
+            resources.push_str(" /XObject <<");
+            for (n, image) in self.images.iter().enumerate() {
+                let id = file.id();
+                let size = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /BitsPerComponent 8 ", image.width, image.height);
+                // How much each pixel covers is an image of its own, in grey (11.6.5.3 soft masks).
+                let mask = match &image.alpha {
+                    Some(alpha) => {
+                        let mask = file.id();
+                        file.stream(mask, &format!("{size}/ColorSpace /DeviceGray "), alpha)?;
+                        format!("/SMask {mask} 0 R ")
+                    }
+                    None => String::new(),
+                };
+                file.stream(id, &format!("{size}/ColorSpace /DeviceRGB {mask}"), &image.rgb)?;
+                let _ = write!(resources, " /Im{n} {id} 0 R");
+            }
+            resources.push_str(" >>");
+        }
+        resources.push_str(" >>");
 
         let mut kids = String::new();
         for page in &self.pages {

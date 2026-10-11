@@ -7,6 +7,7 @@
 pub mod catalog;
 pub mod cmd;
 pub mod io;
+pub mod pictures;
 pub mod print;
 pub mod sample;
 #[cfg(test)]

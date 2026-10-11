@@ -271,7 +271,7 @@ fn a_message_prints_to_a_pdf_file() {
     // With the test font the pages are known; the installed fonts differ from machine to machine.
     let item = s.open.clone().unwrap();
     let library = mailcraft_fonts::Library::empty();
-    assert!(matches!(crate::print::layout(&item, "Alex Morgan", 0, mailcraft_layout::Paper::A4, &library), Err(EngineError::Format(_))));
+    assert!(matches!(crate::print::layout(&item, "Alex Morgan", 0, mailcraft_layout::Paper::A4, &library).map(|_| ()), Err(EngineError::Format(_))));
     let printed = {
         let mut fonts = mailcraft_layout::Fonts::new(&library);
         let chars: String = (' '..='~').chain(['\u{e1}', '\u{2022}']).collect();
@@ -279,7 +279,7 @@ fn a_message_prints_to_a_pdf_file() {
         let fields = [("Subject", item.subject())];
         let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
         mailcraft_layout::memo(
-            &mailcraft_layout::Memo { owner: "Alex Morgan", fields: &fields, body: &body, plain: false },
+            &mailcraft_layout::Memo { owner: "Alex Morgan", fields: &fields, body: &body, plain: false, sizes: &|_| None },
             mailcraft_layout::Paper::A4,
             &mut fonts,
         )
@@ -288,8 +288,30 @@ fn a_message_prints_to_a_pdf_file() {
     let text = printed.pages[0].text();
     assert!(text.starts_with("Alex Morgan\nSubject:Launch checklist: three items left\nHi Alex,"), "{text}");
     assert!(text.contains("Support rota for the first week") && text.ends_with("\n1"));
-    let file = crate::print::write(&printed, &item.subject()).unwrap();
+    let file = crate::print::write(&printed, &crate::print::Pictures::default(), &item.subject()).unwrap();
     assert!(file.starts_with(b"%PDF-1.7") && file.ends_with(b"%%EOF\n"));
+
+    // A picture the message carries is printed at the size the body asks for; one on a server
+    // is named, and nothing is fetched for it.
+    run(&mut s, "mail.select", json!({"index": 4}));
+    let item = s.open.clone().unwrap();
+    let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
+    let pictures = crate::print::Pictures::of(&body, &item);
+    let printed = {
+        let mut fonts = mailcraft_layout::Fonts::new(&library);
+        fonts.give("Arial", false, false, mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font("ab "), index: 0 });
+        let sizes = |picture: &mailcraft_layout::Picture| pictures.get(picture).map(|p| p.natural);
+        let memo = mailcraft_layout::Memo { owner: "a", fields: &[], body: &body, plain: false, sizes: &sizes };
+        mailcraft_layout::memo(&memo, mailcraft_layout::Paper::A4, &mut fonts).unwrap()
+    };
+    let placed: Vec<_> = printed.pages.iter().flat_map(|p| &p.pictures).collect();
+    assert_eq!(placed.len(), 1);
+    assert_eq!((placed[0].width, placed[0].height), (180.0, 72.0));
+    let file = crate::print::write(&printed, &pictures, "t").unwrap();
+    let has = |needle: &[u8]| file.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"/Subtype /Image /Width 240 /Height 96") && has(b"/XObject << /Im0 "));
+    assert!(!crate::print::write(&printed, &crate::print::Pictures::default(), "t").unwrap().windows(15).any(|w| w == b"/Subtype /Image"));
+    run(&mut s, "mail.select", json!({"index": 0}));
 
     // Through the command: a file, or the word that no font is installed. Never a half-written one.
     let path = dir.join("launch.pdf");

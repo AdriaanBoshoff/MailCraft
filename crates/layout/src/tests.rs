@@ -20,7 +20,7 @@ fn print_on(library: &Library, memo_: &Memo, paper: Paper) -> Result<Printed, La
 }
 
 fn print(body: &Doc, paper: Paper) -> Printed {
-    print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body, plain: false }, paper).unwrap()
+    print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body, plain: false, sizes: &|_| None }, paper).unwrap()
 }
 
 fn run(text: &str) -> Run {
@@ -80,7 +80,7 @@ fn a_long_message_goes_on_to_more_pages_each_with_its_number() {
     let body = Doc::plain(&text);
     let printed = print_on(
         &Library::empty(),
-        &Memo { owner: "Owner", fields: &[("To", "someone".into()), ("Cc", " ".into())], body: &body, plain: true },
+        &Memo { owner: "Owner", fields: &[("To", "someone".into()), ("Cc", " ".into())], body: &body, plain: true, sizes: &|_| None },
         SMALL,
     )
     .unwrap();
@@ -297,15 +297,76 @@ fn printing_needs_a_font() {
     let body = doc(vec![Block::Para(para("text"))]);
     let library = Library::empty();
     let mut fonts = Fonts::new(&library);
-    assert_eq!(memo(&Memo { owner: "o", fields: &[], body: &body, plain: false }, Paper::A4, &mut fonts).err(), Some(LayoutError::NoFont));
+    assert_eq!(
+        memo(&Memo { owner: "o", fields: &[], body: &body, plain: false, sizes: &|_| None }, Paper::A4, &mut fonts).err(),
+        Some(LayoutError::NoFont)
+    );
     // A font that may not be put into a document is none.
     let mut fonts = Fonts::new(&library);
     fonts.give("Arial", false, false, Face { data: boxes::font_with(CHARS, 0x0002), index: 0 });
-    assert_eq!(memo(&Memo { owner: "o", fields: &[], body: &body, plain: false }, Paper::A4, &mut fonts).err(), Some(LayoutError::NoFont));
+    assert_eq!(
+        memo(&Memo { owner: "o", fields: &[], body: &body, plain: false, sizes: &|_| None }, Paper::A4, &mut fonts).err(),
+        Some(LayoutError::NoFont)
+    );
     // Any font that is there will do for a character none has.
     let mut fonts = Fonts::new(&library);
     fonts.give("Arial", false, false, Face { data: boxes::font("o"), index: 0 });
-    let printed = memo(&Memo { owner: "o", fields: &[], body: &body, plain: false }, Paper::A4, &mut fonts).unwrap();
+    let printed = memo(&Memo { owner: "o", fields: &[], body: &body, plain: false, sizes: &|_| None }, Paper::A4, &mut fonts).unwrap();
     assert_eq!(printed.pages[0].texts[1].glyphs, [(0, 't'), (0, 'e'), (0, 'x'), (0, 't')]);
     assert!(printed.pages[0].texts[0].bold && !printed.pages[0].texts[1].bold);
+}
+
+#[test]
+fn pictures_stand_in_the_line_at_the_size_asked_for() {
+    let shown =
+        |text: &str, id: &str, extent: (u16, u16)| Run { text: text.into(), picture: Some(Picture::Attached(id.into())), extent, ..Run::default() };
+    let in_cell = Cell {
+        blocks: vec![Block::Para(Para { runs: vec![shown("", "small", (0, 0))], ..Para::default() })],
+        span: 1,
+        rows: 1,
+        valign: VAlign::Bottom,
+        ..Cell::default()
+    };
+    let tall = Cell {
+        blocks: vec![Block::Para(para("a")), Block::Para(para("b")), Block::Para(para("c")), Block::Para(para("d"))],
+        span: 1,
+        rows: 1,
+        ..Cell::default()
+    };
+    let body = doc(vec![
+        Block::Para(Para { runs: vec![run("ab"), shown("alt", "small", (0, 0)), run("cd")], ..Para::default() }),
+        Block::Para(Para { runs: vec![shown("", "small", (80, 0))], align: Align::Right, ..Para::default() }),
+        Block::Para(Para { runs: vec![shown("", "huge", (0, 0))], ..Para::default() }),
+        Block::Para(Para { runs: vec![shown("gone", "missing", (40, 40))], ..Para::default() }),
+        Block::Table(Table { rows: vec![vec![in_cell, tall]], ..Table::default() }),
+    ]);
+    let sizes = |picture: &Picture| match picture {
+        Picture::Attached(id) if id == "small" => Some((40, 20)),
+        Picture::Attached(id) if id == "huge" => Some((u16::MAX, u16::MAX)),
+        _ => None,
+    };
+    let printed = print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body: &body, plain: false, sizes: &sizes }, SMALL).unwrap();
+    let all: Vec<&Placed> = printed.pages.iter().flat_map(|p| &p.pictures).collect();
+    assert_eq!(all.len(), 4);
+    for placed in &all {
+        assert!(placed.x >= 19.99 && placed.x + placed.width <= 180.01 && placed.y >= 19.99 && placed.y + placed.height <= 264.01, "{placed:?}");
+    }
+    // 40 by 20 pixels are 30 by 15 points; the picture stands on the baseline between the words.
+    let page = &printed.pages[0];
+    let (ab, cd) = (page.texts.iter().find(|t| t.glyphs[0].1 == 'a').unwrap(), page.texts.iter().find(|t| t.glyphs[0].1 == 'c').unwrap());
+    let first = all[0];
+    assert_eq!((first.width, first.height), (30.0, 15.0));
+    assert!((first.x - (ab.x + 12.0)).abs() < 0.01 && (cd.x - (first.x + 30.0)).abs() < 0.01);
+    assert!((first.y + first.height - ab.y).abs() < 0.01 && ab.y == cd.y);
+    // A width asked for keeps the picture's shape; the paragraph's place is the picture's.
+    assert_eq!((all[1].width, all[1].height), (60.0, 30.0));
+    assert!((all[1].x + 60.0 - 180.0).abs() < 0.01 && all[1].y >= first.y + first.height);
+    // One larger than the page is made to fit it, and goes to a page with room.
+    assert!((all[2].width - 160.0).abs() < 0.01 && (all[2].height - 160.0).abs() < 0.01);
+    // One that cannot be printed is named.
+    assert!(printed.pages.iter().any(|p| p.text().contains("[picture: gone]")));
+    // In a cell it is moved with what else the cell holds: to the foot, beside the last line.
+    let last_page = printed.pages.last().unwrap();
+    let d = last_page.texts.iter().find(|t| t.glyphs[0].1 == 'd').unwrap();
+    assert!(all[3].y + all[3].height <= d.y + 3.01 && all[3].y + all[3].height > d.y - 12.0, "{:?} {}", all[3], d.y);
 }

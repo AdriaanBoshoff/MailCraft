@@ -17,6 +17,8 @@ mailcraft-formats = { workspace = true }
 mailcraft-fonts = { workspace = true }
 mailcraft-layout = { workspace = true }
 mailcraft-pdf = { workspace = true }
+# Decodes the pictures a message body shows.
+image = { workspace = true, features = ["jpeg", "gif", "bmp"] }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

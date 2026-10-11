@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use mailcraft_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Run, Style, Table, TableWidth};
+use mailcraft_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Picture, Run, Style, Table, TableWidth};
 
 use crate::flow::{Base, FOOT, Flow};
 use crate::fonts::Fonts;
@@ -28,6 +28,9 @@ pub struct Memo<'a> {
     pub body: &'a Doc,
     /// The body is plain text, not a formatted one.
     pub plain: bool,
+    /// The width and height in pixels of a picture that can be printed; `None` for one that
+    /// cannot, whose place is then named in words.
+    pub sizes: &'a dyn Fn(&Picture) -> Option<(u16, u16)>,
 }
 
 fn text(text: &str, bold: bool, size: Option<f32>) -> Para {
@@ -89,7 +92,7 @@ fn number(flow: &mut Flow, page: usize) {
 
 /// Lay a message out in Memo Style.
 pub fn memo(memo: &Memo, paper: Paper, fonts: &mut Fonts) -> Result<Printed, LayoutError> {
-    let mut flow = Flow::new(fonts, paper, Base { family: HEAD_FONT.into(), size: 8.0 });
+    let mut flow = Flow::new(fonts, paper, Base { family: HEAD_FONT.into(), size: 8.0 }, memo.sizes);
     let (x, width) = (flow.left(), flow.width());
     let start = flow.start();
     let at = flow.blocks(&head(memo), x, width, start, 0);
