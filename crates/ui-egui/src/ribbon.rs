@@ -1,0 +1,421 @@
+//! The ribbon, its drop-down menus, the name prompt and the File page.
+
+use crate::icons::{self, Icon};
+use crate::{MailUi, Menu, Tab, bold, clip_text, font, text_width, theme};
+use egui::{Align2, Color32, Rect, Sense, Ui, pos2, vec2};
+use mailcraft_model::{FolderId, FolderInfo, FolderKind};
+use serde_json::{Value, json};
+
+struct Btn {
+    icon: Icon,
+    label: &'static str,
+    /// A command id, `menu:<name>` for a drop-down, or "" for a feature that is not built yet.
+    cmd: &'static str,
+    params: &'static str,
+    large: bool,
+}
+
+const fn big(icon: Icon, label: &'static str, cmd: &'static str) -> Btn {
+    Btn { icon, label, cmd, params: "", large: true }
+}
+
+const fn small(icon: Icon, label: &'static str, cmd: &'static str) -> Btn {
+    Btn { icon, label, cmd, params: "", large: false }
+}
+
+const fn with(mut b: Btn, params: &'static str) -> Btn {
+    b.params = params;
+    b
+}
+
+type Group = (&'static str, &'static [Btn]);
+
+const HOME: &[Group] = &[
+    ("New", &[big(Icon::NewMail, "New\nEmail", "mail.new")]),
+    (
+        "Delete",
+        &[big(Icon::Delete, "Delete", "mail.delete"), small(Icon::Archive, "Archive", "mail.archive"), small(Icon::Junk, "Junk", "mail.junk")],
+    ),
+    (
+        "Respond",
+        &[big(Icon::Reply, "Reply", "mail.reply"), big(Icon::ReplyAll, "Reply\nAll", "mail.replyAll"), big(Icon::Forward, "Forward", "mail.forward")],
+    ),
+    ("Move", &[small(Icon::Move, "Move", "menu:move"), small(Icon::Rules, "Rules", "")]),
+    (
+        "Tags",
+        &[
+            small(Icon::MailOpen, "Unread/ Read", "mail.toggleRead"),
+            small(Icon::Category, "Categorize", "menu:categorize"),
+            small(Icon::Flag, "Follow Up", "menu:followup"),
+        ],
+    ),
+    ("Find", &[small(Icon::Filter, "Filter Unread", "view.filterUnread"), small(Icon::People, "Address Book", "")]),
+];
+
+const SEND_RECEIVE: &[Group] = &[(
+    "Send & Receive",
+    &[big(Icon::Sync, "Send/Receive\nAll Folders", ""), small(Icon::Sync, "Update Folder", ""), small(Icon::Send, "Send All", "")],
+)];
+
+const FOLDER: &[Group] = &[
+    ("New", &[with(big(Icon::NewFolder, "New\nFolder", "ui.prompt"), r#"{"command":"folder.new"}"#)]),
+    (
+        "Actions",
+        &[
+            with(small(Icon::Rename, "Rename Folder", "ui.prompt"), r#"{"command":"folder.rename"}"#),
+            small(Icon::Delete, "Delete Folder", "folder.delete"),
+        ],
+    ),
+    ("Clean Up", &[small(Icon::MailOpen, "Mark All as Read", "folder.markAllRead"), small(Icon::Broom, "Empty Folder", "folder.empty")]),
+    ("Properties", &[big(Icon::Info, "Folder\nProperties", "folder.properties")]),
+];
+
+const VIEW: &[Group] = &[
+    ("Arrangement", &[small(Icon::Sort, "Arrange By", "menu:arrange"), small(Icon::Swap, "Reverse Sort", "view.reverseSort")]),
+    ("Layout", &[small(Icon::Sidebar, "Folder Pane", "view.folderPane"), small(Icon::Panes, "Reading Pane", "menu:reading")]),
+    ("Message", &[small(Icon::Info, "Properties", "mail.properties")]),
+];
+
+const HELP: &[Group] = &[("Help", &[big(Icon::Info, "About\nMailCraft", "ui.about")])];
+
+fn menu_of(cmd: &str) -> Option<&str> {
+    cmd.strip_prefix("menu:")
+}
+
+struct MenuItem {
+    label: String,
+    cmd: &'static str,
+    params: Value,
+    swatch: Option<Color32>,
+    checked: bool,
+}
+
+fn item(label: &str, cmd: &'static str, params: Value) -> MenuItem {
+    MenuItem { label: label.to_string(), cmd, params, swatch: None, checked: false }
+}
+
+impl MailUi {
+    fn available(&self, cmd: &str) -> bool {
+        match cmd {
+            "" => false,
+            "ui.prompt" => true,
+            c if c.starts_with("ui.") => true,
+            c => match menu_of(c) {
+                Some("categorize" | "followup") => self.session.is_enabled("mail.flag"),
+                Some("move") => self.session.is_enabled("mail.move"),
+                Some("arrange") => self.session.is_enabled("view.sortBy"),
+                Some(_) => true,
+                None => self.session.is_enabled(c),
+            },
+        }
+    }
+
+    fn press(&mut self, b: &Btn, below: egui::Pos2) {
+        if let Some(menu) = menu_of(b.cmd) {
+            self.act("ui.menu", json!({ "menu": menu, "x": below.x, "y": below.y }));
+        } else {
+            self.act(b.cmd, serde_json::from_str(b.params).unwrap_or(Value::Null));
+        }
+    }
+
+    pub(crate) fn ribbon(&mut self, ui: &mut Ui, rect: Rect) {
+        let t = self.tokens.clone();
+        let p = ui.painter_at(rect);
+        p.rect_filled(rect, 0.0, t.surface);
+        p.hline(rect.x_range(), rect.bottom() - 0.5, (1.0, t.line));
+        let groups = match self.tab {
+            Tab::Home => HOME,
+            Tab::SendReceive => SEND_RECEIVE,
+            Tab::Folder => FOLDER,
+            Tab::View => VIEW,
+            Tab::Help | Tab::File => HELP,
+        };
+        let top = rect.top() + 4.0;
+        let label_y = rect.bottom() - 11.0;
+        let mut x = rect.left() + 6.0;
+        for (name, buttons) in groups {
+            let start = x;
+            let mut i = 0;
+            while let Some(b) = buttons.get(i) {
+                if b.large {
+                    let lines: Vec<&str> = b.label.split('\n').collect();
+                    let w = lines.iter().map(|l| text_width(&p, l, font(11.5))).fold(40.0, f32::max) + 12.0;
+                    let r = Rect::from_min_size(pos2(x, top), vec2(w, 66.0));
+                    let on = self.available(b.cmd);
+                    let resp = ui.interact(r, egui::Id::new(("ribbon", *name, b.label)), if on { Sense::click() } else { Sense::hover() });
+                    if on && resp.hovered() {
+                        p.rect_filled(r, 3.0, t.hover);
+                    }
+                    let color = if on { t.accent } else { t.disabled };
+                    icons::paint(&p, Rect::from_center_size(pos2(r.center().x, r.top() + 19.0), vec2(26.0, 26.0)), b.icon, color);
+                    for (n, line) in lines.iter().enumerate() {
+                        let y = r.top() + 38.0 + n as f32 * 13.0 + if lines.len() == 1 { 6.0 } else { 0.0 };
+                        p.text(pos2(r.center().x, y), Align2::CENTER_TOP, line, font(11.5), if on { t.text } else { t.disabled });
+                    }
+                    if on && resp.clicked() {
+                        self.press(b, r.left_bottom());
+                    }
+                    if b.cmd.is_empty() {
+                        resp.on_hover_text("Not built yet");
+                    }
+                    x += w + 2.0;
+                    i += 1;
+                } else {
+                    // Up to three small buttons share a column.
+                    let column: Vec<&Btn> = buttons.iter().skip(i).take_while(|b| !b.large).take(3).collect();
+                    let w = column.iter().map(|b| text_width(&p, b.label, font(11.5))).fold(30.0, f32::max) + 36.0;
+                    for (row, b) in column.iter().enumerate() {
+                        let r = Rect::from_min_size(pos2(x, top + row as f32 * 22.0), vec2(w, 22.0));
+                        let on = self.available(b.cmd);
+                        let resp = ui.interact(r, egui::Id::new(("ribbon", *name, b.label)), if on { Sense::click() } else { Sense::hover() });
+                        if on && resp.hovered() {
+                            p.rect_filled(r, 3.0, t.hover);
+                        }
+                        icons::paint(
+                            &p,
+                            Rect::from_center_size(pos2(r.left() + 12.0, r.center().y), vec2(15.0, 15.0)),
+                            b.icon,
+                            if on { t.accent } else { t.disabled },
+                        );
+                        p.text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, b.label, font(11.5), if on { t.text } else { t.disabled });
+                        if menu_of(b.cmd).is_some() {
+                            icons::paint(
+                                &p,
+                                Rect::from_center_size(pos2(r.right() - 7.0, r.center().y), vec2(8.0, 8.0)),
+                                Icon::ChevronDown,
+                                if on { t.text_dim } else { t.disabled },
+                            );
+                        }
+                        if on && resp.clicked() {
+                            self.press(b, r.left_bottom());
+                        }
+                        if b.cmd.is_empty() {
+                            resp.on_hover_text("Not built yet");
+                        }
+                    }
+                    x += w + 2.0;
+                    i += column.len().max(1);
+                }
+            }
+            p.text(pos2((start + x) / 2.0, label_y), Align2::CENTER_CENTER, name, font(10.5), t.text_faint);
+            x += 5.0;
+            p.vline(x, (rect.top() + 6.0)..=(rect.bottom() - 6.0), (1.0, t.line));
+            x += 6.0;
+        }
+    }
+
+    fn menu_items(&self, menu: Menu) -> Vec<MenuItem> {
+        let s = &self.session;
+        match menu {
+            Menu::Categorize => {
+                let have: Vec<String> = s.open.as_ref().map(|it| it.categories.clone()).unwrap_or_default();
+                let mut items: Vec<MenuItem> =
+                    ["Red category", "Orange category", "Yellow category", "Green category", "Blue category", "Purple category"]
+                        .into_iter()
+                        .map(|name| MenuItem {
+                            swatch: Some(theme::category_color(name)),
+                            checked: have.iter().any(|c| c.eq_ignore_ascii_case(name)),
+                            ..item(name, "mail.categorize", json!({ "category": name }))
+                        })
+                        .collect();
+                items.push(item("Clear All Categories", "mail.categorize", json!({ "clear": true })));
+                items
+            }
+            Menu::FollowUp => vec![
+                MenuItem { swatch: Some(self.tokens.flag), ..item("Flag Message", "mail.flag", Value::Null) },
+                item("Mark Complete", "mail.flagComplete", Value::Null),
+                item("Clear Flag", "mail.clearFlag", Value::Null),
+            ],
+            Menu::Move => {
+                let Some((store, current)) = s.current else { return Vec::new() };
+                let folders: &[FolderInfo] = s.folders.get(store).map_or(&[], Vec::as_slice);
+                folders
+                    .iter()
+                    .filter(|f| {
+                        f.id != current && !matches!(f.kind, FolderKind::Calendar | FolderKind::Contacts | FolderKind::Tasks | FolderKind::Search)
+                    })
+                    .take(40)
+                    .map(|f| item(&folder_path(folders, f.id), "mail.move", json!({ "folderId": f.id.0 })))
+                    .collect()
+            }
+            Menu::Arrange => ["date", "from", "to", "subject", "size", "importance", "flag", "attachments"]
+                .into_iter()
+                .map(|key| {
+                    let label: String = key.chars().take(1).flat_map(char::to_uppercase).chain(key.chars().skip(1)).collect();
+                    MenuItem { checked: s.sort.name() == key, ..item(&label, "view.sortBy", json!({ "key": key })) }
+                })
+                .collect(),
+            Menu::Reading => [("Right", "right"), ("Bottom", "bottom"), ("Off", "off")]
+                .into_iter()
+                .map(|(label, position)| MenuItem {
+                    checked: format!("{:?}", s.reading_pane).eq_ignore_ascii_case(position),
+                    ..item(label, "view.readingPane", json!({ "position": position }))
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn menu_popup(&mut self, ctx: &egui::Context) {
+        let Some((menu, pos)) = self.menu else { return };
+        let t = self.tokens.clone();
+        let items = self.menu_items(menu);
+        let mut chosen: Option<usize> = None;
+        let area = egui::Area::new(egui::Id::new("mailcraft-menu")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+            let p = ui.painter().clone();
+            let width = items.iter().map(|i| text_width(&p, &i.label, font(12.0))).fold(120.0, f32::max).min(360.0) + 52.0;
+            let height = (items.len().max(1) as f32) * 24.0 + 8.0;
+            let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            p.rect_filled(rect.translate(vec2(1.0, 2.0)), 4.0, Color32::from_black_alpha(40));
+            p.rect_filled(rect, 4.0, t.surface);
+            p.rect_stroke(rect, 4.0, (1.0, t.line), egui::StrokeKind::Inside);
+            if items.is_empty() {
+                p.text(rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, "Nothing to choose here", font(12.0), t.text_faint);
+            }
+            for (n, it) in items.iter().enumerate() {
+                let r = Rect::from_min_size(pos2(rect.left() + 3.0, rect.top() + 4.0 + n as f32 * 24.0), vec2(width - 6.0, 24.0));
+                let resp = ui.interact(r, egui::Id::new(("menu-item", n)), Sense::click());
+                if resp.hovered() {
+                    p.rect_filled(r, 3.0, t.hover);
+                }
+                if it.checked {
+                    icons::paint(&p, Rect::from_center_size(pos2(r.left() + 11.0, r.center().y), vec2(11.0, 11.0)), Icon::Check, t.accent);
+                }
+                if let Some(c) = it.swatch {
+                    p.rect_filled(Rect::from_center_size(pos2(r.left() + 28.0, r.center().y), vec2(11.0, 11.0)), 2.0, c);
+                }
+                clip_text(&p, pos2(r.left() + 40.0, r.center().y - 8.0), width - 50.0, &it.label, font(12.0), t.text);
+                if resp.clicked() {
+                    chosen = Some(n);
+                }
+            }
+        });
+        if let Some(it) = chosen.and_then(|n| items.into_iter().nth(n)) {
+            self.act(it.cmd, it.params);
+            self.menu = None;
+        } else if !self.menu_fresh && ctx.input(|i| i.pointer.any_click()) && !area.response.contains_pointer() {
+            self.menu = None;
+        }
+        self.menu_fresh = false;
+    }
+
+    pub(crate) fn prompt_window(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.prompt.as_mut() else { return };
+        let mut done: Option<bool> = None;
+        egui::Window::new(prompt.title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
+            let edit = ui.add(egui::TextEdit::singleline(&mut prompt.value).desired_width(280.0).char_limit(255));
+            if prompt.focus {
+                edit.request_focus();
+                prompt.focus = false;
+            }
+            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                done = Some(true);
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                done = Some(false);
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+            });
+        });
+        if let Some(accept) = done
+            && let Some(p) = self.prompt.take().filter(|p| accept && !p.value.trim().is_empty())
+        {
+            self.act(p.command, json!({ "name": p.value.trim() }));
+        }
+    }
+
+    /// The File page: open, save and close data files.
+    pub(crate) fn backstage(&mut self, ui: &mut Ui, rect: Rect) {
+        let t = self.tokens.clone();
+        let p = ui.painter_at(rect);
+        let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
+        p.rect_filled(rect, 0.0, t.surface);
+        p.rect_filled(side, 0.0, t.accent);
+        let entries: [(Icon, &str, &str, Value); 7] = [
+            (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
+            (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
+            (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
+            (Icon::Save, "Save Message As…", "ui.saveAsDialog", Value::Null),
+            (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
+            (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
+            (Icon::Junk, "Exit", "ui.quit", Value::Null),
+        ];
+        for (n, (icon, label, cmd, params)) in entries.into_iter().enumerate() {
+            let r = Rect::from_min_size(pos2(side.left(), side.top() + 10.0 + n as f32 * 38.0), vec2(side.width(), 36.0));
+            let on = match cmd {
+                "ui.saveAsDialog" => self.session.is_enabled("file.saveAs"),
+                "ui.saveAttachmentDialog" => self.session.is_enabled("file.saveAttachment"),
+                c if c.starts_with("ui.") => true,
+                c => self.session.is_enabled(c),
+            };
+            let resp = ui.interact(r, egui::Id::new(("backstage", label)), if on { Sense::click() } else { Sense::hover() });
+            if on && resp.hovered() {
+                p.rect_filled(r, 0.0, t.accent_dark);
+            }
+            let color = if on { t.on_accent } else { Color32::from_white_alpha(110) };
+            icons::paint(&p, Rect::from_center_size(pos2(r.left() + 24.0, r.center().y), vec2(16.0, 16.0)), icon, color);
+            p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, label, font(13.0), color);
+            if on && resp.clicked() {
+                self.act(cmd, params);
+                if cmd != "ui.ribbonTab" && cmd != "ui.quit" {
+                    self.act("ui.ribbonTab", json!({ "tab": "home" }));
+                }
+            }
+        }
+
+        let x = side.right() + 36.0;
+        let width = rect.right() - x - 30.0;
+        let mut y = rect.top() + 26.0;
+        p.text(pos2(x, y), Align2::LEFT_TOP, "Data files", font(24.0), t.text);
+        y += 44.0;
+        if self.session.stores.is_empty() {
+            clip_text(
+                &p,
+                pos2(x, y),
+                width,
+                "Nothing is open. Open an Outlook data file (.pst, .ost), a message (.msg, .eml, .oft) or the sample mailbox.",
+                font(13.0),
+                t.text_dim,
+            );
+            y += 28.0;
+        }
+        for (i, store) in self.session.stores.iter().enumerate() {
+            let folders = self.session.folders.get(i).map_or(0, Vec::len);
+            p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(4.0, 40.0)), 2.0, t.accent);
+            clip_text(&p, pos2(x + 14.0, y), width, &store.display_name(), bold(14.0), t.text);
+            let location = store.path().map_or_else(|| "In memory (not saved to disk)".to_string(), |path| path.display().to_string());
+            let mode = if store.writable() { "editable" } else { "read-only" };
+            clip_text(&p, pos2(x + 14.0, y + 20.0), width, &format!("{location}  ·  {folders} folders  ·  {mode}"), font(12.0), t.text_dim);
+            y += 54.0;
+        }
+        y += 12.0;
+        for line in [
+            "Data files open read-only: MailCraft never writes to a .pst or .ost file.",
+            "Messages can be saved as .msg, .oft or .eml. Sending and accounts are not built yet.",
+        ] {
+            clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);
+            y += 20.0;
+        }
+    }
+}
+
+/// "Inbox/Projects" for a folder, walking up at most 32 parents.
+pub(crate) fn folder_path(folders: &[FolderInfo], id: FolderId) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut cur = Some(id);
+    while let Some(f) = cur.and_then(|c| folders.iter().find(|f| f.id == c)) {
+        parts.push(&f.name);
+        cur = f.parent;
+        if parts.len() >= 32 {
+            break;
+        }
+    }
+    parts.reverse();
+    parts.join("/")
+}
