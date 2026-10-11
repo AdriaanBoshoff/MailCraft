@@ -36,6 +36,7 @@ pub enum Icon {
     Clip,
     Send,
     Save,
+    Print,
     Close,
     Importance,
     Check,
@@ -249,6 +250,13 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.closed(&[(2.0, 2.0), (11.5, 2.0), (14.0, 4.5), (14.0, 14.0), (2.0, 14.0)]);
             pen.closed(&[(5.0, 9.0), (11.0, 9.0), (11.0, 14.0), (5.0, 14.0)]);
             pen.line(&[(5.0, 2.0), (5.0, 5.5), (10.0, 5.5), (10.0, 2.0)]);
+        }
+        Icon::Print => {
+            // A sheet going in at the top, the machine, and the printed sheet coming out.
+            pen.line(&[(4.5, 6.0), (4.5, 2.0), (11.5, 2.0), (11.5, 6.0)]);
+            pen.closed(&[(2.0, 6.0), (14.0, 6.0), (14.0, 11.5), (2.0, 11.5)]);
+            pen.closed(&[(4.5, 9.5), (11.5, 9.5), (11.5, 14.0), (4.5, 14.0)]);
+            pen.dot(12.0, 7.8, 0.6);
         }
         Icon::Close => {
             pen.line(&[(3.5, 3.5), (12.5, 12.5)]);

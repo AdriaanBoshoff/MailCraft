@@ -401,12 +401,13 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 7] = [
+        let entries: [(Icon, &str, &str, Value); 8] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
             (Icon::Save, "Save Message As…", "ui.saveAsDialog", Value::Null),
             (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
+            (Icon::Print, "Print…", "ui.printDialog", Value::Null),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
             (Icon::Junk, "Exit", "ui.quit", Value::Null),
         ];
@@ -415,6 +416,7 @@ impl MailUi {
             let on = match cmd {
                 "ui.saveAsDialog" => self.session.is_enabled("file.saveAs"),
                 "ui.saveAttachmentDialog" => self.session.is_enabled("file.saveAttachment"),
+                "ui.printDialog" => self.session.is_enabled("file.print"),
                 c if c.starts_with("ui.") => true,
                 c => self.session.is_enabled(c),
             };

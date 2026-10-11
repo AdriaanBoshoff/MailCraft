@@ -232,6 +232,26 @@ impl Doc {
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
+
+    /// Plain text as a document: a paragraph for each of its lines.
+    pub fn plain(text: &str) -> Doc {
+        /// Lines and characters one plain body may have.
+        const MAX_LINES: usize = 50_000;
+        const MAX_CHARS: usize = 4_000_000;
+        let mut doc = Doc::default();
+        let mut left = MAX_CHARS;
+        for line in text.lines() {
+            if doc.blocks.len() >= MAX_LINES || left == 0 {
+                doc.truncated = true;
+                break;
+            }
+            let kept: String = line.chars().filter(|c| *c == '\t' || !c.is_control()).take(left).collect();
+            left = left.saturating_sub(kept.chars().count().max(1));
+            let runs = if kept.is_empty() { Vec::new() } else { vec![Run { text: kept, ..Run::default() }] };
+            doc.blocks.push(Block::Para(Para { runs, ..Para::default() }));
+        }
+        doc
+    }
 }
 
 impl Para {

@@ -1,0 +1,376 @@
+//! Writes pages of text, fills and lines to a PDF file.
+//!
+//! A [`Writer`] is told the fonts, then page after page what stands on it, in points from the
+//! page's top left corner; [`Writer::finish`] gives the file. Text is given as glyphs of a font
+//! that was laid out elsewhere: nothing is measured or wrapped here. Each font is carried in the
+//! file with only the glyphs that were used, when its maker allows that
+//! ([`mailcraft_fonts::embedding`]).
+//!
+//! The file layout is from ISO 32000-1 (PDF 1.7): 7.5 (file structure), 7.7 (document
+//! structure), 8 (graphics), 9.4 (text objects), 9.7 (composite fonts), 9.8 (font descriptors),
+//! 9.9 (embedded font programs), 9.10 (extraction of text content).
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+mod font;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use mailcraft_fonts::Embedding;
+
+/// Red, green, blue.
+pub type Rgb = [u8; 3];
+
+/// Pages in one file.
+pub const MAX_PAGES: usize = 5000;
+/// Fonts in one file.
+pub const MAX_FONTS: usize = 256;
+/// Bytes of drawing instructions on one page.
+const MAX_PAGE_BYTES: usize = 16 << 20;
+/// Glyphs in one piece of text.
+const MAX_PIECE: usize = 4096;
+/// The largest measure written, in points; a page is far smaller.
+const MAX_MEASURE: f32 = 14_400.0;
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PdfError {
+    #[error("the font cannot be put into a PDF file")]
+    Font,
+    #[error("too many fonts for one PDF file")]
+    TooManyFonts,
+    #[error("the PDF file would be too large")]
+    TooLarge,
+}
+
+/// A font of this file, from [`Writer::font`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FontId(usize);
+
+/// How a line is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Stroke {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+/// One piece of text: glyphs of one font, in one size and colour, on one baseline.
+#[derive(Clone, Copy, Debug)]
+pub struct Piece<'a> {
+    pub font: FontId,
+    /// Font size in points.
+    pub size: f32,
+    /// Where the first glyph starts.
+    pub x: f32,
+    /// The baseline, from the top of the page.
+    pub baseline: f32,
+    pub color: Rgb,
+    /// Each glyph with the character it stands for, which is what a reader finds and copies.
+    pub glyphs: &'a [(u16, char)],
+    /// Thicken the glyphs: the face has no bold of its own.
+    pub bold: bool,
+    /// Lean the glyphs: the face has no italic of its own.
+    pub slant: bool,
+}
+
+struct Font {
+    data: Arc<[u8]>,
+    index: u32,
+    how: Embedding,
+    used: BTreeMap<u16, char>,
+}
+
+struct Page {
+    width: f32,
+    height: f32,
+    ops: String,
+}
+
+#[derive(Default)]
+pub struct Writer {
+    fonts: Vec<Font>,
+    pages: Vec<Page>,
+}
+
+/// A number as a PDF file writes it: plain decimals, never an exponent.
+fn num(v: f32) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
+    let text = format!("{:.2}", v.clamp(-MAX_MEASURE, MAX_MEASURE));
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text.is_empty() || text == "-" || text == "-0" { "0".to_string() } else { text.to_string() }
+}
+
+fn rgb(color: Rgb) -> String {
+    let part = |c: u8| num(f32::from(c) / 255.0);
+    format!("{} {} {}", part(color[0]), part(color[1]), part(color[2]))
+}
+
+impl Writer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pages(&self) -> usize {
+        self.pages.len()
+    }
+
+    /// Take a face into the file. An error when its file cannot be read, when it holds no
+    /// TrueType outlines, or when its maker does not allow it to be embedded.
+    pub fn font(&mut self, data: Arc<[u8]>, index: u32) -> Result<FontId, PdfError> {
+        if self.fonts.len() >= MAX_FONTS {
+            return Err(PdfError::TooManyFonts);
+        }
+        let how = mailcraft_fonts::embedding(&data, index).ok_or(PdfError::Font)?;
+        font::measures(&data, index).ok_or(PdfError::Font)?;
+        self.fonts.push(Font { data, index, how, used: BTreeMap::new() });
+        Ok(FontId(self.fonts.len() - 1))
+    }
+
+    /// Start a page; what is drawn next stands on it. False when the file has all the pages it
+    /// may hold, and what is drawn next is dropped.
+    pub fn page(&mut self, width: f32, height: f32) -> bool {
+        if self.pages.len() >= MAX_PAGES {
+            return false;
+        }
+        let side = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_MEASURE) } else { 1.0 };
+        self.pages.push(Page { width: side(width), height: side(height), ops: String::new() });
+        true
+    }
+
+    fn open(&mut self) -> Option<&mut Page> {
+        self.pages.last_mut().filter(|page| page.ops.len() < MAX_PAGE_BYTES)
+    }
+
+    /// Fill a rectangle given by its top left corner and size.
+    pub fn fill(&mut self, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
+        let Some(page) = self.open() else { return };
+        let bottom = page.height - y - height;
+        let _ = writeln!(page.ops, "{} rg {} {} {} {} re f", rgb(color), num(x), num(bottom), num(width), num(height));
+    }
+
+    /// Draw a straight line `width` thick.
+    pub fn line(&mut self, from: (f32, f32), to: (f32, f32), width: f32, color: Rgb, stroke: Stroke) {
+        let Some(page) = self.open() else { return };
+        let w = if width.is_finite() { width.clamp(0.1, 72.0) } else { 0.1 };
+        let dash = match stroke {
+            Stroke::Solid => "[] 0 d".to_string(),
+            Stroke::Dashed => format!("[{} {}] 0 d", num(w * 3.0), num(w * 3.0)),
+            Stroke::Dotted => format!("[{} {}] 0 d", num(w), num(w)),
+        };
+        let (h, ops) = (page.height, &mut page.ops);
+        let _ = writeln!(ops, "{} RG {} w {dash} {} {} m {} {} l S", rgb(color), num(w), num(from.0), num(h - from.1), num(to.0), num(h - to.1));
+    }
+
+    /// Draw a piece of text. Dropped when the font is not of this file.
+    pub fn text(&mut self, piece: Piece) {
+        let Some(font) = self.fonts.get_mut(piece.font.0) else { return };
+        let Some(page) = self.pages.last_mut().filter(|page| page.ops.len() < MAX_PAGE_BYTES) else { return };
+        let size = if piece.size.is_finite() { piece.size.clamp(1.0, 1000.0) } else { 10.0 };
+        let mut hex = String::with_capacity(piece.glyphs.len().min(MAX_PIECE) * 4);
+        for (glyph, ch) in piece.glyphs.iter().take(MAX_PIECE) {
+            font.used.entry(*glyph).or_insert(*ch);
+            let _ = write!(hex, "{glyph:04X}");
+        }
+        if hex.is_empty() {
+            return;
+        }
+        let color = rgb(piece.color);
+        let ops = &mut page.ops;
+        let _ = write!(ops, "BT /F{} {} Tf {color} rg ", piece.font.0, num(size));
+        if piece.bold {
+            let _ = write!(ops, "{color} RG {} w 2 Tr ", num(size * 0.03));
+        } else {
+            ops.push_str("0 Tr ");
+        }
+        let lean = if piece.slant { "0.2" } else { "0" };
+        let _ = writeln!(ops, "1 0 {lean} 1 {} {} Tm <{hex}> Tj ET", num(piece.x), num(page.height - piece.baseline));
+    }
+
+    /// The finished file. `title` is what a reader's window shows for it.
+    pub fn finish(self, title: &str) -> Result<Vec<u8>, PdfError> {
+        let mut file = File::new();
+        let (catalog, tree, info) = (file.id(), file.id(), file.id());
+
+        let mut font_ids: Vec<usize> = Vec::with_capacity(self.fonts.len());
+        for (n, font) in self.fonts.iter().enumerate() {
+            font_ids.push(write_font(&mut file, n, font)?);
+        }
+        let mut resources = String::from("<< /Font <<");
+        for (n, id) in font_ids.iter().enumerate() {
+            let _ = write!(resources, " /F{n} {id} 0 R");
+        }
+        resources.push_str(" >> >>");
+
+        let mut kids = String::new();
+        for page in &self.pages {
+            let (id, contents) = (file.id(), file.id());
+            file.stream(contents, "", page.ops.as_bytes())?;
+            let (w, h) = (num(page.width), num(page.height));
+            file.object(
+                id,
+                &format!("<< /Type /Page /Parent {tree} 0 R /MediaBox [0 0 {w} {h}] /Resources {resources} /Contents {contents} 0 R >>"),
+            )?;
+            let _ = write!(kids, "{id} 0 R ");
+        }
+        file.object(tree, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.trim_end(), self.pages.len()))?;
+        file.object(catalog, &format!("<< /Type /Catalog /Pages {tree} 0 R >>"))?;
+        // Text strings as UTF-16 with a byte order mark, in hexadecimal (7.9.2.2).
+        let mut named = String::from("FEFF");
+        for unit in title.chars().filter(|c| !c.is_control()).take(200).collect::<String>().encode_utf16() {
+            let _ = write!(named, "{unit:04X}");
+        }
+        file.object(info, &format!("<< /Title <{named}> /Producer (MailCraft) >>"))?;
+        file.end(catalog, info)
+    }
+}
+
+/// The objects of one font (9.7.4 CIDFonts, 9.7.6 Type 0 font dictionaries); gives the number
+/// of the font's own object.
+fn write_font(file: &mut File, n: usize, font: &Font) -> Result<usize, PdfError> {
+    let measures = font::measures(&font.data, font.index).ok_or(PdfError::Font)?;
+    let used: BTreeSet<u16> = font.used.keys().copied().collect();
+    let program = font::file(&font.data, font.index, &used, font.how).ok_or(PdfError::Font)?;
+    let (top, descendant, descriptor, embedded, unicode) = (file.id(), file.id(), file.id(), file.id(), file.id());
+
+    // A subset is named with six letters and a plus sign before its name (9.6.4).
+    let mut tag = String::new();
+    let mut left = n;
+    for _ in 0..6 {
+        tag.push(char::from(b'A' + (left % 26) as u8));
+        left /= 26;
+    }
+    let name = format!("{tag}+{}", measures.name);
+    let scale = 1000.0 / measures.units;
+    let in_thousands = |v: f32| num(v * scale);
+
+    file.stream(embedded, &format!("/Length1 {} ", program.len()), &program)?;
+    let b = measures.bounds;
+    let flags = 4 | if measures.fixed_pitch { 1 } else { 0 } | if measures.italic_angle != 0.0 { 64 } else { 0 };
+    file.object(
+        descriptor,
+        &format!(
+            "<< /Type /FontDescriptor /FontName /{name} /Flags {flags} /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} /CapHeight {} /StemV 80 /FontFile2 {embedded} 0 R >>",
+            in_thousands(f32::from(b[0])),
+            in_thousands(f32::from(b[1])),
+            in_thousands(f32::from(b[2])),
+            in_thousands(f32::from(b[3])),
+            num(measures.italic_angle),
+            in_thousands(f32::from(measures.ascent)),
+            in_thousands(f32::from(measures.descent)),
+            in_thousands(f32::from(measures.ascent) * 0.9),
+        ),
+    )?;
+    let mut widths = String::new();
+    for glyph in &used {
+        let advance = measures.advances.get(usize::from(*glyph)).copied().unwrap_or(0);
+        let _ = write!(widths, "{glyph} [{}] ", in_thousands(f32::from(advance)));
+    }
+    file.object(
+        descendant,
+        &format!(
+            "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {descriptor} 0 R /DW 1000 /W [{}] /CIDToGIDMap /Identity >>",
+            widths.trim_end()
+        ),
+    )?;
+
+    // Which character each glyph stands for (9.10.3 ToUnicode CMaps).
+    let mut map = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
+    );
+    let pairs: Vec<(&u16, &char)> = font.used.iter().collect();
+    for chunk in pairs.chunks(100) {
+        let _ = writeln!(map, "{} beginbfchar", chunk.len());
+        for (glyph, ch) in chunk {
+            let _ = write!(map, "<{glyph:04X}> <");
+            let mut units = [0u16; 2];
+            for unit in ch.encode_utf16(&mut units) {
+                let _ = write!(map, "{unit:04X}");
+            }
+            map.push_str(">\n");
+        }
+        map.push_str("endbfchar\n");
+    }
+    map.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    file.stream(unicode, "", map.as_bytes())?;
+
+    file.object(
+        top,
+        &format!(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H /DescendantFonts [{descendant} 0 R] /ToUnicode {unicode} 0 R >>"
+        ),
+    )?;
+    Ok(top)
+}
+
+/// The bytes of the file as they grow, and where each object starts (7.5.4 cross-reference table).
+struct File {
+    out: Vec<u8>,
+    starts: Vec<Option<usize>>,
+}
+
+/// The largest file written.
+const MAX_FILE: usize = 1 << 30;
+
+impl File {
+    fn new() -> Self {
+        // The second line holds bytes above 127, which tells a reader the file is not text.
+        Self { out: b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec(), starts: vec![None] }
+    }
+
+    /// The number of an object that is written later.
+    fn id(&mut self) -> usize {
+        self.starts.push(None);
+        self.starts.len() - 1
+    }
+
+    fn begin(&mut self, id: usize, more: usize) -> Result<(), PdfError> {
+        if self.out.len().saturating_add(more) > MAX_FILE {
+            return Err(PdfError::TooLarge);
+        }
+        let at = self.out.len();
+        *self.starts.get_mut(id).ok_or(PdfError::TooLarge)? = Some(at);
+        self.out.extend(format!("{id} 0 obj\n").as_bytes());
+        Ok(())
+    }
+
+    fn object(&mut self, id: usize, body: &str) -> Result<(), PdfError> {
+        self.begin(id, body.len())?;
+        self.out.extend(body.as_bytes());
+        self.out.extend(b"\nendobj\n");
+        Ok(())
+    }
+
+    /// A stream, compressed (7.3.8, 7.4.4 FlateDecode). `entries` are more entries of its dictionary.
+    fn stream(&mut self, id: usize, entries: &str, data: &[u8]) -> Result<(), PdfError> {
+        let packed = miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
+        self.begin(id, packed.len())?;
+        self.out.extend(format!("<< {entries}/Filter /FlateDecode /Length {} >>\nstream\n", packed.len()).as_bytes());
+        self.out.extend(&packed);
+        self.out.extend(b"\nendstream\nendobj\n");
+        Ok(())
+    }
+
+    fn end(mut self, catalog: usize, info: usize) -> Result<Vec<u8>, PdfError> {
+        let at = self.out.len();
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", self.starts.len());
+        for start in self.starts.iter().skip(1) {
+            // Every object asked for was written; one that was not is marked free.
+            match start {
+                Some(start) => {
+                    let _ = writeln!(table, "{start:010} 00000 n ");
+                }
+                None => table.push_str("0000000000 65535 f \n"),
+            }
+        }
+        let _ = write!(table, "trailer\n<< /Size {} /Root {catalog} 0 R /Info {info} 0 R >>\nstartxref\n{at}\n%%EOF\n", self.starts.len());
+        self.out.extend(table.as_bytes());
+        Ok(self.out)
+    }
+}
+
+#[cfg(test)]
+mod tests;

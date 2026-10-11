@@ -63,6 +63,7 @@ impl Tab {
 pub enum UiRequest {
     OpenFile,
     SaveAs,
+    Print,
     SaveAttachment(usize),
     Attach,
     Quit,
@@ -79,6 +80,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.ribbonTab", label: "Show Ribbon Tab", params: r#"{"tab": "file" | "home" | "sendreceive" | "folder" | "view" | "help"}"# },
     UiCommand { id: "ui.openDialog", label: "Open…", params: "" },
     UiCommand { id: "ui.saveAsDialog", label: "Save As…", params: "" },
+    UiCommand { id: "ui.printDialog", label: "Print…", params: "" },
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
     UiCommand { id: "ui.toggleFolder", label: "Expand or Collapse Folder", params: r#"{"store": index, "folderId": id}"# },
@@ -270,6 +272,7 @@ impl MailUi {
             }
             "ui.openDialog" => self.requests.push(UiRequest::OpenFile),
             "ui.saveAsDialog" => self.requests.push(UiRequest::SaveAs),
+            "ui.printDialog" => self.requests.push(UiRequest::Print),
             "ui.saveAttachmentDialog" => {
                 self.requests.push(UiRequest::SaveAttachment(number("index").and_then(|n| usize::try_from(n).ok()).unwrap_or(0)))
             }
@@ -479,6 +482,9 @@ impl MailUi {
         }
         if hit(Modifiers::NONE, Key::F12) {
             run.push(("ui.saveAsDialog", Value::Null));
+        }
+        if hit(ctrl, Key::P) && self.session.is_enabled("file.print") {
+            run.push(("ui.printDialog", Value::Null));
         }
         if !typing {
             for (key, id) in [

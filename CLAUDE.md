@@ -2,7 +2,7 @@
 
 MailCraft is a clean-room, open-source, Rust-native mail, calendar, contacts and tasks client targeting Microsoft Outlook Classic (the Win32 desktop Outlook, not "new Outlook") parity — and going further on speed, openness and agent control. It is meant to run natively on Windows, macOS, Linux and BSD, and on the web via WASM. It follows the conventions of the ArtCraft "Crafting Apps" family, most closely [`storytold/wordcraft`](https://github.com/storytold/wordcraft) (Word); siblings there: photocraft (Photoshop), vectorcraft (Illustrator), filmcraft (Premiere), lightcraft (Lightroom), pdfcraft (Acrobat), effectcraft (After Effects), designcraft (InDesign). Shared rules and learnings: [`storytold/craftrules`](https://github.com/storytold/craftrules) — read its `AGENTS.md`. MailCraft is an independent concept project; it is not affiliated with Microsoft, and not part of the storytold organisation unless its owner says so.
 
-> **Status: M1 in progress** (see `ROADMAP.md`). The readers, engine, CLI and egui window exist; `pdf`, `proof`, `net`, `layout`, `render`, `mcp` and the web app do not. The architecture table is **proposed** for those; paths that don't exist yet are where things go when they are created.
+> **Status: M1 in progress** (see `ROADMAP.md`). The readers, engine, CLI, egui window, print layout and PDF writer exist; `proof`, `net`, `render`, `mcp` and the web app do not. The architecture table is **proposed** for those; paths that don't exist yet are where things go when they are created.
 
 ## Start every session here
 1. Read `plan/STATUS.md` (current milestone, next task), then the task in `plan/execution-plan.md` and the relevant `plan/architecture.md` section. `plan/` is gitignored (local only); if it's missing, start from `ROADMAP.md`, `docs/gaps.md` and `docs/roadmap.md` (Current focus).
@@ -46,8 +46,8 @@ A mail client reads content written by strangers and holds the owner's most pers
 |---|---|---|
 | L0 | `geom` | units, rects, measurement parsing |
 | L1 | `model`, `fonts` | item model (messages, folders, appointments, contacts, tasks, recipients, MAPI-style property bags) + edit primitives; font DB, shaping, font substitution |
-| L2 | `pst`, `msg`, `mime`, `formats`, `layout` | `.pst`/`.ost` store I/O; `.msg`/`.oft` (CFB) I/O; RFC 5322/MIME, TNEF; `.ics`, `.vcf`, HTML, compressed RTF, plain text; message-body and print layout |
-| L3 | `render`, `pdf`, `proof`, `net` | rasteriser; PDF export; proofing; IMAP/POP/SMTP (later Exchange) behind an account trait |
+| L2 | `pst`, `msg`, `mime`, `formats`, `pdf` | `.pst`/`.ost` store I/O; `.msg`/`.oft` (CFB) I/O; RFC 5322/MIME, TNEF; `.ics`, `.vcf`, HTML, compressed RTF, plain text; PDF writing |
+| L3 | `layout`, `render`, `proof`, `net` | print layout (pages of placed glyphs); rasteriser; proofing; IMAP/POP/SMTP (later Exchange) behind an account trait |
 | L4 | `engine` | Session, store and account management, undo, **command registry**, Outlook feature catalog, rules, search, samples, I/O dispatch |
 | L5 | `mcp` | MCP server (headless or bridged to the app) |
 | L6 | `ui-egui` | Outlook-Classic-style egui front end (swappable) |

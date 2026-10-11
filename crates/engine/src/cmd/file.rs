@@ -1,6 +1,6 @@
 //! File commands: opening data files and loose messages, saving a message, closing a data file.
 
-use super::{CommandSpec, always, has_selection, need_str, ok, p_u64};
+use super::{CommandSpec, always, has_selection, need_str, ok, p_str, p_u64};
 use crate::io::{self, Opened};
 use crate::{CmdResult, EngineError, Session};
 use mailcraft_model::{FolderId, MemStore, StoreError};
@@ -51,6 +51,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"index": attachment number, "path": target file}"#,
             enabled: has_selection,
             run: save_attachment,
+        },
+        CommandSpec {
+            id: "file.print",
+            label: "Print",
+            tab: "File",
+            group: "Print",
+            shortcut: "Ctrl+P",
+            params: r#"{"path": target ending in .pdf, "paper": "a4" (default) or "letter"}"#,
+            enabled: has_selection,
+            run: print,
         },
         CommandSpec {
             id: "file.closeStore",
@@ -129,6 +139,24 @@ fn save_attachment(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.status = format!("Saved {}", path.display());
     ok()
+}
+
+/// Print the open message, in Memo Style, to a PDF file.
+fn print(s: &mut Session, p: &Value) -> CmdResult {
+    let path = Path::new(need_str(p, "path")?);
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        return Err(EngineError::BadParams("printing writes a PDF file: the path must end in .pdf".into()));
+    }
+    let paper = match p_str(p, "paper") {
+        Some(name) => mailcraft_layout::Paper::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown paper {name:?}: a4 or letter")))?,
+        None => mailcraft_layout::Paper::A4,
+    };
+    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
+    let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
+    let printed = crate::print::pdf(item, owner, s.tz_offset_min, paper)?;
+    io::write_atomic(path, &printed.file)?;
+    s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
+    Ok(json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated}))
 }
 
 fn close_store(s: &mut Session, p: &Value) -> CmdResult {

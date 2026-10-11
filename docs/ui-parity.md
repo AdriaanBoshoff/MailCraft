@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 10 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 11 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -97,6 +97,14 @@ Not followed yet, in order of how much they show: the space Outlook
 leaves between a paragraph and a table; a left border standing out in the margin; lines shared by
 neighbouring cells (`border-collapse`). They are in [gaps.md](gaps.md), item 3.
 
+## Printing
+
+Not compared against Outlook's print output yet: printing from Outlook would use a real printer
+or its print dialog, and neither is driven on the shared machine. MailCraft's Memo Style page (the
+owner's name over a line, field names in bold beside their values, the body, a page number at the
+foot) is laid out from general knowledge of the style, and its measures are our own. File > Print
+and Ctrl+P ask for a PDF file to write; there is no print dialog and no preview.
+
 ## Behaviour seen
 
 - Opening a folder selects the first row but **does not open it** in the reading pane; the pane shows the
@@ -112,6 +120,7 @@ neighbouring cells (`border-collapse`). They are in [gaps.md](gaps.md), item 3.
 
 ## Revision history
 
+- 11 · 2026-10-11 — printing added; its output is not yet compared with Outlook's.
 - 10 · 2026-10-11 — a sixth probe message compared, with an RTF body: pictures, cell lines per side, fills, places and cells merged down.
 - 9 · 2026-10-11 — a fifth probe message compared: what follows a picture at the side, breaks that clear, borders set in styles, table border widths and colours, cells that span rows.
 - 8 · 2026-10-11 — a fourth probe message compared: fonts by name and their fallbacks, pictures in the line of text and at its side, pictures written into the body.

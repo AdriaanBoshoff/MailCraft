@@ -1,0 +1,16 @@
+[package]
+name = "mailcraft-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MailCraft layout: lays a message out on pages for printing"
+
+[lints]
+workspace = true
+
+[dependencies]
+mailcraft-formats = { workspace = true }
+mailcraft-fonts = { workspace = true }
+# Maps characters to glyphs; the measures are read from the font's tables here.
+skrifa = { workspace = true }
+thiserror = { workspace = true }

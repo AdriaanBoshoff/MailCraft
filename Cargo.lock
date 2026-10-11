@@ -1819,9 +1819,13 @@ name = "mailcraft-engine"
 version = "0.1.0"
 dependencies = [
  "log",
+ "mailcraft-fonts",
+ "mailcraft-formats",
+ "mailcraft-layout",
  "mailcraft-mime",
  "mailcraft-model",
  "mailcraft-msg",
+ "mailcraft-pdf",
  "mailcraft-pst",
  "serde",
  "serde_json",
@@ -1841,6 +1845,16 @@ name = "mailcraft-formats"
 version = "0.1.0"
 dependencies = [
  "mailcraft-model",
+]
+
+[[package]]
+name = "mailcraft-layout"
+version = "0.1.0"
+dependencies = [
+ "mailcraft-fonts",
+ "mailcraft-formats",
+ "skrifa",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1869,6 +1883,16 @@ dependencies = [
  "mailcraft-model",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "mailcraft-pdf"
+version = "0.1.0"
+dependencies = [
+ "mailcraft-fonts",
+ "miniz_oxide 0.8.9",
+ "skrifa",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

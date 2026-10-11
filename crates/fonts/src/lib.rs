@@ -10,10 +10,14 @@
 //! of installed fonts. A font file is checked to be readable before it is handed on.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod boxes;
+
 use std::collections::HashMap;
 
 use fontdb::{Database, Family, Query, Stretch, Style, Weight};
-use skrifa::MetadataProvider;
+use skrifa::raw::TableProvider;
+use skrifa::raw::types::Tag;
+use skrifa::{FontRef, MetadataProvider};
 
 /// Names read from one list, and names looked for on its behalf.
 const MAX_LISTED: usize = 8;
@@ -161,9 +165,56 @@ pub fn readable(data: &[u8], index: u32) -> bool {
     skrifa::FontRef::from_index(data, index).is_ok_and(|font| font.charmap().has_map())
 }
 
+/// How a font may be put into a document that is handed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Embedding {
+    /// Only the glyphs the document uses.
+    Subset,
+    /// The whole font or nothing: its maker does not allow parts of it.
+    Whole,
+}
+
+/// Whether the face may be put into a document, and how: it must hold TrueType outlines, and
+/// its maker must allow embedding (OpenType specification, `OS/2`, `fsType`). `None` when it
+/// may not, or when the file cannot be read.
+pub fn embedding(data: &[u8], index: u32) -> Option<Embedding> {
+    let font = FontRef::from_index(data, index).ok()?;
+    for tag in [b"glyf", b"loca", b"head", b"hhea", b"hmtx", b"maxp"] {
+        font.data_for_tag(Tag::new(tag))?;
+    }
+    let Some(os2) = font.data_for_tag(Tag::new(b"OS/2")) else {
+        return Some(Embedding::Subset);
+    };
+    let bytes = os2.as_bytes();
+    let permissions = u16::from_be_bytes([*bytes.get(8)?, *bytes.get(9)?]);
+    // Bit 1 alone: no embedding. Bit 9: bitmaps only, and no bitmaps are written here.
+    let restricted = permissions & 0x0002 != 0 && permissions & 0x000c == 0;
+    if restricted || permissions & 0x0200 != 0 {
+        return None;
+    }
+    Some(if permissions & 0x0100 != 0 { Embedding::Whole } else { Embedding::Subset })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_font_says_whether_it_may_be_embedded() {
+        let free = boxes::font("ab ");
+        assert!(readable(&free, 0));
+        assert_eq!(embedding(&free, 0), Some(Embedding::Subset));
+        assert_eq!(embedding(&boxes::font_with("ab", 0x0002), 0), None, "restricted");
+        assert_eq!(embedding(&boxes::font_with("ab", 0x0200), 0), None, "bitmaps only");
+        assert_eq!(embedding(&boxes::font_with("ab", 0x0004), 0), Some(Embedding::Subset), "print and preview");
+        assert_eq!(embedding(&boxes::font_with("ab", 0x0006), 0), Some(Embedding::Subset), "the widest permission counts");
+        assert_eq!(embedding(&boxes::font_with("ab", 0x0108), 0), Some(Embedding::Whole));
+        assert_eq!(embedding(&free, 3), None);
+        assert_eq!(embedding(b"not a font", 0), None);
+        for cut in [0, 11, 12, 100, free.len() / 2, free.len() - 1] {
+            let _ = embedding(free.get(..cut).unwrap_or_default(), 0);
+        }
+    }
 
     #[test]
     fn lists_become_names_to_look_for() {

@@ -13,6 +13,10 @@ mailcraft-model = { workspace = true }
 mailcraft-mime = { workspace = true }
 mailcraft-msg = { workspace = true }
 mailcraft-pst = { workspace = true }
+mailcraft-formats = { workspace = true }
+mailcraft-fonts = { workspace = true }
+mailcraft-layout = { workspace = true }
+mailcraft-pdf = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1,15 +1,15 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 11 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 12 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 107, all passing |
+| Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 121, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
-| File formats written | `.msg`, `.oft`, `.eml` |
+| File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
 
 ## Milestones
@@ -17,7 +17,7 @@
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
-| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists, tables, pictures and named fonts are drawn |
+| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message prints to a PDF file |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -51,7 +51,9 @@
    borders set in styles, cells that span rows.
 8. Done: PNG and JPEG pictures written into RTF bodies, and RTF cells with their own lines,
    fills, places and merges down.
-9. Next: printing; then pictures an RTF body holds as attached objects, and metafiles.
+9. Done: a message prints to a PDF file in Memo Style (`file.print`), text, tables and borders;
+   pictures are not printed yet.
+10. Next: pictures in print; pictures an RTF body holds as attached objects, and metafiles.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -123,3 +125,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   (`\clcbpat`), places (`\clvertal*`), side room (`\trgaph`) and cells merged down (`\clvmgf`,
   `\clvmrg`) are followed, and an RTF table stands right under the paragraph before it. A new
   example, `msg_with_rtf`, gives a `.msg` of ours an RTF body for such comparisons.
+- **2026-10-11** - M2.9: printing. `file.print` (Ctrl+P, File > Print) lays the open message out in
+  Memo Style - the owner's name over a line, the fields, the body, a number at the foot of each
+  page - and writes a PDF file, on A4 or Letter. Two new crates: `layout` flows the document the
+  reading pane draws down pages (paragraphs, lists, quotes, borders, tables with spans whose rows
+  go on over a page end) and `pdf` writes the file (PDF 1.7, ISO 32000-1: compressed streams,
+  Type 0 fonts with only the glyphs used, text that can be searched and copied). Fonts are the
+  installed ones; a font whose licence bits forbid embedding (OpenType `OS/2` fsType) is passed
+  over. Not yet: pictures (their place is named), kerning, shaping and right-to-left text, a
+  printer other than a PDF file, and a comparison with what Outlook prints. Tests use a font
+  built in code, so nothing is bundled.

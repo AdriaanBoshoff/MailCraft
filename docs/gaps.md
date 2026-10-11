@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 10 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 11 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -30,7 +30,11 @@
    message holds as attached objects (`\objattph`, [MS-OXRTFEX]) and metafile or bitmap pictures (a
    placeholder), `\bin` picture data, list numbering beyond the text the writer left, nested tables,
    cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
-   (only the uncompressed stored form). Printing does not exist.
+   (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
+   text, lists, borders and tables; not yet: pictures in print (their place is named), kerning,
+   complex-script shaping and right-to-left text, Table Style and other print styles, page setup
+   beyond A4 and Letter (margins, headers and footers, orientation), sending pages to a printer,
+   print preview, and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`mailcraft-cli mcp`, `--control`) are not built.
 6. **Web build.** The engine and everything under it compiles for wasm32; there is no web app.
@@ -64,6 +68,7 @@
 
 ## Revision history
 
+- 11 · 2026-10-11 — a message prints to a PDF file; what printing lacks listed (item 3).
 - 10 · 2026-10-11 — RTF pictures (PNG, JPEG) and RTF cell lines, fills, places and merges done (item 3).
 - 9 · 2026-10-11 — italic faces, text beside a picture across blocks, borders set in styles and cells that span rows done (item 3).
 - 8 · 2026-10-11 — fonts by name, pictures in the line of text and at its side, and pictures written into the body done (item 3).

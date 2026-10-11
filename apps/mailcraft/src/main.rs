@@ -51,6 +51,17 @@ impl App {
                         self.run("file.saveAs", json!({ "path": path }));
                     }
                 }
+                UiRequest::Print => {
+                    let name = self.ui.session.open.as_ref().map(|it| safe_file_name(&it.subject())).unwrap_or_default();
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Print to PDF")
+                        .set_file_name(format!("{name}.pdf"))
+                        .add_filter("PDF document", &["pdf"])
+                        .save_file();
+                    if let Some(path) = picked {
+                        self.run("file.print", json!({ "path": path }));
+                    }
+                }
                 UiRequest::SaveAttachment(index) => {
                     let name =
                         self.ui.session.open.as_ref().and_then(|it| it.attachments.get(index)).map(|a| safe_file_name(&a.name())).unwrap_or_default();

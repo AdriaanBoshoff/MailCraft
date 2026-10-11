@@ -20,6 +20,8 @@ const LAYERS: &[(&str, &str, u8)] = &[
     ("mailcraft-msg", "crates/msg", 2),
     ("mailcraft-pst", "crates/pst", 2),
     ("mailcraft-formats", "crates/formats", 2),
+    ("mailcraft-pdf", "crates/pdf", 2),
+    ("mailcraft-layout", "crates/layout", 3),
     ("mailcraft-engine", "crates/engine", 4),
     ("mailcraft-ui-egui", "crates/ui-egui", 6),
     ("mailcraft", "apps/mailcraft", 7),
@@ -29,7 +31,17 @@ const LAYERS: &[(&str, &str, u8)] = &[
 /// Crates that must never appear below the UI layer.
 const GUI_CRATES: &[&str] = &["egui", "eframe", "winit", "rfd", "egui_kittest", "wgpu"];
 /// Everything the web build needs must compile for wasm32.
-const WASM_CRATES: &[&str] = &["mailcraft-model", "mailcraft-mime", "mailcraft-msg", "mailcraft-pst", "mailcraft-formats", "mailcraft-engine"];
+const WASM_CRATES: &[&str] = &[
+    "mailcraft-model",
+    "mailcraft-fonts",
+    "mailcraft-mime",
+    "mailcraft-msg",
+    "mailcraft-pst",
+    "mailcraft-formats",
+    "mailcraft-pdf",
+    "mailcraft-layout",
+    "mailcraft-engine",
+];
 const ASSET_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "icns", "svg", "ttf", "otf", "woff", "woff2", "wav", "mp3", "ogg", "flac", "cur", "ani",
     "blend", "psd",

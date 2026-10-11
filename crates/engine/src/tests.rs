@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 33, "parity fell to {done} of {total}");
+    assert!(done >= 34, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -252,6 +252,58 @@ fn folders_can_be_made_renamed_and_deleted_but_not_the_inbox() {
     run(&mut s, "folder.delete", Value::Null);
     assert_eq!(s.current_folder().unwrap().name, "Inbox");
     assert!(s.folders[0].iter().all(|f| f.name != "Customers"));
+}
+
+#[test]
+fn a_message_prints_to_a_pdf_file() {
+    let dir = std::env::temp_dir().join(format!("mailcraft-engine-print-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session();
+    // Nothing is open: there is nothing to print.
+    assert!(!s.is_enabled("file.print"));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    // The target and the paper are checked before anything is laid out or written.
+    let wrong = dir.join("print.msg");
+    assert!(matches!(s.run("file.print", &json!({"path": wrong})), Err(EngineError::BadParams(_))));
+    assert!(matches!(s.run("file.print", &json!({"path": dir.join("p.pdf"), "paper": "foolscap"})), Err(EngineError::BadParams(_))));
+    assert!(!wrong.exists() && !dir.join("p.pdf").exists());
+
+    // With the test font the pages are known; the installed fonts differ from machine to machine.
+    let item = s.open.clone().unwrap();
+    let library = mailcraft_fonts::Library::empty();
+    assert!(matches!(crate::print::layout(&item, "Alex Morgan", 0, mailcraft_layout::Paper::A4, &library), Err(EngineError::Format(_))));
+    let printed = {
+        let mut fonts = mailcraft_layout::Fonts::new(&library);
+        let chars: String = (' '..='~').chain(['\u{e1}', '\u{2022}']).collect();
+        fonts.give("Arial", false, false, mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font(&chars), index: 0 });
+        let fields = [("Subject", item.subject())];
+        let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
+        mailcraft_layout::memo(
+            &mailcraft_layout::Memo { owner: "Alex Morgan", fields: &fields, body: &body, plain: false },
+            mailcraft_layout::Paper::A4,
+            &mut fonts,
+        )
+        .unwrap()
+    };
+    let text = printed.pages[0].text();
+    assert!(text.starts_with("Alex Morgan\nSubject:Launch checklist: three items left\nHi Alex,"), "{text}");
+    assert!(text.contains("Support rota for the first week") && text.ends_with("\n1"));
+    let file = crate::print::write(&printed, &item.subject()).unwrap();
+    assert!(file.starts_with(b"%PDF-1.7") && file.ends_with(b"%%EOF\n"));
+
+    // Through the command: a file, or the word that no font is installed. Never a half-written one.
+    let path = dir.join("launch.pdf");
+    match s.run("file.print", &json!({"path": path, "paper": "Letter"})) {
+        Ok(result) => {
+            assert_eq!(result["pages"], 1);
+            assert!(std::fs::read(&path).unwrap().starts_with(b"%PDF-1.7"));
+        }
+        Err(e) => {
+            assert!(matches!(e, EngineError::Format(_)), "{e}");
+            assert!(!path.exists());
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
