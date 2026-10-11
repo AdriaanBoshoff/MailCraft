@@ -1,5 +1,5 @@
 //! Memo Style: the owner's name over a thick line, the message's fields as a list of names and
-//! values, then the body, and each page's number at its foot.
+//! values, then the body, and each page's number at its foot, of how many.
 
 use std::sync::Arc;
 
@@ -59,12 +59,14 @@ fn head(memo: &Memo) -> Vec<Block> {
     blocks
 }
 
-/// The page's number, in the middle of its foot.
-fn number(flow: &mut Flow, page: usize) {
+/// The page's number, in the middle of its foot; with the number of pages there are when there
+/// is more than one, so that a loose page tells whether the rest is with it.
+fn number(flow: &mut Flow, page: usize, pages: usize) {
     const SIZE: f32 = 8.0;
     let mut chain = flow.fonts.chain(HEAD_FONT, false, false, false);
     let mut set = Vec::new();
-    for ch in (page + 1).to_string().chars() {
+    let words = if pages > 1 { format!("{} of {pages}", page + 1) } else { (page + 1).to_string() };
+    for ch in words.chars() {
         if let Some((pick, glyph)) = flow.fonts.resolve(&mut chain, ch) {
             let advance = flow.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, SIZE));
             set.push((pick, glyph, ch, advance));
@@ -101,8 +103,9 @@ pub fn memo(memo: &Memo, paper: Paper, fonts: &mut Fonts) -> Result<Printed, Lay
     if flow.no_font {
         return Err(LayoutError::NoFont);
     }
-    for page in 0..flow.pages.len() {
-        number(&mut flow, page);
+    let pages = flow.pages.len();
+    for page in 0..pages {
+        number(&mut flow, page, pages);
     }
     let truncated = flow.full || memo.body.truncated;
     let mut pages = std::mem::take(&mut flow.pages);

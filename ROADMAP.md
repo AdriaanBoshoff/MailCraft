@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 18 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 19 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 136, all passing |
+| Tests | 137, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -201,3 +201,10 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   macros, a page that opens in a browser, a name with reversing characters, and content that is
   a program under another name. A long name is cut in its middle, so its ending always shows.
   Nothing is opened or run to tell.
+- **2026-10-11** - M2.16: print, the fourth of the pass. On paper no pointer can rest on a link,
+  so a printed message from Outlook does not say where its links go. MailCraft's does: a link
+  that is not what its text says gets a number where it stands and a line after the body with
+  where it goes and what is wrong with it; `"links": "all"` lists every link whose text is not
+  its own address, and `"links": "none"` prints the body alone. Each page's foot says which page
+  of how many it is, so a loose page tells whether the rest is with it, and the header lists
+  each attachment under the name it would be saved as, with its size.

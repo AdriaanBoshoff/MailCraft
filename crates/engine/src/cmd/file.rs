@@ -69,7 +69,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "Ctrl+P",
-            params: r#"{"path": target ending in .pdf, "paper": "a4" (default) or "letter"}"#,
+            params: r#"{"path": target ending in .pdf, "paper": "a4" (default) or "letter", "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"}; returns {"path", "pages", "truncated", "links"}"#,
             enabled: has_selection,
             run: print,
         },
@@ -200,12 +200,18 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
         Some(name) => mailcraft_layout::Paper::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown paper {name:?}: a4 or letter")))?,
         None => mailcraft_layout::Paper::A4,
     };
+    let links = match p_str(p, "links") {
+        Some(name) => {
+            crate::print::Links::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown links {name:?}: none, concerns or all")))?
+        }
+        None => crate::print::Links::default(),
+    };
     let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
     let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
-    let printed = crate::print::pdf(item, owner, s.tz_offset_min, paper)?;
+    let printed = crate::print::pdf(item, owner, s.tz_offset_min, paper, links)?;
     io::write_atomic(path, &printed.file)?;
     s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
-    Ok(json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated}))
+    Ok(json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated, "links": printed.links}))
 }
 
 fn close_store(s: &mut Session, p: &Value) -> CmdResult {

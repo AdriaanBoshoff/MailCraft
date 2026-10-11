@@ -89,7 +89,7 @@ fn a_long_message_goes_on_to_more_pages_each_with_its_number() {
     let mut seen = Vec::new();
     for (n, page) in printed.pages.iter().enumerate() {
         assert_eq!((page.width, page.height), (200.0, 300.0));
-        assert_eq!(page.text().lines().last().unwrap(), (n + 1).to_string());
+        assert_eq!(page.text().lines().last().unwrap(), format!("{} of {}", n + 1, printed.pages.len()));
         // The number stands under everything else.
         let foot = page.texts.last().unwrap().y;
         assert!(page.texts.iter().filter(|t| t.y != foot).all(|t| t.y < foot - 8.0));

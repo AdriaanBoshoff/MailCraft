@@ -3,18 +3,143 @@
 use std::sync::OnceLock;
 
 use mailcraft_fonts::Library;
-use mailcraft_formats::rich::{Block, Doc, Picture};
+use mailcraft_formats::links::{self, Concern};
+use mailcraft_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style};
 use mailcraft_layout::{Fonts, LayoutError, Line, Memo, Paper, Printed};
 use mailcraft_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, time};
 use mailcraft_pdf::{Piece, Stroke, Writer};
 
-use crate::EngineError;
 use crate::pictures::{self, Pixels};
+use crate::{EngineError, attachments};
 
 /// Pictures printed with one message, and the bytes of them all, decoded.
 const MAX_PICTURES: usize = 64;
 const MAX_PICTURE_BYTES: usize = 128 << 20;
 const MAX_DEPTH: usize = 64;
+/// Links listed after one message, and characters of a link's text and of its address there.
+const MAX_LINKS: usize = 200;
+const MAX_LINK_TEXT: usize = 80;
+const MAX_ADDRESS: usize = 300;
+
+/// Which of a message's links are listed after it. On paper no pointer can rest on a link to
+/// ask where it goes, so the page has to say.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Links {
+    /// None: the body alone.
+    None,
+    /// Those that are not what their text says.
+    #[default]
+    Concerns,
+    /// Every link whose text is not its address.
+    All,
+}
+
+impl Links {
+    /// By name, in any letter case.
+    pub fn named(name: &str) -> Option<Links> {
+        match name.to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "concerns" => Some(Self::Concerns),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// A link that is listed: what it says, where it goes, and what is wrong with it.
+struct Noted {
+    text: String,
+    address: String,
+    concern: Option<Concern>,
+}
+
+fn shown(text: &str, most: usize) -> String {
+    let mut out: String = text.chars().filter(|c| !c.is_control()).take(most).collect();
+    if text.chars().filter(|c| !c.is_control()).nth(most).is_some() {
+        out.push('\u{2026}');
+    }
+    out
+}
+
+/// Put a number after each link of `blocks` that is to be listed, and note the link under it.
+fn number_links(blocks: &mut [Block], which: Links, noted: &mut Vec<Noted>, depth: usize) {
+    for block in blocks {
+        match block {
+            Block::Para(para) => {
+                let mut runs = Vec::with_capacity(para.runs.len());
+                for (at, run) in para.runs.iter().enumerate() {
+                    runs.push(run.clone());
+                    let Some(link) = run.style.link.as_ref() else { continue };
+                    // The number goes after the last run of a link.
+                    if para.runs.get(at + 1).is_some_and(|next| next.style.link.as_ref() == Some(link)) {
+                        continue;
+                    }
+                    let address = shown(link, MAX_ADDRESS);
+                    let text = shown(links::text_around(&para.runs, at).trim(), MAX_LINK_TEXT);
+                    let concern = links::concern_at(&para.runs, at);
+                    // A place inside the message, a picture of it, or a link that is its own
+                    // address written out, needs no line.
+                    let plain = link.starts_with('#') || link.starts_with("cid:") || link.trim().is_empty() || text == address;
+                    let wanted = match which {
+                        Links::None => false,
+                        Links::Concerns => concern.is_some(),
+                        Links::All => concern.is_some() || !plain,
+                    };
+                    if !wanted {
+                        continue;
+                    }
+                    let number = match noted.iter().position(|n| n.address == address && n.text == text) {
+                        Some(known) => known + 1,
+                        None if noted.len() < MAX_LINKS => {
+                            noted.push(Noted { text, address, concern });
+                            noted.len()
+                        }
+                        None => continue,
+                    };
+                    runs.push(Run {
+                        text: format!("[{number}]"),
+                        style: Style { script: Script::Super, size: run.style.size, ..Style::default() },
+                        ..Run::default()
+                    });
+                }
+                para.runs = runs;
+            }
+            Block::Table(table) if depth < MAX_DEPTH => {
+                for cell in table.rows.iter_mut().flatten() {
+                    number_links(&mut cell.blocks, which, noted, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The list of the numbered links, to stand after the body.
+fn listed(noted: &[Noted], which: Links) -> Vec<Block> {
+    if noted.is_empty() {
+        return Vec::new();
+    }
+    let run = |text: String, bold: bool| Run { text, style: Style { bold, size: Some(9.0), ..Style::default() }, ..Run::default() };
+    let title = if which == Links::All { "Links in this message" } else { "Links that are not what they say" };
+    let mut blocks = vec![Block::Rule, Block::Para(Para { runs: vec![run(title.to_string(), true)], ..Para::default() })];
+    for (n, link) in noted.iter().enumerate() {
+        let says = if link.text.is_empty() { "A link".to_string() } else { format!("\u{201c}{}\u{201d}", link.text) };
+        let mut runs = vec![run(format!("[{}] {says} goes to {}", n + 1, link.address), false)];
+        if let Some(concern) = &link.concern {
+            runs.push(run(format!("  {}", concern.words()), true));
+        }
+        blocks.push(Block::Para(Para { runs, ..Para::default() }));
+    }
+    blocks
+}
+
+/// Number the links of `doc` that `which` asks for and list them after it. Says how many.
+pub fn note_links(doc: &mut Doc, which: Links) -> usize {
+    let mut noted = Vec::new();
+    number_links(&mut doc.blocks, which, &mut noted, 0);
+    doc.blocks.extend(listed(&noted, which));
+    noted.len()
+}
 
 /// The decoded pictures of a message's body, each under the name the body has for it.
 #[derive(Default)]
@@ -76,6 +201,8 @@ impl Pictures {
 
 /// A message laid out, with the pictures its pages show.
 pub struct Laid {
+    /// Links listed after the body.
+    pub links: usize,
     pub printed: Printed,
     pub pictures: Pictures,
 }
@@ -86,6 +213,8 @@ pub struct Print {
     pub pages: usize,
     /// The message was longer than may be printed; the end of it is not in the file.
     pub truncated: bool,
+    /// Links listed after the body.
+    pub links: usize,
 }
 
 /// The installed fonts, looked up once: reading them all takes a moment.
@@ -121,8 +250,10 @@ fn body(item: &Item) -> (Doc, bool) {
 }
 
 /// Lay `item` out on `paper` in the fonts of `library`.
-pub fn layout(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, library: &Library) -> Result<Laid, EngineError> {
-    let attachments: Vec<String> = item.visible_attachments().map(|a| a.name()).collect();
+pub fn layout(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, which: Links, library: &Library) -> Result<Laid, EngineError> {
+    // Each attachment under the name it would be saved as, with its size.
+    let attachments: Vec<String> =
+        item.visible_attachments().map(|a| format!("{} ({})", attachments::file_name(a), attachments::size_words(a.size()))).collect();
     let sent = if item.time() > 0 { time::civil(item.time(), tz_offset_min).full_stamp() } else { String::new() };
     let fields = [
         ("From", mailbox(&item.sender_name(), &item.sender_email())),
@@ -133,7 +264,8 @@ pub fn layout(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, librar
         ("Subject", item.subject()),
         ("Attachments", attachments.join("; ")),
     ];
-    let (doc, plain) = body(item);
+    let (mut doc, plain) = body(item);
+    let links = note_links(&mut doc, which);
     let pictures = Pictures::of(&doc, item);
     let sizes = |picture: &Picture| pictures.get(picture).map(|pixels| pixels.natural);
     let mut fonts = Fonts::new(library);
@@ -141,7 +273,7 @@ pub fn layout(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, librar
         mailcraft_layout::memo(&Memo { owner, fields: &fields, body: &doc, plain, sizes: &sizes }, paper, &mut fonts).map_err(|e| match e {
             LayoutError::NoFont => EngineError::Format(e.to_string()),
         })?;
-    Ok(Laid { printed, pictures })
+    Ok(Laid { links, printed, pictures })
 }
 
 /// Write laid-out pages as a PDF file.
@@ -203,7 +335,7 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
 }
 
 /// Print `item` to a PDF file's bytes, in the installed fonts.
-pub fn pdf(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper) -> Result<Print, EngineError> {
-    let Laid { printed, pictures } = layout(item, owner, tz_offset_min, paper, library())?;
-    Ok(Print { file: write(&printed, &pictures, &item.subject())?, pages: printed.pages.len(), truncated: printed.truncated })
+pub fn pdf(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, which: Links) -> Result<Print, EngineError> {
+    let Laid { links, printed, pictures } = layout(item, owner, tz_offset_min, paper, which, library())?;
+    Ok(Print { file: write(&printed, &pictures, &item.subject())?, pages: printed.pages.len(), truncated: printed.truncated, links })
 }

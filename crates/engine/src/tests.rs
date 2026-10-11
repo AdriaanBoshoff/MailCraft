@@ -597,7 +597,10 @@ fn a_message_prints_to_a_pdf_file() {
     // With the test font the pages are known; the installed fonts differ from machine to machine.
     let item = s.open.clone().unwrap();
     let library = mailcraft_fonts::Library::empty();
-    assert!(matches!(crate::print::layout(&item, "Alex Morgan", 0, mailcraft_layout::Paper::A4, &library).map(|_| ()), Err(EngineError::Format(_))));
+    assert!(matches!(
+        crate::print::layout(&item, "Alex Morgan", 0, mailcraft_layout::Paper::A4, crate::print::Links::All, &library).map(|_| ()),
+        Err(EngineError::Format(_))
+    ));
     let printed = {
         let mut fonts = mailcraft_layout::Fonts::new(&library);
         let chars: String = (' '..='~').chain(['\u{e1}', '\u{2022}']).collect();
@@ -649,6 +652,99 @@ fn a_message_prints_to_a_pdf_file() {
         Err(e) => {
             assert!(matches!(e, EngineError::Format(_)), "{e}");
             assert!(!path.exists());
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn print_lists_where_links_go() {
+    use crate::print::{Links, note_links};
+    use mailcraft_formats::rich::{Block, Doc};
+    assert_eq!(
+        (Links::named("ALL"), Links::named("concerns"), Links::named("none"), Links::named("some")),
+        (Some(Links::All), Some(Links::Concerns), Some(Links::None), None)
+    );
+    fn text(blocks: &[Block]) -> Vec<String> {
+        let mut out = Vec::new();
+        for block in blocks {
+            match block {
+                Block::Para(para) => out.push(para.runs.iter().map(|r| r.text.as_str()).collect()),
+                Block::Rule => out.push("--".to_string()),
+                Block::Table(table) => out.extend(table.rows.iter().flatten().flat_map(|cell| text(&cell.blocks))),
+            }
+        }
+        out
+    }
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Junk Email", "index": 0}));
+    let html = s.open.as_ref().unwrap().body_html().unwrap();
+
+    // As Outlook prints it: the body alone.
+    let mut doc = mailcraft_formats::html::parse(&html);
+    let before = doc.clone();
+    assert_eq!(note_links(&mut doc, Links::None), 0);
+    assert_eq!(doc, before);
+
+    // The four links that are not what they say are numbered where they stand and listed.
+    let mut doc = mailcraft_formats::html::parse(&html);
+    assert_eq!(note_links(&mut doc, Links::Concerns), 4);
+    let lines = text(&doc.blocks);
+    assert!(lines.contains(&"https://mail.example.org/quota[1]".to_string()), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("mail.example.org[2], or use the web version[3].")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("helpdesk@example.org[4]. Our real help pages are at example.org/help.")), "{lines:?}");
+    let at = lines.iter().position(|l| l == "--").unwrap();
+    assert_eq!(
+        lines[at + 1..],
+        [
+            "Links that are not what they say",
+            "[1] \u{201c}https://mail.example.org/quota\u{201d} goes to https://mail.example.org.account-check.example.net/quota  The text names mail.example.org, but the link goes to mail.example.org.account-check.example.net.",
+            "[2] \u{201c}mail.example.org\u{201d} goes to https://mail.example.org@sign-in.example.net/  The address is written to look like another place: it goes to sign-in.example.net.",
+            "[3] \u{201c}the web version\u{201d} goes to http://192.0.2.44/owa  The link goes to a number, not a name: 192.0.2.44.",
+            "[4] \u{201c}helpdesk@example.org\u{201d} goes to mailto:helpdesk@mailbox-notice.example.net  The text names example.org, but the link goes to mailbox-notice.example.net.",
+        ]
+    );
+
+    // All of them: the honest one too, which only says where it goes.
+    let mut doc = mailcraft_formats::html::parse(&html);
+    assert_eq!(note_links(&mut doc, Links::All), 5);
+    let lines = text(&doc.blocks);
+    assert_eq!(lines[lines.len() - 6], "Links in this message");
+    assert_eq!(lines[lines.len() - 1], "[5] \u{201c}example.org/help\u{201d} goes to https://example.org/help");
+
+    // A link written out as its own address, one inside the message and a picture of the message
+    // need no line; the same link twice has one number; links in tables are found.
+    let mut doc = mailcraft_formats::html::parse(
+        r##"<p><a href="https://example.org/a">https://example.org/a</a> <a href="#top">top</a> <a href="cid:x@y">x</a>
+        <a href="https://example.org/b">the <b>plan</b></a> and again <a href="https://example.org/b">the plan</a></p>
+        <table><tr><td><a href="https://example.org/c">in a table</a></td></tr></table>"##,
+    );
+    assert_eq!(note_links(&mut doc, Links::All), 2);
+    let lines = text(&doc.blocks);
+    assert!(lines[0].contains("https://example.org/a #top") || lines[0].contains("https://example.org/a top"), "{lines:?}");
+    assert!(lines[0].contains("the plan[1] and again the plan[1]"), "{lines:?}");
+    assert!(lines.contains(&"in a table[2]".to_string()), "{lines:?}");
+
+    // Hostile: far more links than are listed, with addresses far longer than are shown.
+    let many: String = (0..1000).map(|n| format!(r#"<a href="https://example.org/{n}/{}">link {n}</a> "#, "x".repeat(1000))).collect();
+    let mut doc = mailcraft_formats::html::parse(&many);
+    assert_eq!(note_links(&mut doc, Links::All), 200);
+    let lines = text(&doc.blocks);
+    assert!(lines.last().unwrap().starts_with("[200] ") && lines.last().unwrap().chars().count() < 420);
+    assert_eq!(note_links(&mut Doc::default(), Links::All), 0);
+
+    // Through the command.
+    let dir = std::env::temp_dir().join(format!("mailcraft-engine-print-links-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(matches!(s.run("file.print", &json!({"path": dir.join("p.pdf"), "links": "some"})), Err(EngineError::BadParams(_))));
+    for (links, count) in [(Value::Null, 4), (json!("all"), 5), (json!("none"), 0)] {
+        let mut params = json!({"path": dir.join("lure.pdf")});
+        if !links.is_null() {
+            params["links"] = links;
+        }
+        match s.run("file.print", &params) {
+            Ok(result) => assert_eq!(result["links"], count),
+            Err(e) => assert!(matches!(e, EngineError::Format(_)), "{e}"),
         }
     }
     std::fs::remove_dir_all(&dir).unwrap();

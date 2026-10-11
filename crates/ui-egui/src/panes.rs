@@ -55,11 +55,7 @@ fn initials(name: &str) -> String {
 }
 
 fn human_size(bytes: usize) -> String {
-    match bytes {
-        0..=1023 => format!("{bytes} bytes"),
-        1024..=1_048_575 => format!("{} KB", bytes / 1024),
-        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
-    }
+    mailcraft_engine::attachments::size_words(bytes)
 }
 
 impl MailUi {

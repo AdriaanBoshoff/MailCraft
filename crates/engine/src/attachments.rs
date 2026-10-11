@@ -188,6 +188,15 @@ pub fn caution(name: &str, data: &[u8]) -> Option<Caution> {
     PAGES.contains(&end.as_str()).then_some(Caution::Page { ending: end })
 }
 
+/// A size in words: bytes, then thousands and millions of them by 1024.
+pub fn size_words(bytes: usize) -> String {
+    match bytes {
+        0..=1023 => format!("{bytes} bytes"),
+        1024..=1_048_575 => format!("{} KB", bytes / 1024),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    }
+}
+
 /// What a reader should know about `attachment`. An attached message is a message, whatever it
 /// is called.
 pub fn caution_of(attachment: &Attachment) -> Option<Caution> {
