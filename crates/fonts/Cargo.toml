@@ -1,0 +1,15 @@
+[package]
+name = "mailcraft-fonts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MailCraft fonts: finds the fonts a message names among those installed, with open stand-ins"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Lists the fonts installed on this machine and finds one by family name.
+fontdb = { workspace = true }
+# Checks that a font file can be read before it is handed on.
+skrifa = { workspace = true }

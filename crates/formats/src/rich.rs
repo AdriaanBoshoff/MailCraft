@@ -1,5 +1,7 @@
 //! The formatted document a message body is read into: blocks of styled runs, with tables.
 //! It is what the reading pane draws; it holds no markup, no scripts and no fetched content.
+//! A picture the body itself spells out is kept as the bytes the body gave; they are not decoded
+//! here.
 
 use std::sync::Arc;
 
@@ -13,6 +15,8 @@ pub struct Doc {
     pub truncated: bool,
     /// Pictures and backgrounds that point at a server. None of them was fetched.
     pub remote_blocked: usize,
+    /// Pictures written into the body itself, each as the bytes of a picture file.
+    pub written: Vec<Arc<[u8]>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +68,16 @@ pub struct Run {
     pub picture: Option<Picture>,
     /// Width and height the body asks a picture to be shown at, in pixels; 0 where it gives none.
     pub extent: (u16, u16),
+    /// A picture that stands at one side with the paragraph's text beside it.
+    pub float: Float,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Float {
+    #[default]
+    None,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -73,6 +87,9 @@ pub struct Style {
     pub underline: bool,
     pub strike: bool,
     pub mono: bool,
+    /// The fonts asked for, by name, as the body lists them (first choice first, separated by
+    /// commas). They are names only: whether one is installed is the reader's business.
+    pub family: Option<Arc<str>>,
     pub script: Script,
     /// Font size in points; `None` is the reader's default.
     pub size: Option<f32>,
@@ -90,13 +107,14 @@ pub enum Script {
     Sub,
 }
 
-/// Where a picture's data is. The document never holds the data itself.
+/// Where a picture's data is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Picture {
     /// An attachment of the same message, by content id.
     Attached(String),
-    /// Data written into the body itself.
-    Inline,
+    /// Data written into the body itself: its place in [`Doc::written`], or `None` where the
+    /// data was not kept (not readable, too large, or of a kind that is not read).
+    Inline(Option<usize>),
     /// On a server. Not fetched.
     Remote,
 }

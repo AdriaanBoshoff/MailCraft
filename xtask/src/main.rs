@@ -15,6 +15,7 @@ use std::process::{Command, ExitCode};
 /// Crate directory → layer. A crate may only depend on crates in a lower layer.
 const LAYERS: &[(&str, &str, u8)] = &[
     ("mailcraft-model", "crates/model", 1),
+    ("mailcraft-fonts", "crates/fonts", 1),
     ("mailcraft-mime", "crates/mime", 2),
     ("mailcraft-msg", "crates/msg", 2),
     ("mailcraft-pst", "crates/pst", 2),

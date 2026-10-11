@@ -2,7 +2,7 @@
 //! is read as what it wraps; ordinary RTF keeps its character styles, colours, alignment,
 //! indents, links and tables. Pictures and embedded objects are never decoded here.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
@@ -14,6 +14,7 @@ const MAX_BLOCKS: usize = 50_000;
 const MAX_RUNS: usize = 200_000;
 const MAX_COLORS: usize = 1024;
 const MAX_FONTS: usize = 4096;
+const MAX_FONT_NAME: usize = 64;
 const MAX_LINK: usize = 2048;
 const MAX_EDGES: usize = 64;
 /// Room inside a cell, in pixels, close to the half-gap RTF rows are usually written with.
@@ -82,6 +83,9 @@ struct Builder {
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
     mono_fonts: HashSet<i32>,
+    /// Names of the fonts in the font table, by number, and the number text has when it names none.
+    fonts: HashMap<i32, String>,
+    default_font: Option<i32>,
     declaring: i32,
     instruction: String,
     count: usize,
@@ -119,6 +123,9 @@ fn formatted(rtf: &[u8]) -> Doc {
                         "fmodern" if b.mono_fonts.len() < MAX_FONTS => {
                             b.mono_fonts.insert(b.declaring);
                         }
+                        // Other names of the same font, and its data: not the name it goes by.
+                        "falt" | "panose" | "fname" | "fontemb" | "fontfile" => scope.cur.dest = Dest::Skip,
+                        _ if star => scope.cur.dest = Dest::Skip,
                         _ => {}
                     },
                     Dest::Colors => {
@@ -139,7 +146,22 @@ fn formatted(rtf: &[u8]) -> Doc {
             Event::Text(text) => {
                 scope.cur.star = false;
                 match scope.cur.dest {
-                    Dest::Body if !scope.cur.hidden => b.text(&text, &scope.cur.style),
+                    Dest::Body if !scope.cur.hidden => {
+                        // Text that names no font has the document's default one (`\deff`).
+                        if scope.cur.style.family.is_none() {
+                            scope.cur.style.family = b.default_font.and_then(|font| b.family(font));
+                        }
+                        b.text(&text, &scope.cur.style);
+                    }
+                    // A font's name ends at the ";" (RTF 1.9.1, "Font Table").
+                    Dest::Fonts => {
+                        let name = text.split(';').next().unwrap_or("");
+                        if b.fonts.len() < MAX_FONTS || b.fonts.contains_key(&b.declaring) {
+                            let kept = b.fonts.entry(b.declaring).or_default();
+                            let room = MAX_FONT_NAME.saturating_sub(kept.chars().count());
+                            kept.extend(name.chars().filter(|c| !c.is_control()).take(room));
+                        }
+                    }
                     Dest::Colors => {
                         // Each ";" ends one colour; one with no numbers is "automatic".
                         for _ in text.matches(';') {
@@ -161,7 +183,7 @@ fn formatted(rtf: &[u8]) -> Doc {
     while matches!(b.blocks.last(), Some(Block::Para(p)) if p.text().trim().is_empty() && p.runs.iter().all(|r| r.picture.is_none())) {
         b.blocks.pop();
     }
-    Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), remote_blocked: 0 }
+    Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), ..Doc::default() }
 }
 
 impl Builder {
@@ -180,7 +202,7 @@ impl Builder {
             "pict" => {
                 cur.dest = Dest::Skip;
                 if !cur.hidden {
-                    self.push(Run { style: cur.style.clone(), picture: Some(Picture::Inline), ..Run::default() });
+                    self.push(Run { style: cur.style.clone(), picture: Some(Picture::Inline(None)), ..Run::default() });
                 }
             }
             "b" => cur.style.bold = on,
@@ -196,7 +218,11 @@ impl Builder {
             "super" => cur.style.script = Script::Super,
             "sub" => cur.style.script = Script::Sub,
             "nosupersub" => cur.style.script = Script::None,
-            "f" => cur.style.mono = self.mono_fonts.contains(&param.unwrap_or(0)),
+            "f" => {
+                cur.style.mono = self.mono_fonts.contains(&param.unwrap_or(0));
+                cur.style.family = self.family(param.unwrap_or(0));
+            }
+            "deff" => self.default_font = param,
             "plain" => {
                 cur.style = Style { link: cur.style.link.take(), ..Style::default() };
                 cur.hidden = false;
@@ -230,6 +256,12 @@ impl Builder {
             _ if star || is_skipped_destination(word) => cur.dest = Dest::Skip,
             _ => {}
         }
+    }
+
+    /// The name of a font of the font table, as a list of one.
+    fn family(&self, font: i32) -> Option<Arc<str>> {
+        let name = self.fonts.get(&font)?.trim();
+        (!name.is_empty()).then(|| Arc::from(name))
     }
 
     fn text(&mut self, text: &str, style: &Style) {

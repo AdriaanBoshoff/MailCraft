@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 7 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 8 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,19 +9,22 @@
 2. **`.pst`/`.ost` are read-only.** No writer exists; every change to such a store is refused. Changes
    made in the sample mailbox live in memory and are lost on exit.
 3. **Formatted bodies are partly drawn.** HTML bodies show text styles, colours, headings, lists,
-   quotations, rules and tables, and pictures the message carries as attachments (`cid:`; PNG,
-   JPEG, GIF first frame, BMP) at the size the body asks for. Not yet: pictures written into the
-   body itself (`data:` addresses) and other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a
-   labelled placeholder; text running beside a picture (a picture always stands on a row of its
-   own); animation; a backing for see-through pictures on the dark pane; backgrounds on blocks
+   quotations, rules and tables, and pictures the message carries as attachments (`cid:`) or
+   writes into itself (`data:`; PNG, JPEG, GIF first frame, BMP) at the size the body asks for, in
+   the line of text or at its side (`align`) with text beside them. Text is drawn in the fonts the
+   message names when they are installed, with open fonts of the same measures standing in; no font
+   is bundled. Not yet: other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a labelled
+   placeholder; italic and bold-italic faces of named fonts (italics are slanted upright faces);
+   text beside a picture past the end of its paragraph; several pictures at the sides of one
+   paragraph; animation; a backing for see-through pictures on the dark pane; backgrounds on blocks
    other than cells and rows; borders set in styles; cells that span rows; padding that differs
-   left from right; fonts by name; and opening a link (its address is shown on hover). Style sheets
+   left from right; and opening a link (its address is shown on hover). Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
    their width, place, cell fills, padding, spacing and the vertical place of what cells hold; a
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
    Message bodies). RTF bodies
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
-   styles, colours, alignment, indents, links and simple tables; not yet: RTF pictures and embedded
+   styles, fonts by name, colours, alignment, indents, links and simple tables; not yet: RTF pictures and embedded
    objects (a placeholder), list numbering beyond the text the writer left, nested tables,
    borders per cell edge, merged cells, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing does not exist.
@@ -58,6 +61,7 @@
 
 ## Revision history
 
+- 8 · 2026-10-11 — fonts by name, pictures in the line of text and at its side, and pictures written into the body done (item 3).
 - 7 · 2026-10-11 — style sheets, cell padding and spacing, row fills, vertical places, percentage widths and picture frames done (item 3).
 - 6 · 2026-10-11 — bodies compared with Outlook's; table widths, placement and cell fills done (item 3).
 - 5 · 2026-10-11 — pictures attached to the message are drawn (item 3).

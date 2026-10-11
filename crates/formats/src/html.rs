@@ -8,8 +8,10 @@
 //! only the presentational subset mail uses is understood. Style comes from inline `style`
 //! declarations and from the rules of `<style>` sheets that pick elements by name, class or id
 //! (CSS 2.1 section 5, type, class and ID selectors); other selectors and at-rules are skipped.
+//! A picture written into the body (a `data:` address, RFC 2397, in base64, RFC 4648 section 4)
+//! is kept as bytes for the reader to decode; nothing else about it is trusted.
 
-use crate::rich::{Align, Block, Cell, Doc, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth, VAlign};
+use crate::rich::{Align, Block, Cell, Doc, Float, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth, VAlign};
 use mailcraft_model::html::entity;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,6 +29,13 @@ const MAX_TABLE_DEPTH: usize = 24;
 const MAX_ATTRS: usize = 32;
 const MAX_ATTR_LEN: usize = 2048;
 const MAX_ALT_LEN: usize = 200;
+/// Longest list of font names kept for a run.
+const MAX_FAMILY_LEN: usize = 160;
+/// A picture written into the body: the longest address read, and how many pictures and bytes
+/// of them one body may keep.
+const MAX_DATA_ADDRESS: usize = 3 << 20;
+const MAX_WRITTEN: usize = 64;
+const MAX_WRITTEN_BYTES: usize = 12 << 20;
 /// Largest width or height, in pixels, a picture may ask to be shown at.
 const MAX_PICTURE_SIDE: f32 = 4096.0;
 /// Relative sizes (`em`, `%`, `<small>`, headings) start from this many points when no size is
@@ -220,6 +229,7 @@ struct Builder {
     blocks: usize,
     run_count: usize,
     bytes: usize,
+    written_bytes: usize,
     full: bool,
 }
 
@@ -361,10 +371,10 @@ impl Builder {
     }
 
     fn append(&mut self, text: String, picture: Option<Picture>) {
-        self.append_sized(text, picture, (0, 0));
+        self.append_sized(text, picture, (0, 0), Float::None);
     }
 
-    fn append_sized(&mut self, text: String, picture: Option<Picture>, extent: (u16, u16)) {
+    fn append_sized(&mut self, text: String, picture: Option<Picture>, extent: (u16, u16), float: Float) {
         self.bytes = self.bytes.saturating_add(text.len());
         if self.bytes > MAX_TEXT || self.run_count >= MAX_RUNS {
             self.full = true;
@@ -381,7 +391,7 @@ impl Builder {
             return;
         }
         self.run_count += 1;
-        self.runs.push(Run { text, style: self.fmt.style.clone(), picture, extent });
+        self.runs.push(Run { text, style: self.fmt.style.clone(), picture, extent, float });
     }
 
     fn line_break(&mut self) {
@@ -401,7 +411,7 @@ impl Builder {
         let picture = if let Some(cid) = lower.strip_prefix("cid:").and(src.get(4..)) {
             Picture::Attached(cid.to_string())
         } else if lower.starts_with("data:") {
-            Picture::Inline
+            Picture::Inline(self.written(src))
         } else {
             if !src.is_empty() {
                 self.doc.remote_blocked += 1;
@@ -418,9 +428,37 @@ impl Builder {
         let pixels = |name: &str| asked(name).map_or(0, |v| v.round().clamp(0.0, MAX_PICTURE_SIDE) as u16);
         let extent = (pixels("width"), pixels("height"));
         let alt: String = attr(attrs, "alt").unwrap_or("").chars().filter(|c| !c.is_control()).take(MAX_ALT_LEN).collect();
+        // `align` puts a picture at one side with the text beside it (HTML 15.4.3, images).
+        let float = match attr(attrs, "align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("left") => Float::Left,
+            Some("right") => Float::Right,
+            _ => Float::None,
+        };
         self.ensure_cell();
-        self.append_sized(alt.trim().to_string(), Some(picture), extent);
+        self.append_sized(alt.trim().to_string(), Some(picture), extent, float);
         self.last_space = false;
+    }
+
+    /// Keep the bytes of a picture the body spells out in a `data:` address
+    /// (RFC 2397: `data:[<type>][;base64],<data>`). Only base64 data is read.
+    fn written(&mut self, src: &str) -> Option<usize> {
+        let (head, data) = src.get(5..)?.split_once(',')?;
+        if head.len() > 128 || !head.split(';').any(|part| part.trim().eq_ignore_ascii_case("base64")) {
+            return None;
+        }
+        let bytes = base64(data)?;
+        if bytes.is_empty() {
+            return None;
+        }
+        if let Some(same) = self.doc.written.iter().position(|kept| **kept == *bytes) {
+            return Some(same);
+        }
+        if self.doc.written.len() >= MAX_WRITTEN || self.written_bytes.saturating_add(bytes.len()) > MAX_WRITTEN_BYTES {
+            return None;
+        }
+        self.written_bytes += bytes.len();
+        self.doc.written.push(Arc::from(bytes));
+        Some(self.doc.written.len() - 1)
     }
 
     fn open_tag(&mut self, name: &str, attrs: &[(String, String)], self_closing: bool) {
@@ -550,8 +588,13 @@ impl Builder {
                 if let Some(size) = attr(attrs, "size").and_then(font_size_attr) {
                     style.size = Some(size);
                 }
-                if attr(attrs, "face").is_some_and(is_mono_family) {
-                    style.mono = true;
+                if let Some(face) = attr(attrs, "face") {
+                    if is_mono_family(face) {
+                        style.mono = true;
+                    }
+                    if let Some(family) = family(face) {
+                        style.family = Some(family);
+                    }
                 }
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -688,6 +731,9 @@ impl Builder {
                 "font-family" => {
                     if is_mono_family(v) {
                         style.mono = true;
+                    }
+                    if let Some(family) = family(v) {
+                        style.family = Some(family);
                     }
                 }
                 "text-align" => {
@@ -932,7 +978,9 @@ fn attributes(s: &str) -> Vec<(String, String)> {
             rest = rest.get(step..).unwrap_or("");
             continue;
         }
-        out.push((name, decode(value)));
+        // The address of a picture written into the body is the picture itself, so it may be long.
+        let written = name == "src" && value.trim_start().get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"));
+        out.push((name, decode(value, if written { MAX_DATA_ADDRESS } else { MAX_ATTR_LEN })));
     }
     out
 }
@@ -941,13 +989,13 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
 }
 
-/// Entity-decode an attribute value, keeping at most `MAX_ATTR_LEN` characters.
-fn decode(value: &str) -> String {
+/// Entity-decode an attribute value, keeping at most `max` characters.
+fn decode(value: &str, max: usize) -> String {
     let mut out = String::new();
     let mut rest = value;
     let mut count = 0;
     while let Some(c) = rest.chars().next() {
-        if count >= MAX_ATTR_LEN {
+        if count >= max {
             break;
         }
         count += 1;
@@ -976,6 +1024,39 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
 fn is_remote(url: &str) -> bool {
     let u: String = url.trim().chars().take(8).collect::<String>().to_ascii_lowercase();
     u.starts_with("http:") || u.starts_with("https:") || u.starts_with("//") || u.starts_with("ftp:")
+}
+
+/// The list of font names a body asks for, as it is kept: one line, of bounded length.
+fn family(v: &str) -> Option<Arc<str>> {
+    let v: String = v.chars().filter(|c| !c.is_control()).take(MAX_FAMILY_LEN).collect();
+    let v = v.trim();
+    (!v.is_empty() && !v.eq_ignore_ascii_case("inherit") && !v.eq_ignore_ascii_case("initial")).then(|| Arc::from(v))
+}
+
+/// Base64 (RFC 4648 section 4, either alphabet) to bytes. White space is passed over and the
+/// data ends at the first `=`; anything else that is not base64 means there is no picture.
+fn base64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut held, mut bits) = (0u32, 0u32);
+    for byte in text.bytes() {
+        let six = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => break,
+            _ if byte.is_ascii_whitespace() => continue,
+            _ => return None,
+        };
+        held = ((held & 0xfff) << 6) | u32::from(six);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((held >> bits) & 0xff).unwrap_or(0));
+        }
+    }
+    Some(out)
 }
 
 fn is_mono_family(v: &str) -> bool {

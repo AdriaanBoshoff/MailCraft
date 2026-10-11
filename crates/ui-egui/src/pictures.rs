@@ -1,6 +1,7 @@
-//! Pictures a message body shows from the message's own attachments (`cid:` references).
+//! Pictures a message body shows from the message itself: its own attachments (`cid:`
+//! references) and pictures written into the body (`data:` addresses).
 //!
-//! Only attachments the body refers to are decoded, only as pictures, and only in this process:
+//! Only what the body refers to is decoded, only as pictures, and only in this process:
 //! nothing is fetched, written to disk or handed to another program. A picture is hostile input
 //! like the rest of the message, so its file size, its dimensions and the memory it may take are
 //! capped before anything is decoded; one that cannot be read stays a labelled placeholder.
@@ -35,12 +36,19 @@ pub(crate) struct Shown {
 pub(crate) struct Pictures {
     key: u64,
     by_id: HashMap<String, Option<Shown>>,
+    /// Pictures written into the body, in the document's order.
+    written: Vec<Option<Shown>>,
     kept_bytes: usize,
 }
 
 impl Pictures {
     pub(crate) fn get(&self, content_id: &str) -> Option<&Shown> {
         self.by_id.get(content_id)?.as_ref()
+    }
+
+    /// A picture written into the body, by its place in the document's list.
+    pub(crate) fn written(&self, index: usize) -> Option<&Shown> {
+        self.written.get(index)?.as_ref()
     }
 
     /// Decode the pictures `doc` refers to, once per message. `key` names the message's body.
@@ -61,6 +69,15 @@ impl Pictures {
                 Shown { texture: ctx.load_texture(format!("picture-{}", self.by_id.len()), image, TextureOptions::LINEAR), size }
             });
             self.by_id.insert(id.to_string(), shown);
+        }
+        for data in doc.written.iter().skip(self.written.len()) {
+            let count = self.by_id.len() + self.written.len();
+            let image = if count < MAX_PICTURES && self.kept_bytes < MAX_KEPT_BYTES { decode(data) } else { None };
+            let shown = image.map(|(image, size)| {
+                self.kept_bytes = self.kept_bytes.saturating_add(image.pixels.len().saturating_mul(4));
+                Shown { texture: ctx.load_texture(format!("written-{count}"), image, TextureOptions::LINEAR), size }
+            });
+            self.written.push(shown);
         }
     }
 }

@@ -112,6 +112,11 @@ fn hostile_bodies_draw_without_panicking() {
          <img src=\"https://x.example/b.png\" width=4096 height=4096><img src=cid:none width=24 height=24><img src=\"data:image/png;base64,AAAA\" width=30 height=99999>\
          <a href=\"https://x.example/\"><img src=\"https://x.example/c.png\" width=25 height=25 alt=linked></a></p>".to_string(),
         "<table><tr><td width=30><img src=\"https://x.example/a.png\" width=600 height=300><td bgcolor=#000><img src=\"https://x.example/a.png\" width=60 height=30></table>".to_string(),
+        // Pictures in the line of text and at its sides, at every size, and fonts by hostile names.
+        "<p>".to_string() + &"<img src=cid:none width=4096 height=4096 align=left>w <img src=\"https://x.example/a.png\" width=1 height=4096 align=right>".repeat(60) + "</p>",
+        "<p align=right><img src=cid:none align=left width=40 height=4000>a<br><br>b<img src=cid:none width=4096 height=1>".to_string() + &"long words ".repeat(300) + "</p>",
+        "<table width=20><tr><td><img src=cid:none align=right width=200 height=200>x<td><img src=\"data:image/png;base64,AAAA\" align=left>y</table>".to_string(),
+        "<p style=\"font-family:\u{202e}'',,,;;..\\x.ttf\">a<font face=\"".to_string() + &"Zz,".repeat(4000) + "\">b</font><b style=\"font-family:serif\">c</b></p>",
     ];
     for dark in [false, true] {
         let tokens = theme::Tokens::named(dark);
@@ -122,7 +127,7 @@ fn hostile_bodies_draw_without_panicking() {
             for width in [0.0, 30.0, 800.0] {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     ui.set_max_width(width);
-                    body::draw(ui, &doc, &tokens, &pictures::Pictures::default());
+                    body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
                 });
                 // No renderer here: the font texture updates have nowhere to go.
                 output.textures_delta.clear();
@@ -140,7 +145,9 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     assert!(doc.text().contains("parking.example.net/help"));
     let ctx = egui::Context::default();
     install_fonts(&ctx);
-    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default()));
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default(), &faces::Faces::default())
+    });
     output.textures_delta.clear();
     ui.execute("ui.bodyFormat", &json!({ "format": "plain" })).unwrap();
     assert!(ui.body_doc().is_none());
@@ -168,7 +175,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
     for width in [0.0, 30.0, 800.0] {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_max_width(width);
-            body::draw(ui, &doc, &theme::Tokens::named(false), &shown);
+            body::draw(ui, &doc, &theme::Tokens::named(false), &shown, &faces::Faces::default());
         });
         output.textures_delta.clear();
     }
@@ -193,7 +200,8 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
     assert!(shown.get("logo@example").is_some());
     assert!(["notes", "drawing", "missing", "https://x.example/r.png"].iter().all(|id| shown.get(id).is_none()));
     for dark in [false, true] {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(dark), &shown));
+        let mut output =
+            ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(dark), &shown, &faces::Faces::default()));
         output.textures_delta.clear();
     }
     // Another message: nothing of the last one is kept.
@@ -241,5 +249,108 @@ fn a_picture_is_sized_as_the_body_asks_and_never_wider_than_the_pane() {
     assert_eq!(picture_size((0, 0), natural, 100.0), egui::vec2(100.0, 50.0));
     for hostile in [picture_size((4096, 4096), egui::vec2(1.0, 8192.0), 0.0), picture_size((1, 0), egui::vec2(0.0, 0.0), -5.0)] {
         assert!(hostile.x >= 1.0 && hostile.y >= 1.0 && hostile.y <= 4096.0 && hostile.x.is_finite());
+    }
+}
+
+/// Base64 as a body would write a picture into itself.
+fn written(data: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::from("data:image/png;base64,");
+    for three in data.chunks(3) {
+        let n = three.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b)) << (8 * (3 - three.len()));
+        for i in 0..4 {
+            out.push(if i <= three.len() { char::from(ABC[(n >> (18 - 6 * i)) as usize & 63]) } else { '=' });
+        }
+    }
+    out
+}
+
+#[test]
+fn pictures_written_into_the_body_and_at_its_sides_are_decoded_and_drawn() {
+    let good = written(&sample_picture());
+    let html = format!(
+        "<p>a <img src=\"{good}\"> b <img src=\"{good}\" width=24 height=24> c <img src=\"{}\" alt=broken> d</p>\
+         <p><img src=\"{good}\" align=left>{}</p><p align=center><img src=\"{good}\" align=right width=4000>short</p>",
+        written(b"not a picture at all"),
+        "words beside the picture ".repeat(80),
+    );
+    let doc = mailcraft_formats::html::parse(&html);
+    assert_eq!(doc.written.len(), 2);
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut shown = pictures::Pictures::default();
+    shown.load(&ctx, 3, &doc, &mailcraft_model::Item::new_mail());
+    assert_eq!(shown.written(0).map(|p| p.size), Some(egui::vec2(240.0, 96.0)));
+    assert!(shown.written(1).is_none() && shown.written(usize::MAX).is_none());
+    for dark in [false, true] {
+        for width in [0.0, 100.0, 300.0, 900.0] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(width);
+                body::draw(ui, &doc, &theme::Tokens::named(dark), &shown, &faces::Faces::default());
+            });
+            output.textures_delta.clear();
+        }
+    }
+    shown.load(&ctx, 4, &mailcraft_formats::html::parse("<p>text</p>"), &mailcraft_model::Item::new_mail());
+    assert!(shown.written(0).is_none(), "nothing of the last message is kept");
+}
+
+#[test]
+fn text_beside_a_picture_is_cut_where_the_picture_ends() {
+    use mailcraft_formats::rich::{Picture, Run};
+    let text = |t: &str| Run { text: t.to_string(), ..Run::default() };
+    let runs = [text("one two\n"), Run { text: "alt".to_string(), picture: Some(Picture::Remote), ..Run::default() }, text("thre\u{301}e four")];
+    let ends = [8, 9, 20];
+    let texts = |runs: &[Run]| runs.iter().map(|r| r.text.clone()).collect::<Vec<_>>();
+    let (head, tail) = body::split(&runs, &ends, 8);
+    assert_eq!((texts(&head), texts(&tail)), (vec!["one two".to_string()], vec!["alt".to_string(), "thre\u{301}e four".to_string()]));
+    let (head, tail) = body::split(&runs, &ends, 13);
+    assert_eq!(texts(&head), ["one two\n", "alt", "thre"]);
+    assert_eq!(texts(&tail), ["\u{301}e four"]);
+    let (head, tail) = body::split(&runs, &ends, 0);
+    assert!(head.is_empty() && tail.len() == 3);
+    // Counts that do not belong to these runs cut nothing in the middle of a character.
+    for (ends, chars) in [(&[0usize, 0, 0][..], usize::MAX), (&[usize::MAX, 1, 0][..], 5), (&[3][..], 2), (&[][..], 9), (&[9, 9, 9, 9, 9][..], 4)] {
+        let (head, tail) = body::split(&runs, ends, chars);
+        assert!(head.len() + tail.len() <= runs.len() + 1);
+    }
+}
+
+#[test]
+fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own() {
+    let html = "<p style=\"font-family:Arial\">a<b>b</b></p><p style=\"font-family:'No Such Font 7f3a', sans-serif\">c</p>\
+                <p style=\"font-family:..\\..\\Windows\\Fonts\\arial.ttf\">d</p><p style=\"font-family:monospace\">e</p>"
+        .to_string()
+        + &(0..200).map(|i| format!("<font face=\"Nosuch{i}, Other{i}\">f</font>")).collect::<String>();
+    let doc = mailcraft_formats::html::parse(&html);
+    let ctx = egui::Context::default();
+    let mut shown = faces::Faces::new(install_fonts(&ctx));
+    assert!(shown.pick("Arial", false).is_none(), "nothing is drawn with a font before it is looked up");
+    // The fonts found are ready a frame after they are given; every frame draws.
+    for _ in 0..3 {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            shown.load(ui.ctx(), 1, &doc);
+            body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &shown);
+        });
+        output.textures_delta.clear();
+    }
+    assert!(shown.pick("monospace", false).is_none());
+    assert!(shown.pick("never listed", true).is_none());
+    // Whatever this machine has, a family that is picked is one egui can draw with.
+    let bound = ctx.fonts(|f| f.families());
+    for list in ["arial", "'no such font 7f3a', sans-serif", "..\\..\\windows\\fonts\\arial.ttf"] {
+        for bold in [false, true] {
+            assert!(shown.pick(list, bold).is_none_or(|family| bound.contains(&family)), "{list}");
+        }
+    }
+    // Another message with other names: still drawn, and the caps hold.
+    let other = mailcraft_formats::html::parse("<p style=\"font-family:Georgia\">g</p><p style=\"font-family:\">h</p>");
+    for _ in 0..2 {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            shown.load(ui.ctx(), 2, &other);
+            body::draw(ui, &other, &theme::Tokens::named(true), &pictures::Pictures::default(), &shown);
+            body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default(), &shown);
+        });
+        output.textures_delta.clear();
     }
 }

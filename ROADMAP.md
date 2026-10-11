@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 8 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 9 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 84, all passing |
+| Tests | 96, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -17,7 +17,7 @@
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
-| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists, tables and attached pictures are drawn |
+| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists, tables, pictures and named fonts are drawn |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -44,7 +44,11 @@
    ([docs/ui-parity.md](docs/ui-parity.md), Message bodies).
 5. Done: frames for pictures that are not loaded, row backgrounds, cell padding and spacing,
    vertical places in cells, percentage widths, and style sheets as far as Outlook follows them.
-6. Next: text beside pictures, fonts by name, then pictures written into the body (`data:`).
+6. Done: pictures stand in the line of text or at its side with text beside them, text is drawn
+   in the fonts the message names (installed ones only; nothing is bundled), and pictures written
+   into the body (`data:`) are shown.
+7. Next: real italic faces, text beside a picture across paragraphs, borders set in styles, cells
+   that span rows, RTF pictures; then printing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -87,3 +91,12 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   padding and spacing (1 and 2 unless set), collapsed borders, row backgrounds, percentage widths,
   and cells whose content stands in the middle unless told otherwise. A picture that is not loaded
   leaves an empty frame of the size it asks for. A link keeps the link colour whatever surrounds it.
+- **2026-10-11** - M2.6: fonts and pictures in the text, checked against Outlook with a fourth probe
+  message of our own. A new crate, `crates/fonts` (L1), turns the list of fonts a message names
+  into installed faces: names are only ever compared with the names of installed fonts, open fonts
+  of the same measures stand in for proprietary ones that are missing, an unknown font falls back
+  to a serif as Outlook's does, and a font file is checked before the drawing code sees it. No font
+  is bundled or fetched. Pictures now stand in the line of text on its baseline and wrap like
+  words; `<img align=left|right>` puts one at the side with the text beside and then under it
+  (a `float` style does not, as in Outlook). Pictures written into the body as `data:` addresses
+  are decoded under the same caps as attached ones. RTF text takes its fonts from the font table.

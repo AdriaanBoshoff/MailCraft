@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 7 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at five message bodies; layout only.
+**Status:** revision 8 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at six message bodies; layout only.
 
 How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -36,7 +36,7 @@ and only the ribbon panel's height and contents change. MailCraft follows that.
 
 ## Message bodies
 
-Two messages from MailCraft's own sample mailbox and three probe messages (all synthetic, written by
+Two messages from MailCraft's own sample mailbox and four probe messages (all synthetic, written by
 us) were saved as `.msg` and opened in an Outlook Classic message window, one at a time, then closed
 without saving. The window was compared with MailCraft's reading pane showing the same message.
 Nothing from the owner's mailbox was involved.
@@ -51,7 +51,15 @@ Nothing from the owner's mailbox was involved.
 | Plain `<blockquote>` | set in about 40 to 48 on the left, no bar | set in 40, no bar | close |
 | Quoted earlier mail (`type=cite`, a left border, a quote class) | a bar on the left | a bar on the left | close |
 | Picture sent with the message (`cid:`) | drawn at the size the body asks for | the same | same |
-| Picture on a server, not loaded, with a size | an empty box of the size asked for, with a mark, a notice and the alternative text, standing in the line of text | an empty frame of that size with our own mark, a notice and the alternative text, on a row of its own | close |
+| Picture on a server, not loaded, with a size | an empty box of the size asked for, with a mark, a notice and the alternative text, standing in the line of text | an empty frame of that size with our own mark, a notice and the alternative text, standing in the line of text | close |
+| Picture in a paragraph | stands in the line of text with its bottom on the baseline; without a size, at its own size; several wrap like words | the same | same |
+| `<img align=left>` and `align=right` | the picture stands at that side; text runs beside it and then under it | the same within the picture's own paragraph; the next paragraph starts under the picture | close |
+| `float` in a style on a picture | not followed: the picture stays in the line of text | the same | same |
+| Picture written into the body (`data:` in base64) | shown, sized or at its own size | the same, for the picture kinds MailCraft decodes | same |
+| Font named by `<font face>` or `font-family` | drawn in that font when it is installed, with its own bold | the same; an open font of the same measures stands in for a missing proprietary one | same |
+| Italic text in a named font | the font's italic face | the upright face, slanted | close |
+| A font that is not installed | the next in the list; `sans-serif` and `serif` are followed; with nothing left, a serif | the same | same |
+| Text that names no font | a sans-serif of Outlook's own choosing | MailCraft's interface font | differs |
 | Picture on a server, not loaded, without a size | a small box with a mark only | a line of text with the alternative text | differs (ours says what the picture is) |
 | Table, cell padding and spacing | 1 and 2 where the table sets none; `cellpadding` and `cellspacing` followed; with spacing the table's own border is seen round the cells' | the same | same |
 | `border-collapse: collapse` | no room between cells | the same | same |
@@ -67,9 +75,9 @@ Nothing from the owner's mailbox was involved.
 | RTF highlight | a bright marker colour from a fixed palette | the colour the RTF's colour table gives | differs |
 | Message window type | an RTF-only `.msg` is shown as rich text only when it is marked as in sync (see [file-format-parity.md](file-format-parity.md)) | written so | same |
 
-Not followed yet, in order of how much they show: text beside a picture (a picture or its frame
-always stands on a row of its own); fonts by name; borders set in styles and RTF borders per cell
-edge; the space Outlook leaves between a paragraph and a table; cells that span rows. They are in
+Not followed yet, in order of how much they show: borders set in styles and RTF borders per cell
+edge; the space Outlook leaves between a paragraph and a table; cells that span rows; italic faces
+of named fonts; text beside a picture past the end of its paragraph. They are in
 [gaps.md](gaps.md), item 3.
 
 ## Behaviour seen
@@ -87,6 +95,7 @@ edge; the space Outlook leaves between a paragraph and a table; cells that span 
 
 ## Revision history
 
+- 8 · 2026-10-11 — a fourth probe message compared: fonts by name and their fallbacks, pictures in the line of text and at its side, pictures written into the body.
 - 7 · 2026-10-11 — three probe messages compared: picture frames, cell padding and spacing, row fills, vertical places, percentage widths, style sheets, link colour.
 - 6 · 2026-10-11 — two message bodies compared with Outlook's display of the same `.msg`; Message bodies section added.
 - 5 · 2026-10-11 — attached pictures drawn in the body; row updated.

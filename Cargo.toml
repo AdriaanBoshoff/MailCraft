@@ -11,6 +11,7 @@ rust-version = "1.90"
 [workspace.dependencies]
 # internal
 mailcraft-model = { path = "crates/model" }
+mailcraft-fonts = { path = "crates/fonts" }
 mailcraft-mime = { path = "crates/mime" }
 mailcraft-msg = { path = "crates/msg" }
 mailcraft-pst = { path = "crates/pst" }
@@ -32,6 +33,10 @@ uuid = "1"
 # Local time zone for display only; the model stores UTC FILETIME ticks.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Installed fonts by family name; no font is bundled through it.
+fontdb = "0.24"
+# The font reader egui itself uses; here it only checks a font file before egui is given it.
+skrifa = "0.44"
 
 # ui
 egui = "0.36"

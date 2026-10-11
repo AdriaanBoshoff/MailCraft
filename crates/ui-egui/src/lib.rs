@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod body;
+mod faces;
 pub mod icons;
 mod panes;
 mod pictures;
@@ -129,6 +130,7 @@ pub struct MailUi {
     /// The open message's formatted body, kept until another message is opened.
     body_doc: Option<(u64, Arc<Doc>)>,
     pictures: pictures::Pictures,
+    faces: faces::Faces,
     pub(crate) actions: Vec<(String, Value)>,
     pub(crate) search: String,
     pub(crate) collapsed: HashSet<(usize, u64)>,
@@ -171,7 +173,7 @@ pub(crate) fn text_width(p: &Painter, text: &str, font: FontId) -> f32 {
 
 /// System UI fonts, used when installed. Nothing proprietary is bundled: without them the
 /// built-in open fonts are used.
-fn install_fonts(ctx: &egui::Context) {
+fn install_fonts(ctx: &egui::Context) -> FontDefinitions {
     let mut defs = FontDefinitions::default();
     let mut bold_family = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let candidates: [(&str, &[&str]); 2] = [
@@ -199,7 +201,8 @@ fn install_fonts(ctx: &egui::Context) {
         }
     }
     defs.families.insert(FontFamily::Name("bold".into()), bold_family);
-    ctx.set_fonts(defs);
+    ctx.set_fonts(defs.clone());
+    defs
 }
 
 impl MailUi {
@@ -215,6 +218,7 @@ impl MailUi {
             plain_bodies: false,
             body_doc: None,
             pictures: pictures::Pictures::default(),
+            faces: faces::Faces::default(),
             actions: Vec::new(),
             search,
             collapsed: HashSet::new(),
@@ -385,7 +389,7 @@ impl MailUi {
         let full = ctx.content_rect();
         if !self.fonts_ready {
             // Fonts take effect next frame; the "bold" family must exist before anything uses it.
-            install_fonts(&ctx);
+            self.faces = faces::Faces::new(install_fonts(&ctx));
             self.fonts_ready = true;
             ui.painter().rect_filled(full, 0.0, self.tokens.window);
             ctx.request_repaint();

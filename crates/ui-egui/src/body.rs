@@ -1,19 +1,22 @@
 //! Draws a message body that was read into a formatted document.
 //!
 //! A link shows where it points when the pointer rests on it and is never followed. A picture is
-//! drawn only when the message carries it as an attachment and it could be decoded
-//! ([`Pictures`]); any other picture is an empty frame of the size it asks for, or a labelled
-//! placeholder when it asks for none. Colours a message asks for are
-//! kept only where they stay readable on what is behind them. Sizes follow what Outlook Classic
+//! drawn only when the message carries it, as an attachment or written into the body, and it
+//! could be decoded ([`Pictures`]); any other picture is an empty frame of the size it asks for,
+//! or a labelled placeholder when it asks for none. A picture stands in the line of text it is
+//! written in, or at one side of its paragraph when it asks to. Text is drawn in the font it
+//! names when that font, or an open one of the same measures, is installed ([`Faces`]). Colours
+//! a message asks for are kept only where they stay readable on what is behind them. Sizes follow what Outlook Classic
 //! was seen to do with the same message (`docs/ui-parity.md`, "Message bodies").
 
+use crate::faces::Faces;
 use crate::pictures::{Pictures, Shown};
 use crate::theme::Tokens;
 use crate::{bold, font};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Shape, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
-use mailcraft_formats::rich::{self, Block, Doc, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign};
+use mailcraft_formats::rich::{self, Block, Doc, Float, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign};
 
 /// Size of text the message gives no size for: 12 points.
 const BODY_PX: f32 = 16.0;
@@ -34,10 +37,20 @@ const MEASURED_ROWS: usize = 100;
 const MEASURED_BLOCKS: usize = 200;
 /// Width a column is taken to want when what it holds is not measured.
 const UNMEASURED: f32 = 240.0;
-/// Space between pictures that stand side by side, and between rows of them.
-const PICTURE_GAP: f32 = 4.0;
-/// Tallest a picture is drawn, whatever it asks for.
+/// Widest and tallest a picture is drawn, whatever it asks for.
+const MAX_PICTURE_WIDTH: f32 = 4096.0;
 const MAX_PICTURE_HEIGHT: f32 = 4096.0;
+/// Room kept under a picture in a line of text, so that it stands on the line the letters stand
+/// on and not on the line their tails reach down to.
+const BASELINE: f32 = 4.0;
+/// Largest font size given to the space that holds a picture's place.
+const MAX_HOLDER_PX: f32 = 20_000.0;
+/// Room between a picture at one side of a paragraph and the text beside it.
+const FLOAT_GAP: f32 = 8.0;
+/// A picture stands at one side only when this much width is left for the text beside it.
+const MIN_BESIDE: f32 = 120.0;
+/// Runs of a paragraph looked through for a picture that stands at one side.
+const MAX_FLOAT_SEARCH: usize = 256;
 
 /// What drawing needs besides the document: the theme, the decoded pictures, and the colour
 /// behind the text being drawn (the pane, or a filled table cell).
@@ -45,6 +58,7 @@ const MAX_PICTURE_HEIGHT: f32 = 4096.0;
 struct Look<'a> {
     t: &'a Tokens,
     pictures: &'a Pictures,
+    faces: &'a Faces,
     on: Color32,
 }
 
@@ -55,9 +69,9 @@ impl Look<'_> {
     }
 }
 
-pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures) {
+pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, faces: &Faces) {
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-    blocks(ui, &doc.blocks, Look { t, pictures, on: t.surface }, 0);
+    blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface }, 0);
 }
 
 fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
@@ -99,10 +113,12 @@ impl Stand<'_> {
 /// The picture a run stands for, or the frame that takes its place; `None` for text, and for a
 /// picture that is shown as a line of text.
 fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
-    let picture = run.picture.as_ref()?;
-    if let Picture::Attached(id) = picture
-        && let Some(drawn) = pictures.get(id)
-    {
+    let drawn = match run.picture.as_ref()? {
+        Picture::Attached(id) => pictures.get(id),
+        Picture::Inline(Some(index)) => pictures.written(*index),
+        Picture::Inline(None) | Picture::Remote => None,
+    };
+    if let Some(drawn) = drawn {
         return Some(Stand::Drawn(drawn));
     }
     (run.extent.0 >= MIN_FRAME && run.extent.1 >= MIN_FRAME).then_some(Stand::Frame)
@@ -112,7 +128,7 @@ fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
 fn missing(picture: &Picture) -> &'static str {
     match picture {
         Picture::Remote => "Picture not downloaded",
-        Picture::Attached(_) | Picture::Inline => "Picture",
+        Picture::Attached(_) | Picture::Inline(_) => "Picture",
     }
 }
 
@@ -147,31 +163,93 @@ fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool) {
     if para.gap && after_another {
         ui.add_space(if matches!(para.kind, ParaKind::Heading(_)) { 12.0 } else { 9.0 });
     }
-    if !para.runs.iter().any(|r| shown(r, look.pictures).is_some()) {
-        return text(ui, para, &para.runs, look, true, (false, false));
-    }
-    // Text and pictures take turns down the page: pictures stand in rows of their own.
-    let blank = |r: &Run| r.picture.is_none() && r.text.trim().is_empty();
-    let mut rest = para.runs.as_slice();
-    let mut first = true;
-    while let Some(head) = rest.first() {
-        let is_picture = shown(head, look.pictures).is_some();
-        let count = if is_picture {
-            // White space between two pictures does not end the row.
-            rest.iter().take_while(|r| shown(r, look.pictures).is_some() || (blank(r) && !r.text.contains('\n'))).count()
-        } else {
-            rest.iter().take_while(|r| shown(r, look.pictures).is_none()).count()
-        };
-        let (piece, tail) = rest.split_at(count.clamp(1, rest.len()));
-        if is_picture {
-            picture_rows(ui, para, piece, look);
-            first = false;
-        } else if !piece.iter().all(blank) {
-            text(ui, para, piece, look, first, (!first, !tail.is_empty()));
-            first = false;
+    let (_, width) = room(ui, para);
+    // The first picture that asks to stand at one side does, when there is room beside it.
+    let aside = para.runs.iter().take(MAX_FLOAT_SEARCH).enumerate().find_map(|(i, run)| {
+        let stand = (run.float != Float::None).then(|| shown(run, look.pictures)).flatten()?;
+        let size = picture_size(run.extent, stand.natural(run), width);
+        (width - size.x - FLOAT_GAP >= MIN_BESIDE).then_some((i, stand, size))
+    });
+    match aside {
+        Some((at, stand, size)) => beside(ui, para, at, stand, size, look),
+        None => {
+            piece(ui, para, &para.runs, look, Spot { left: 0.0, width, min_height: 0.0, marker: true });
         }
-        rest = tail;
     }
+}
+
+/// A paragraph with a picture at one side: the text stands beside the picture for as many lines
+/// as the picture is tall, and under it from there on.
+fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: Look) {
+    let (inset, width) = room(ui, para);
+    let Some(run) = para.runs.get(at) else { return };
+    let rest: Vec<Run> = para.runs.iter().enumerate().filter(|(i, _)| *i != at).map(|(_, r)| r.clone()).collect();
+    let narrow = width - size.x - FLOAT_GAP;
+    let left = if run.float == Float::Left { size.x + FLOAT_GAP } else { 0.0 };
+
+    // Lay the text out beside the picture to learn where the picture ends.
+    let (job, ends, _) = job(ui, &rest, look, narrow, para.align);
+    let galley = ui.painter().layout_job(job);
+    let mut chars = 0usize;
+    let mut under = false;
+    for (i, row) in galley.rows.iter().enumerate() {
+        if i > 0 && row.pos.y >= size.y {
+            under = true;
+            break;
+        }
+        chars = chars.saturating_add(row.glyphs.len()).saturating_add(usize::from(row.ends_with_newline));
+    }
+    let rect = if under {
+        let (head, tail) = split(&rest, &ends, chars);
+        let rect = piece(ui, para, &head, look, Spot { left, width: narrow, min_height: size.y, marker: true });
+        piece(ui, para, &tail, look, Spot { left: 0.0, width, min_height: 0.0, marker: false });
+        rect
+    } else {
+        piece(ui, para, &rest, look, Spot { left, width: narrow, min_height: size.y + FLOAT_GAP / 2.0, marker: true })
+    };
+
+    let x = rect.left() + inset + if run.float == Float::Right { width - size.x } else { 0.0 };
+    let spot = Rect::from_min_size(pos2(x.round(), rect.top().round()), size);
+    if !ui.is_rect_visible(spot) {
+        return;
+    }
+    picture(ui, run, stand, spot, look);
+    let id = ui.id().with(("aside", at, spot.min.x.to_bits(), spot.min.y.to_bits()));
+    let tip = tip(run, stand);
+    let response = ui.interact(spot, id, Sense::hover());
+    if !tip.is_empty() {
+        response.on_hover_text_at_pointer(tip);
+    }
+}
+
+/// Runs cut in two after `chars` characters of the text they are drawn as; `ends` is where each
+/// run ends in that text. Only plain text is cut; a picture or its label stays whole.
+pub(crate) fn split(runs: &[Run], ends: &[usize], chars: usize) -> (Vec<Run>, Vec<Run>) {
+    let (mut head, mut tail): (Vec<Run>, Vec<Run>) = (Vec::new(), Vec::new());
+    let mut start = 0usize;
+    for (run, end) in runs.iter().zip(ends) {
+        if *end <= chars {
+            head.push(run.clone());
+        } else if start >= chars {
+            tail.push(run.clone());
+        } else if run.picture.is_some() {
+            head.push(run.clone());
+        } else {
+            let cut = run.text.char_indices().nth(chars - start).map_or(run.text.len(), |(i, _)| i);
+            let (a, b) = run.text.split_at_checked(cut).unwrap_or((run.text.as_str(), ""));
+            head.push(Run { text: a.to_string(), ..run.clone() });
+            tail.push(Run { text: b.to_string(), ..run.clone() });
+        }
+        start = *end;
+    }
+    // The line break that ended the last line beside the picture is not drawn twice.
+    if let Some(last) = head.last_mut()
+        && last.picture.is_none()
+        && last.text.ends_with('\n')
+    {
+        last.text.pop();
+    }
+    (head, tail)
 }
 
 /// Room a paragraph leaves on its left.
@@ -205,80 +283,71 @@ pub(crate) fn picture_size(asked: (u16, u16), natural: Vec2, room: f32) -> Vec2 
     if size.x > room {
         size *= room.max(1.0) / size.x;
     }
-    vec2(size.x.max(1.0), size.y.clamp(1.0, MAX_PICTURE_HEIGHT))
+    vec2(size.x.clamp(1.0, MAX_PICTURE_WIDTH), size.y.clamp(1.0, MAX_PICTURE_HEIGHT))
 }
 
-/// Pictures of one paragraph that follow each other, side by side while they fit.
-fn picture_rows(ui: &mut Ui, para: &Para, runs: &[Run], look: Look) {
-    let (inset, width) = room(ui, para);
-    struct Row<'a> {
-        size: Vec2,
-        items: Vec<(&'a Run, Stand<'a>, Vec2)>,
-    }
-    let mut rows: Vec<Row> = Vec::new();
-    for run in runs {
-        let Some(picture) = shown(run, look.pictures) else { continue };
-        let size = picture_size(run.extent, picture.natural(run), width);
-        match rows.last_mut() {
-            Some(row) if row.size.x + PICTURE_GAP + size.x <= width => {
-                row.size = vec2(row.size.x + PICTURE_GAP + size.x, row.size.y.max(size.y));
-                row.items.push((run, picture, size));
-            }
-            _ => rows.push(Row { size, items: vec![(run, picture, size)] }),
+/// Draw a picture, or the frame that takes its place.
+fn picture(ui: &Ui, run: &Run, stand: Stand, at: Rect, look: Look) {
+    match stand {
+        Stand::Drawn(drawn) => {
+            ui.painter().image(drawn.texture.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
-    }
-    let height: f32 = rows.iter().map(|r| r.size.y + PICTURE_GAP).sum();
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    if !ui.is_rect_visible(rect) {
-        return;
-    }
-    quote_bars(ui, para, rect, look.t);
-    let whole = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let mut y = rect.top() + PICTURE_GAP / 2.0;
-    for row in &rows {
-        let mut x = rect.left()
-            + inset
-            + match para.align {
-                rich::Align::Left => 0.0,
-                rich::Align::Center => ((width - row.size.x) / 2.0).max(0.0),
-                rich::Align::Right => (width - row.size.x).max(0.0),
-            };
-        for (run, picture, size) in &row.items {
-            // Pictures of one row stand on the same line.
-            let at = Rect::from_min_size(pos2(x, y + row.size.y - size.y), *size);
-            x += size.x + PICTURE_GAP;
-            if !ui.is_rect_visible(at) {
-                continue;
-            }
-            match picture {
-                Stand::Drawn(drawn) => {
-                    ui.painter().image(drawn.texture.id(), at, whole, Color32::WHITE);
-                }
-                Stand::Frame => frame(ui, run, at, look),
-            }
-            if response.hover_pos().is_some_and(|p| at.contains(p)) {
-                let mut tip: Vec<String> = Vec::new();
-                if let (Stand::Frame, Some(picture)) = (picture, &run.picture) {
-                    tip.push(missing(picture).to_string());
-                }
-                tip.push(alt(run));
-                if let Some(link) = run.style.link.as_deref() {
-                    tip.push(link.chars().take(300).collect());
-                    tip.push("Links are not opened from here.".to_string());
-                }
-                tip.retain(|line| !line.is_empty());
-                if !tip.is_empty() {
-                    response.clone().on_hover_text_at_pointer(tip.join("\n"));
-                }
-            }
-        }
-        y += row.size.y + PICTURE_GAP;
+        Stand::Frame => frame(ui, run, at, look),
     }
 }
 
-/// Runs laid out as one piece of text no wider than `wrap`, and the character offset where each
-/// run ends. `trim` drops a line break at the start or the end.
-fn job(runs: &[Run], look: Look, wrap: f32, align: rich::Align, trim: (bool, bool)) -> (LayoutJob, Vec<usize>) {
+/// What is said about a picture when the pointer rests on it.
+fn tip(run: &Run, stand: Stand) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if let (Stand::Frame, Some(picture)) = (stand, &run.picture) {
+        lines.push(missing(picture).to_string());
+    }
+    lines.push(alt(run));
+    if let Some(link) = run.style.link.as_deref() {
+        lines.push(link.chars().take(300).collect());
+        lines.push("Links are not opened from here.".to_string());
+    }
+    lines.retain(|line| !line.is_empty());
+    lines.join("\n")
+}
+
+/// A picture that stands in a line of text, and the size it is drawn at.
+struct Placed<'a> {
+    run: &'a Run,
+    stand: Stand<'a>,
+    size: Vec2,
+    /// The character that holds its place in the text, and the line height given to it.
+    holder: (char, f32),
+}
+
+/// What holds a picture's place in a line of text: a space set so large that it is as wide as
+/// the picture, on a line as tall as the picture. `None` when the fonts have no such space.
+fn holder(ui: &Ui, size: Vec2) -> Option<(char, TextFormat)> {
+    const PROBE: f32 = 64.0;
+    let probe = FontId::new(PROBE, FontFamily::Proportional);
+    let (space, px) = ui.ctx().fonts_mut(|fonts| {
+        // An em space is as wide as its font is tall; a plain space does where there is none.
+        [('\u{2003}', true), (' ', false)].into_iter().find_map(|(c, check)| {
+            if check && !fonts.has_glyph(&probe, c) {
+                return None;
+            }
+            let advance = fonts.glyph_width(&probe, c);
+            (advance.is_finite() && advance > 1.0).then(|| (c, size.x * PROBE / advance))
+        })
+    })?;
+    let format = TextFormat {
+        font_id: FontId::new(px.clamp(1.0, MAX_HOLDER_PX), FontFamily::Proportional),
+        line_height: Some(size.y + BASELINE),
+        color: Color32::TRANSPARENT,
+        valign: Align::BOTTOM,
+        ..TextFormat::default()
+    };
+    Some((space, format))
+}
+
+/// Runs laid out as one piece of text no wider than `wrap`; the character offset where each run
+/// ends; and the pictures that stand in the text, in order.
+fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Align) -> (LayoutJob, Vec<usize>, Vec<Placed<'a>>) {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap;
     job.halign = match align {
@@ -287,59 +356,111 @@ fn job(runs: &[Run], look: Look, wrap: f32, align: rich::Align, trim: (bool, boo
         rich::Align::Right => Align::RIGHT,
     };
     let mut ends: Vec<usize> = Vec::with_capacity(runs.len());
+    let mut placed: Vec<Placed> = Vec::new();
     let mut chars = 0usize;
-    for (i, run) in runs.iter().enumerate() {
-        let (mut text, format) = section(run, look);
-        if trim.0 && i == 0 && text.starts_with('\n') {
-            text.remove(0);
-        }
-        if trim.1 && i + 1 == runs.len() && text.ends_with('\n') {
-            text.pop();
-        }
+    for run in runs {
+        let held = shown(run, look.pictures).and_then(|stand| {
+            let size = picture_size(run.extent, stand.natural(run), wrap);
+            holder(ui, size).map(|(space, format)| (stand, size, space, format))
+        });
+        let (text, format) = match held {
+            Some((stand, size, space, format)) => {
+                placed.push(Placed { run, stand, size, holder: (space, size.y + BASELINE) });
+                (space.to_string(), format)
+            }
+            None => section(run, look),
+        };
         chars = chars.saturating_add(text.chars().count());
         ends.push(chars);
         job.append(&text, 0.0, format);
     }
-    (job, ends)
+    (job, ends, placed)
 }
 
-/// Runs of one paragraph drawn as text. `marker` draws the list marker beside them; `trim` drops
-/// a line break at the start or the end, where a row of pictures already breaks the line.
-fn text(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, marker: bool, trim: (bool, bool)) {
-    let (inset, width) = room(ui, para);
-    let (job, ends) = job(runs, look, width, para.align, trim);
+/// Where each picture of `placed` landed in the laid out text, from the text's own corner.
+fn spots(galley: &egui::Galley, placed: &[Placed]) -> Vec<Rect> {
+    let mut out = Vec::with_capacity(placed.len());
+    let mut next = placed.iter();
+    let mut want = next.next();
+    'rows: for row in &galley.rows {
+        for glyph in &row.glyphs {
+            let Some(p) = want else { break 'rows };
+            // Pictures come in the order of the text, each held by its space on its own tall line.
+            if glyph.chr == p.holder.0 && (glyph.line_height - p.holder.1).abs() < 0.75 {
+                let bottom = row.pos.y + row.size.y - BASELINE;
+                out.push(Rect::from_min_size(pos2((row.pos.x + glyph.pos.x).round(), (bottom - p.size.y).round()), p.size));
+                want = next.next();
+            }
+        }
+    }
+    out
+}
+
+/// Where a piece of a paragraph's text goes in the room the paragraph has.
+struct Spot {
+    /// Room left free before the text, for a picture at the paragraph's left.
+    left: f32,
+    width: f32,
+    min_height: f32,
+    /// Draw the list marker beside it.
+    marker: bool,
+}
+
+/// Runs of one paragraph drawn as text, with the pictures that stand in it. Returns the room
+/// it took.
+fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect {
+    let (inset, _) = room(ui, para);
+    let (job, ends, placed) = job(ui, runs, look, spot.width, para.align);
     let galley = ui.painter().layout_job(job);
 
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), galley.size().y + 2.0), Sense::click_and_drag() - Sense::FOCUSABLE);
+    let height = (galley.size().y + 2.0).max(spot.min_height);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag() - Sense::FOCUSABLE);
     if !ui.is_rect_visible(rect) {
-        return;
+        return rect;
     }
-    let text_left = rect.left() + inset;
+    let text_left = rect.left() + inset + spot.left;
     let pos = match para.align {
         rich::Align::Left => pos2(text_left, rect.top()),
-        rich::Align::Center => pos2(text_left + width / 2.0, rect.top()),
-        rich::Align::Right => pos2(text_left + width, rect.top()),
+        rich::Align::Center => pos2(text_left + spot.width / 2.0, rect.top()),
+        rich::Align::Right => pos2(text_left + spot.width, rect.top()),
     };
     quote_bars(ui, para, rect, look.t);
-    if marker && let ParaKind::Item(marker) = &para.kind {
+    if spot.marker
+        && let ParaKind::Item(marker) = &para.kind
+    {
         let marker: String = marker.chars().take(12).collect();
-        ui.painter().text(pos2(text_left - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, font(BODY_PX), look.text());
+        ui.painter().text(pos2(rect.left() + inset - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, font(BODY_PX), look.text());
     }
 
-    // Where the pointer is, in the text: a link shows its address and nothing else happens.
+    let spots: Vec<Rect> = spots(&galley, &placed).into_iter().map(|at| at.translate(pos.to_vec2())).collect();
+    // Where the pointer is: on a picture, or in the text, where a link shows its address and
+    // nothing else happens.
     if let Some(pointer) = response.hover_pos() {
-        let cursor = galley.cursor_from_pos(pointer - pos);
-        let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
-        if (pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y) {
-            let index = cursor.index.0;
-            let run = ends.iter().position(|end| index < *end).and_then(|i| runs.get(i));
-            if let Some(link) = run.and_then(|r| r.style.link.as_deref()) {
-                let shown: String = link.chars().take(300).collect();
-                response.clone().on_hover_text_at_pointer(format!("{shown}\nLinks are not opened from here."));
+        if let Some((p, _)) = placed.iter().zip(&spots).find(|(_, at)| at.contains(pointer)) {
+            let tip = tip(p.run, p.stand);
+            if !tip.is_empty() {
+                response.clone().on_hover_text_at_pointer(tip);
+            }
+        } else {
+            let cursor = galley.cursor_from_pos(pointer - pos);
+            let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
+            if (pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y) {
+                let index = cursor.index.0;
+                let run = ends.iter().position(|end| index < *end).and_then(|i| runs.get(i));
+                if let Some(link) = run.and_then(|r| r.style.link.as_deref()) {
+                    let shown: String = link.chars().take(300).collect();
+                    response.clone().on_hover_text_at_pointer(format!("{shown}\nLinks are not opened from here."));
+                }
             }
         }
     }
     LabelSelectionState::label_text_selection(ui, &response, pos, galley, look.text(), Stroke::NONE);
+    for (p, at) in placed.iter().zip(&spots) {
+        if ui.is_rect_visible(*at) {
+            picture(ui, p.run, p.stand, *at, look);
+        }
+    }
+    rect
 }
 
 /// The text and format of one run as it is drawn.
@@ -358,10 +479,13 @@ fn section(run: &Run, look: Look) -> (String, TextFormat) {
             format.valign = Align::BOTTOM;
         }
     }
-    format.font_id = match (s.mono, s.bold) {
-        (true, _) => FontId::new(px, FontFamily::Monospace),
-        (false, true) => bold(px),
-        (false, false) => font(px),
+    // The font the run names, when it is installed; otherwise the reader's own.
+    let named = s.family.as_deref().and_then(|list| look.faces.pick(list, s.bold));
+    format.font_id = match (named, s.mono, s.bold) {
+        (Some(family), ..) => FontId::new(px, family),
+        (None, true, _) => FontId::new(px, FontFamily::Monospace),
+        (None, false, true) => bold(px),
+        (None, false, false) => font(px),
     };
     format.italics = s.italic;
     let (color, background) = colors(s.color, s.background, look);
@@ -434,14 +558,8 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
     for block in list.iter().take(MEASURED_BLOCKS) {
         let width = match block {
             Block::Para(p) => {
-                let words: Vec<Run> = p.runs.iter().filter(|r| shown(r, look.pictures).is_none()).cloned().collect();
-                let (job, _) = job(&words, look, f32::INFINITY, rich::Align::Left, (false, false));
-                let pictures: f32 = p
-                    .runs
-                    .iter()
-                    .filter_map(|r| shown(r, look.pictures).map(|s| picture_size(r.extent, s.natural(r), f32::INFINITY).x + PICTURE_GAP))
-                    .sum();
-                inset(p) + ui.painter().layout_job(job).size().x.max(pictures) + 2.0
+                let (job, ..) = job(ui, &p.runs, look, f32::INFINITY, rich::Align::Left);
+                inset(p) + ui.painter().layout_job(job).size().x + 2.0
             }
             Block::Rule => 0.0,
             Block::Table(t) => match t.width {

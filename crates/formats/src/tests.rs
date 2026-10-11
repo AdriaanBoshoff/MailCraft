@@ -1,5 +1,5 @@
 use crate::html::parse;
-use crate::rich::{Align, Block, Doc, Para, ParaKind, Picture, Script};
+use crate::rich::{Align, Block, Doc, Float, Para, ParaKind, Picture, Script};
 
 fn paras(doc: &Doc) -> Vec<&Para> {
     doc.blocks
@@ -137,7 +137,7 @@ fn nothing_active_survives_and_remote_content_is_only_counted() {
     assert_eq!(doc.remote_blocked, 3, "tracker, logo and background");
     let p = paras(&doc);
     let pictures: Vec<&Picture> = p[0].runs.iter().filter_map(|r| r.picture.as_ref()).collect();
-    assert_eq!(pictures, [&Picture::Remote, &Picture::Attached("part1@example".to_string()), &Picture::Inline]);
+    assert_eq!(pictures, [&Picture::Remote, &Picture::Attached("part1@example".to_string()), &Picture::Inline(Some(0))]);
     let all = format!("{doc:?}");
     for gone in ["evil", "alert", "frame", "obj", "hidden", "comment", "AAAA"] {
         assert!(!all.contains(gone), "{gone} must not be in the document");
@@ -232,7 +232,7 @@ fn rtf_keeps_styles_paragraphs_tables_and_links() {
     let Block::Para(total) = &table.rows[1][0].blocks[0] else { panic!("a paragraph") };
     assert_eq!(total.runs[0].style.background, Some([255, 242, 204]));
     assert_eq!(p[3].indent, 2);
-    assert_eq!(p[3].runs[1].picture, Some(Picture::Inline));
+    assert_eq!(p[3].runs[1].picture, Some(Picture::Inline(None)));
     let link = by_text(p[4], "the help page");
     assert_eq!(link.link.as_deref(), Some("https://example.net/help"));
     assert!(link.underline);
@@ -421,4 +421,109 @@ fn hostile_style_sheets_are_read_without_harm() {
     // Sheets past the size limit are not read.
     let big = format!("<style>{}</style><style>p {{ color:red }}</style><p>x</p>", " ".repeat(600 << 10));
     assert_eq!(paras(&parse(&big))[0].runs[0].style.color, None);
+}
+
+#[test]
+fn pictures_written_into_the_body_are_kept_as_bytes_once_each() {
+    let doc = parse(
+        "<p><img src=\"data:image/png;base64,AQID\"><img src=\"DATA:image/png;charset=x;BASE64, AQ\r\n ID \"><img src=\"data:image/gif;base64,BAUG-_8=\">\
+         <img src=\"data:image/png,AQID\"><img src=\"data:image/png;base64,AQ*D\"><img src=\"data:image/png;base64,\"><img src=\"data:;base64\">\
+         <img src=\"data:image/png;base64,====\"></p>",
+    );
+    let kept: Vec<Option<usize>> =
+        paras(&doc)[0].runs.iter().filter_map(|r| if let Some(Picture::Inline(i)) = r.picture { Some(i) } else { None }).collect();
+    assert_eq!(kept, [Some(0), Some(0), Some(1), None, None, None, None, None], "the same bytes are kept once; what is not base64 is not kept");
+    assert_eq!(doc.written.iter().map(|w| w.to_vec()).collect::<Vec<_>>(), [vec![1, 2, 3], vec![4, 5, 6, 0xfb, 0xff]]);
+    assert_eq!(doc.remote_blocked, 0, "nothing was asked of anyone");
+}
+
+#[test]
+fn hostile_written_pictures_are_capped() {
+    // More pictures than one body may keep: each differs, and the rest are placeholders.
+    let many: String =
+        (0..200usize).map(|i| format!("<img src=\"data:image/png;base64,{}\">", ["AAAA", "AAAB", "AAAC", "AAAD"][i % 4].repeat(1 + i / 4))).collect();
+    let doc = parse(&many);
+    assert_eq!(doc.written.len(), 64);
+    // An address longer than is read is cut short, and one body keeps only so many bytes.
+    let long = format!("<img src=\"data:image/png;base64,{}\">", "QUJD".repeat(1 << 20));
+    let doc = parse(&long);
+    assert!(doc.written.iter().map(|w| w.len()).sum::<usize>() <= 3 << 20);
+    let heavy: String =
+        (0..8u8).map(|i| format!("<img src=\"data:image/png;base64,{}{}\">", char::from(b'A' + i), "A".repeat((3 << 20) - 64))).collect();
+    let doc = parse(&heavy);
+    assert!(doc.written.iter().map(|w| w.len()).sum::<usize>() <= 12 << 20);
+    for src in
+        ["data:", "data:,", "data:;base64,", "data:image/png;base64", "data:\u{0};base64,\u{202e}", &format!("data:{};base64,AAAA", "x".repeat(4000))]
+    {
+        let doc = parse(&format!("<img src=\"{src}\" alt=a>"));
+        assert!(doc.written.is_empty(), "{src:?}");
+    }
+}
+
+#[test]
+fn pictures_stand_at_a_side_only_when_align_says_so() {
+    let doc = parse(
+        "<p><img src=cid:a align=left><img src=cid:b align=\" RIGHT \"><img src=cid:c align=middle><img src=cid:d style=\"float:left\">\
+         <img src=cid:e align=\"leftward\"><img src=cid:f>text</p>",
+    );
+    let floats: Vec<Float> = paras(&doc)[0].runs.iter().filter(|r| r.picture.is_some()).map(|r| r.float).collect();
+    assert_eq!(floats, [Float::Left, Float::Right, Float::None, Float::None, Float::None, Float::None]);
+}
+
+#[test]
+fn fonts_are_kept_by_name_as_the_body_lists_them() {
+    let doc = parse(
+        "<style>p.note { font-family: Verdana, sans-serif } #code { font-family: 'Courier New' }</style>\
+         <p><font face=\"Arial\">a</font><span style=\"font-family: 'Nosuch Font', Georgia , serif\">b</span>c\
+         <span style=\"font-family:inherit\">d</span><font face=\"\">e</font></p><p class=note>f<b>g</b></p><p id=code>h</p>",
+    );
+    let p = paras(&doc);
+    let family =
+        |para: &Para, text: &str| para.runs.iter().find(|r| r.text.contains(text)).and_then(|r| r.style.family.as_deref().map(str::to_lowercase));
+    assert_eq!(family(p[0], "a").as_deref(), Some("arial"));
+    assert_eq!(family(p[0], "b").as_deref(), Some("'nosuch font', georgia , serif"));
+    assert_eq!(family(p[0], "c"), None);
+    assert_eq!(family(p[0], "d"), None);
+    assert_eq!(family(p[0], "e"), None);
+    assert_eq!(family(p[1], "f").as_deref(), Some("verdana, sans-serif"));
+    assert_eq!(family(p[1], "g").as_deref(), Some("verdana, sans-serif"), "bold text keeps the paragraph's font");
+    assert!(p[2].runs[0].style.mono && p[2].runs[0].style.family.is_some());
+
+    // A name is hostile text: it is kept on one line and no longer than a list may be.
+    let hostile = format!("<p style=\"font-family:{}\">x</p><font face=\"a\u{0}b\nc\u{1b}[31m\">y</font>", "N".repeat(100_000));
+    let doc = parse(&hostile);
+    for run in paras(&doc).iter().flat_map(|p| &p.runs) {
+        let name = run.style.family.as_deref().unwrap();
+        assert!(name.chars().count() <= 160 && !name.chars().any(char::is_control), "{name:?}");
+    }
+}
+
+#[test]
+fn rtf_text_has_the_fonts_its_font_table_names() {
+    let doc = crate::rtf::parse(RTF);
+    let p = paras(&doc);
+    let family = |para: &Para, text: &str| para.runs.iter().find(|r| r.text == text).and_then(|r| r.style.family.as_deref().map(str::to_string));
+    assert_eq!(family(p[0], "Title").as_deref(), Some("Arial"), "text that names no font has the default one");
+    assert_eq!(family(p[1], "RP-1").as_deref(), Some("Courier New"));
+    assert_eq!(family(p[1], "it").as_deref(), Some("Arial"));
+
+    // Other names of a font and its data are not its name; a font the table lacks is no font.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\fonttbl{\\f0\\froman{\\*\\panose 02020603050405020304}{\\*\\falt Other}Georgia;}{\\f1 {\\fontemb 0102}Verdana;extra}{\\f2 ;}}\
+          \\pard\\f0 a\\f1 b\\f2 c\\f9 d\\f-3 e\\par}",
+    );
+    let fonts: Vec<(&str, Option<&str>)> = paras(&doc)[0].runs.iter().map(|r| (r.text.as_str(), r.style.family.as_deref())).collect();
+    assert_eq!(fonts, [("a", Some("Georgia")), ("b", Some("Verdana")), ("cde", None)]);
+
+    // A font table without end, names without end, a default that is not there.
+    let mut table = b"{\\rtf1\\deff2147483647{\\fonttbl".to_vec();
+    for i in 0..5000 {
+        table.extend_from_slice(format!("{{\\f{i} {}\u{1};}}", "n".repeat(300)).as_bytes());
+    }
+    table.extend_from_slice(b"}\\pard\\f4999 x\\f3 y\\par}");
+    let doc = crate::rtf::parse(&table);
+    assert_eq!(doc.text(), "xy");
+    for run in paras(&doc).iter().flat_map(|p| &p.runs) {
+        assert!(run.style.family.as_deref().is_none_or(|n| n.chars().count() <= 64 && !n.chars().any(char::is_control)));
+    }
 }
