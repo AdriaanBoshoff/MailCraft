@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 5 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 6 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 75, all passing |
+| Tests | 80, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -17,7 +17,7 @@
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
-| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists and tables are drawn |
+| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists, tables and attached pictures are drawn |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -38,7 +38,8 @@
    with nothing run and nothing fetched.
 2. Done: bodies stored as compressed RTF ([MS-OXRTFCP]) are decoded; RTF that wraps HTML or text
    ([MS-OXRTFEX]) is read as what it wraps, ordinary RTF is drawn formatted.
-3. Next: pictures attached to the message, then checking both renderings against Outlook's.
+3. Done: pictures the message carries as attachments are decoded in-process and drawn in the body.
+4. Next: checking the HTML and RTF renderings against Outlook's display of the same message.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -66,3 +67,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   the worked example in [MS-OXRTFCP]); a message kept only as RTF now has text, a list preview and a
   formatted body, and RTF that wraps HTML gives that HTML back (so it also survives conversion to
   `.eml`). The sample mailbox has an RTF-only receipt under Inbox/Receipts.
+- **2026-10-11** - M2.3: pictures attached to the message (`cid:`) are drawn in the body. Only
+  attachments the body points at are decoded, only as PNG, JPEG, GIF or BMP, with file size,
+  dimensions and memory capped first; anything else stays a placeholder and nothing is fetched or
+  handed to another program. The sample order mail carries a picture drawn in code.

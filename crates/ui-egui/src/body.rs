@@ -1,14 +1,16 @@
 //! Draws a message body that was read into a formatted document.
 //!
-//! Only text is painted. A link shows where it points when the pointer rests on it and is never
-//! followed; a picture is a labelled placeholder. Colours a message asks for are kept only where
-//! they stay readable on the pane.
+//! A link shows where it points when the pointer rests on it and is never followed. A picture is
+//! drawn only when the message carries it as an attachment and it could be decoded
+//! ([`Pictures`]); any other picture is a labelled placeholder. Colours a message asks for are
+//! kept only where they stay readable on the pane.
 
+use crate::pictures::{Pictures, Shown};
 use crate::theme::Tokens;
 use crate::{bold, font};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
-use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
+use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
 use mailcraft_formats::rich::{self, Block, Doc, Para, ParaKind, Picture, Run, Script, Table};
 
 /// Size of text the message gives no size for.
@@ -20,16 +22,20 @@ const MAX_COLUMNS: usize = 12;
 /// Tables nested deeper than this are drawn one cell under another.
 const MAX_TABLE_DEPTH: usize = 6;
 const CELL_PAD: f32 = 5.0;
+/// Space between pictures that stand side by side, and between rows of them.
+const PICTURE_GAP: f32 = 4.0;
+/// Tallest a picture is drawn, whatever it asks for.
+const MAX_PICTURE_HEIGHT: f32 = 4096.0;
 
-pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens) {
+pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures) {
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-    blocks(ui, &doc.blocks, t, 0);
+    blocks(ui, &doc.blocks, t, pictures, 0);
 }
 
-fn blocks(ui: &mut Ui, list: &[Block], t: &Tokens, depth: usize) {
+fn blocks(ui: &mut Ui, list: &[Block], t: &Tokens, pictures: &Pictures, depth: usize) {
     for (i, block) in list.iter().enumerate() {
         match block {
-            Block::Para(p) => para(ui, p, t, i > 0),
+            Block::Para(p) => para(ui, p, t, pictures, i > 0),
             Block::Rule => {
                 let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 13.0), Sense::hover());
                 ui.painter().hline(rect.x_range(), rect.center().y, (1.0, t.text_faint));
@@ -38,19 +44,144 @@ fn blocks(ui: &mut Ui, list: &[Block], t: &Tokens, depth: usize) {
                 if i > 0 {
                     ui.add_space(6.0);
                 }
-                self::table(ui, table, t, depth);
+                self::table(ui, table, t, pictures, depth);
             }
         }
     }
 }
 
-fn para(ui: &mut Ui, para: &Para, t: &Tokens, after_another: bool) {
+/// The picture a run stands for, when there is one to draw.
+fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<&'a Shown> {
+    match &run.picture {
+        Some(Picture::Attached(id)) => pictures.get(id),
+        _ => None,
+    }
+}
+
+fn para(ui: &mut Ui, para: &Para, t: &Tokens, pictures: &Pictures, after_another: bool) {
     if para.gap && after_another {
         ui.add_space(if matches!(para.kind, ParaKind::Heading(_)) { 12.0 } else { 9.0 });
     }
+    if !para.runs.iter().any(|r| shown(r, pictures).is_some()) {
+        return text(ui, para, &para.runs, t, true, (false, false));
+    }
+    // Text and pictures take turns down the page: pictures stand in rows of their own.
+    let blank = |r: &Run| r.picture.is_none() && r.text.trim().is_empty();
+    let mut rest = para.runs.as_slice();
+    let mut first = true;
+    while let Some(head) = rest.first() {
+        let is_picture = shown(head, pictures).is_some();
+        let count = if is_picture {
+            // White space between two pictures does not end the row.
+            rest.iter().take_while(|r| shown(r, pictures).is_some() || (blank(r) && !r.text.contains('\n'))).count()
+        } else {
+            rest.iter().take_while(|r| shown(r, pictures).is_none()).count()
+        };
+        let (piece, tail) = rest.split_at(count.clamp(1, rest.len()));
+        if is_picture {
+            picture_rows(ui, para, piece, t, pictures);
+            first = false;
+        } else if !piece.iter().all(blank) {
+            text(ui, para, piece, t, first, (!first, !tail.is_empty()));
+            first = false;
+        }
+        rest = tail;
+    }
+}
+
+/// Room a paragraph leaves on its left, and the width left for what it holds.
+fn room(ui: &Ui, para: &Para) -> (f32, f32) {
     let quote = f32::from(para.quote.min(8)) * QUOTE;
     let inset = (f32::from(para.indent.min(12)) * INDENT + quote).min(ui.available_width() * 0.6);
-    let width = (ui.available_width() - inset).max(40.0);
+    (inset, (ui.available_width() - inset).max(40.0))
+}
+
+fn quote_bars(ui: &Ui, para: &Para, rect: Rect, t: &Tokens) {
+    for level in 0..para.quote.min(8) {
+        let x = rect.left() + f32::from(level) * QUOTE + 4.0;
+        ui.painter().vline(x, rect.y_range(), (2.0, t.line.lerp_to_gamma(t.text_faint, 0.6)));
+    }
+}
+
+/// The size a picture is drawn at: what the body asks for, else its own, never wider than `room`.
+pub(crate) fn picture_size(asked: (u16, u16), natural: Vec2, room: f32) -> Vec2 {
+    let natural = vec2(natural.x.max(1.0), natural.y.max(1.0));
+    let (w, h) = (f32::from(asked.0), f32::from(asked.1));
+    let mut size = match (w > 0.0, h > 0.0) {
+        (true, true) => vec2(w, h),
+        (true, false) => vec2(w, natural.y * w / natural.x),
+        (false, true) => vec2(natural.x * h / natural.y, h),
+        (false, false) => natural,
+    };
+    if size.x > room {
+        size *= room.max(1.0) / size.x;
+    }
+    vec2(size.x.max(1.0), size.y.clamp(1.0, MAX_PICTURE_HEIGHT))
+}
+
+/// Pictures of one paragraph that follow each other, side by side while they fit.
+fn picture_rows(ui: &mut Ui, para: &Para, runs: &[Run], t: &Tokens, pictures: &Pictures) {
+    let (inset, width) = room(ui, para);
+    struct Row<'a> {
+        size: Vec2,
+        items: Vec<(&'a Run, &'a Shown, Vec2)>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for run in runs {
+        let Some(picture) = shown(run, pictures) else { continue };
+        let size = picture_size(run.extent, picture.size, width);
+        match rows.last_mut() {
+            Some(row) if row.size.x + PICTURE_GAP + size.x <= width => {
+                row.size = vec2(row.size.x + PICTURE_GAP + size.x, row.size.y.max(size.y));
+                row.items.push((run, picture, size));
+            }
+            _ => rows.push(Row { size, items: vec![(run, picture, size)] }),
+        }
+    }
+    let height: f32 = rows.iter().map(|r| r.size.y + PICTURE_GAP).sum();
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    quote_bars(ui, para, rect, t);
+    let whole = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    let mut y = rect.top() + PICTURE_GAP / 2.0;
+    for row in &rows {
+        let mut x = rect.left()
+            + inset
+            + match para.align {
+                rich::Align::Left => 0.0,
+                rich::Align::Center => ((width - row.size.x) / 2.0).max(0.0),
+                rich::Align::Right => (width - row.size.x).max(0.0),
+            };
+        for (run, picture, size) in &row.items {
+            // Pictures of one row stand on the same line.
+            let at = Rect::from_min_size(pos2(x, y + row.size.y - size.y), *size);
+            x += size.x + PICTURE_GAP;
+            if !ui.is_rect_visible(at) {
+                continue;
+            }
+            ui.painter().image(picture.texture.id(), at, whole, Color32::WHITE);
+            if response.hover_pos().is_some_and(|p| at.contains(p)) {
+                let alt: String = run.text.chars().filter(|c| !c.is_control()).take(120).collect();
+                let link: Option<String> = run.style.link.as_deref().map(|l| l.chars().take(300).collect());
+                let tip = match (alt.is_empty(), link) {
+                    (false, Some(link)) => format!("{alt}\n{link}\nLinks are not opened from here."),
+                    (true, Some(link)) => format!("{link}\nLinks are not opened from here."),
+                    (false, None) => alt,
+                    (true, None) => continue,
+                };
+                response.clone().on_hover_text_at_pointer(tip);
+            }
+        }
+        y += row.size.y + PICTURE_GAP;
+    }
+}
+
+/// Runs of one paragraph drawn as text. `marker` draws the list marker beside them; `trim` drops
+/// a line break at the start or the end, where a row of pictures already breaks the line.
+fn text(ui: &mut Ui, para: &Para, runs: &[Run], t: &Tokens, marker: bool, trim: (bool, bool)) {
+    let (inset, width) = room(ui, para);
 
     let mut job = LayoutJob::default();
     job.wrap.max_width = width;
@@ -60,10 +191,16 @@ fn para(ui: &mut Ui, para: &Para, t: &Tokens, after_another: bool) {
         rich::Align::Right => Align::RIGHT,
     };
     // Character offset where each run ends, to find the run under the pointer.
-    let mut ends: Vec<usize> = Vec::with_capacity(para.runs.len());
+    let mut ends: Vec<usize> = Vec::with_capacity(runs.len());
     let mut chars = 0usize;
-    for run in &para.runs {
-        let (text, format) = section(run, t);
+    for (i, run) in runs.iter().enumerate() {
+        let (mut text, format) = section(run, t);
+        if trim.0 && i == 0 && text.starts_with('\n') {
+            text.remove(0);
+        }
+        if trim.1 && i + 1 == runs.len() && text.ends_with('\n') {
+            text.pop();
+        }
         chars = chars.saturating_add(text.chars().count());
         ends.push(chars);
         job.append(&text, 0.0, format);
@@ -80,11 +217,8 @@ fn para(ui: &mut Ui, para: &Para, t: &Tokens, after_another: bool) {
         rich::Align::Center => pos2(text_left + width / 2.0, rect.top()),
         rich::Align::Right => pos2(text_left + width, rect.top()),
     };
-    for level in 0..para.quote.min(8) {
-        let x = rect.left() + f32::from(level) * QUOTE + 4.0;
-        ui.painter().vline(x, rect.y_range(), (2.0, t.line.lerp_to_gamma(t.text_faint, 0.6)));
-    }
-    if let ParaKind::Item(marker) = &para.kind {
+    quote_bars(ui, para, rect, t);
+    if marker && let ParaKind::Item(marker) = &para.kind {
         let marker: String = marker.chars().take(12).collect();
         ui.painter().text(pos2(text_left - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, font(BODY_PX), t.text);
     }
@@ -95,7 +229,7 @@ fn para(ui: &mut Ui, para: &Para, t: &Tokens, after_another: bool) {
         let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
         if (pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y) {
             let index = cursor.index.0;
-            let run = ends.iter().position(|end| index < *end).and_then(|i| para.runs.get(i));
+            let run = ends.iter().position(|end| index < *end).and_then(|i| runs.get(i));
             if let Some(link) = run.and_then(|r| r.style.link.as_deref()) {
                 let shown: String = link.chars().take(300).collect();
                 response.clone().on_hover_text_at_pointer(format!("{shown}\nLinks are not opened from here."));
@@ -188,13 +322,13 @@ fn contrast(a: Color32, b: Color32) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-fn table(ui: &mut Ui, table: &Table, t: &Tokens, depth: usize) {
+fn table(ui: &mut Ui, table: &Table, t: &Tokens, pictures: &Pictures, depth: usize) {
     let columns = table.columns();
     let available = ui.available_width();
     if columns == 0 || columns > MAX_COLUMNS || depth >= MAX_TABLE_DEPTH || available / (columns as f32) < 48.0 {
         // Too many columns or too little room: one cell under another, in reading order.
         for cell in table.rows.iter().flatten() {
-            blocks(ui, &cell.blocks, t, depth + 1);
+            blocks(ui, &cell.blocks, t, pictures, depth + 1);
         }
         return;
     }
@@ -231,7 +365,7 @@ fn table(ui: &mut Ui, table: &Table, t: &Tokens, depth: usize) {
             let inner = Rect::from_min_size(pos2(x + CELL_PAD, top + CELL_PAD - 2.0), vec2((w - CELL_PAD * 2.0).max(8.0), 0.0));
             let mut child = ui.new_child(UiBuilder::new().id_salt(("cell", r, c)).max_rect(inner));
             child.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            blocks(&mut child, &cell.blocks, t, depth + 1);
+            blocks(&mut child, &cell.blocks, t, pictures, depth + 1);
             bottom = bottom.max(child.min_rect().bottom());
             edges.push((x, w));
             x += w;

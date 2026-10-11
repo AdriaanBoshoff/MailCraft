@@ -9,6 +9,7 @@
 mod body;
 pub mod icons;
 mod panes;
+mod pictures;
 mod ribbon;
 pub mod theme;
 
@@ -127,6 +128,7 @@ pub struct MailUi {
     pub(crate) plain_bodies: bool,
     /// The open message's formatted body, kept until another message is opened.
     body_doc: Option<(u64, Arc<Doc>)>,
+    pictures: pictures::Pictures,
     pub(crate) actions: Vec<(String, Value)>,
     pub(crate) search: String,
     pub(crate) collapsed: HashSet<(usize, u64)>,
@@ -212,6 +214,7 @@ impl MailUi {
             theme_applied: None,
             plain_bodies: false,
             body_doc: None,
+            pictures: pictures::Pictures::default(),
             actions: Vec::new(),
             search,
             collapsed: HashSet::new(),

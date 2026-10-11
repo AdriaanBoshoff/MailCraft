@@ -24,6 +24,8 @@ const MAX_TABLE_DEPTH: usize = 24;
 const MAX_ATTRS: usize = 32;
 const MAX_ATTR_LEN: usize = 2048;
 const MAX_ALT_LEN: usize = 200;
+/// Largest width or height, in pixels, a picture may ask to be shown at.
+const MAX_PICTURE_SIDE: f32 = 4096.0;
 /// Relative sizes (`em`, `%`, `<small>`) start from this many points when no size is set.
 const BASE_PT: f32 = 10.0;
 
@@ -328,6 +330,10 @@ impl Builder {
     }
 
     fn append(&mut self, text: String, picture: Option<Picture>) {
+        self.append_sized(text, picture, (0, 0));
+    }
+
+    fn append_sized(&mut self, text: String, picture: Option<Picture>, extent: (u16, u16)) {
         self.bytes = self.bytes.saturating_add(text.len());
         if self.bytes > MAX_TEXT || self.run_count >= MAX_RUNS {
             self.full = true;
@@ -344,7 +350,7 @@ impl Builder {
             return;
         }
         self.run_count += 1;
-        self.runs.push(Run { text, style: self.fmt.style.clone(), picture });
+        self.runs.push(Run { text, style: self.fmt.style.clone(), picture, extent });
     }
 
     fn line_break(&mut self) {
@@ -372,13 +378,17 @@ impl Builder {
             Picture::Remote
         };
         // One-pixel pictures are trackers or spacers; there is nothing to show for them.
-        let tiny = |name: &str| attr(attrs, name).and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).is_some_and(|v| v <= 2.0);
+        let asked = |name: &str| attr(attrs, name).and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).filter(|v| v.is_finite());
+        let tiny = |name: &str| asked(name).is_some_and(|v| v <= 2.0);
         if src.is_empty() || tiny("width") || tiny("height") {
             return;
         }
+        // A percentage is not a pixel size: it is left to the reader.
+        let pixels = |name: &str| asked(name).map_or(0, |v| v.round().clamp(0.0, MAX_PICTURE_SIDE) as u16);
+        let extent = (pixels("width"), pixels("height"));
         let alt: String = attr(attrs, "alt").unwrap_or("").chars().filter(|c| !c.is_control()).take(MAX_ALT_LEN).collect();
         self.ensure_cell();
-        self.append(alt.trim().to_string(), Some(picture));
+        self.append_sized(alt.trim().to_string(), Some(picture), extent);
         self.last_space = false;
     }
 

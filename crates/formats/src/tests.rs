@@ -273,3 +273,13 @@ fn hostile_rtf_gives_a_bounded_document() {
     let colors = [b"{\\rtf1{\\colortbl".to_vec(), b";".repeat(100_000), b"}\\cf5000 x}".to_vec()].concat();
     assert_eq!(crate::rtf::parse(&colors).text(), "x");
 }
+
+#[test]
+fn a_picture_keeps_the_size_the_body_asks_for() {
+    let doc = parse(
+        "<p><img src=cid:a width=240 height=\"96px\"><img src=cid:b width=\"50%\"><img src=cid:c height=99999999>\
+         <img src=cid:d width=-7 height=nan><img src=cid:e width=1e39></p>",
+    );
+    let extents: Vec<(u16, u16)> = paras(&doc)[0].runs.iter().filter(|r| r.picture.is_some()).map(|r| r.extent).collect();
+    assert_eq!(extents, [(240, 96), (0, 0), (0, 4096), (0, 0)], "a size below nothing drops the picture; one beyond any number is no size");
+}

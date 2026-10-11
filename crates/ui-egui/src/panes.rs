@@ -395,6 +395,9 @@ impl MailUi {
     fn reading_pane(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
         let doc = self.body_doc();
+        if let (Some(doc), Some((key, _)), Some(item)) = (&doc, &self.body_doc, self.session.open.as_ref()) {
+            self.pictures.load(ui.ctx(), *key, doc, item);
+        }
         let p = ui.painter_at(rect);
         let Some(item) = self.session.open.as_ref() else {
             icons::paint(&p, Rect::from_center_size(rect.center() - vec2(0.0, 26.0), vec2(52.0, 52.0)), Icon::Mail, t.disabled);
@@ -552,7 +555,7 @@ impl MailUi {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad as i8, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match &doc {
-                        Some(doc) => body::draw(ui, doc, &t),
+                        Some(doc) => body::draw(ui, doc, &t, &self.pictures),
                         None => {
                             ui.add(egui::Label::new(egui::RichText::new(plain).font(font(13.5)).color(t.text)).wrap().selectable(true));
                         }

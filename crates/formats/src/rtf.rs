@@ -39,7 +39,7 @@ fn plain(text: &str) -> Doc {
 }
 
 fn text_run(text: &str, style: Style) -> Run {
-    Run { text: text.to_string(), style, picture: None }
+    Run { text: text.to_string(), style, ..Run::default() }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -175,7 +175,7 @@ impl Builder {
             "pict" => {
                 cur.dest = Dest::Skip;
                 if !cur.hidden {
-                    self.push(Run { text: String::new(), style: cur.style.clone(), picture: Some(Picture::Inline) });
+                    self.push(Run { style: cur.style.clone(), picture: Some(Picture::Inline), ..Run::default() });
                 }
             }
             "b" => cur.style.bold = on,

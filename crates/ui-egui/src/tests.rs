@@ -106,7 +106,7 @@ fn hostile_bodies_draw_without_panicking() {
             for width in [0.0, 30.0, 800.0] {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     ui.set_max_width(width);
-                    body::draw(ui, &doc, &tokens);
+                    body::draw(ui, &doc, &tokens, &pictures::Pictures::default());
                 });
                 // No renderer here: the font texture updates have nowhere to go.
                 output.textures_delta.clear();
@@ -124,8 +124,106 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     assert!(doc.text().contains("parking.example.net/help"));
     let ctx = egui::Context::default();
     install_fonts(&ctx);
-    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(true)));
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default()));
     output.textures_delta.clear();
     ui.execute("ui.bodyFormat", &json!({ "format": "plain" })).unwrap();
     assert!(ui.body_doc().is_none());
+}
+
+/// The picture in the sample order mail: a PNG our own writer made.
+fn sample_picture() -> Vec<u8> {
+    let mut s = Session::with_sample();
+    s.run("mail.select", &json!({ "index": 4 })).unwrap();
+    s.open.as_ref().unwrap().attachments[0].data.clone()
+}
+
+#[test]
+fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("mail.select", &json!({ "index": 4 })).unwrap();
+    let doc = ui.body_doc().unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut shown = pictures::Pictures::default();
+    shown.load(&ctx, 7, &doc, ui.session.open.as_ref().unwrap());
+    let proof = shown.get("proof-48213@printdepot.example.com").expect("the banner proof is decoded");
+    assert_eq!(proof.size, egui::vec2(240.0, 96.0));
+    assert_eq!(proof.texture.size(), [240, 96]);
+    for width in [0.0, 30.0, 800.0] {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_max_width(width);
+            body::draw(ui, &doc, &theme::Tokens::named(false), &shown);
+        });
+        output.textures_delta.clear();
+    }
+
+    // Content ids are matched as the message writes them: brackets and letter case do not matter.
+    // A picture the message does not carry, or carries as something else, stays a placeholder.
+    let mut item = mailcraft_model::Item::new_mail();
+    for (name, id, data) in [
+        ("a.png", "<Logo@Example>", sample_picture()),
+        ("b.png", "notes", b"not a picture at all".to_vec()),
+        ("c.svg", "drawing", b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>x()</script></svg>".to_vec()),
+    ] {
+        let mut a = mailcraft_model::Attachment::file(name, "image/png", data);
+        a.props.set_str(pid::ATTACH_CONTENT_ID, id);
+        item.attachments.push(a);
+    }
+    let html = "<p>a<img src=\"cid:logo@example\"> <img src=\"cid:logo@example\" width=5000><br>b</p><table><tr><td><img src=cid:notes alt=N>\
+                <td><img src=cid:drawing><img src=cid:missing><img src=\"https://x.example/r.png\"></table>";
+    let doc = mailcraft_formats::html::parse(html);
+    let mut shown = pictures::Pictures::default();
+    shown.load(&ctx, 1, &doc, &item);
+    assert!(shown.get("logo@example").is_some());
+    assert!(["notes", "drawing", "missing", "https://x.example/r.png"].iter().all(|id| shown.get(id).is_none()));
+    for dark in [false, true] {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(dark), &shown));
+        output.textures_delta.clear();
+    }
+    // Another message: nothing of the last one is kept.
+    shown.load(&ctx, 2, &mailcraft_formats::html::parse("<p>text</p>"), &item);
+    assert!(shown.get("logo@example").is_none());
+}
+
+#[test]
+fn hostile_pictures_are_refused_not_decoded() {
+    let good = sample_picture();
+    assert!(pictures::decode(&good).is_some());
+    // Cut short anywhere, or with any one part damaged, a picture is dropped or shown; never a panic.
+    for cut in (0..good.len()).step_by(97) {
+        let _ = pictures::decode(&good[..cut]);
+        let mut bent = good.clone();
+        bent[cut] ^= 0x5A;
+        let _ = pictures::decode(&bent);
+    }
+    // A header that claims more pixels than are ever decoded.
+    let mut huge = good.clone();
+    huge[16..24].copy_from_slice(&[0, 0, 0xEA, 0x60, 0, 0, 0xEA, 0x60]);
+    assert!(pictures::decode(&huge).is_none());
+    let mut bmp = b"BM".to_vec();
+    bmp.extend_from_slice(&[0; 12]);
+    bmp.extend_from_slice(&40u32.to_le_bytes());
+    bmp.extend_from_slice(&0x7FFF_FFFFi32.to_le_bytes());
+    bmp.extend_from_slice(&0x7FFF_FFFFi32.to_le_bytes());
+    bmp.extend_from_slice(&[1, 0, 24, 0]);
+    bmp.extend_from_slice(&[0; 24]);
+    assert!(pictures::decode(&bmp).is_none());
+    for junk in [&b""[..], b"GIF89a", b"\xFF\xD8\xFF\xE0", b"\x89PNG\r\n\x1a\n", b"<svg/>", &[0u8; 64][..]] {
+        assert!(pictures::decode(junk).is_none());
+    }
+    assert!(pictures::decode(&vec![0x89; (16 << 20) + 1]).is_none(), "too large a file is not looked at");
+}
+
+#[test]
+fn a_picture_is_sized_as_the_body_asks_and_never_wider_than_the_pane() {
+    use body::picture_size;
+    let natural = egui::vec2(400.0, 200.0);
+    assert_eq!(picture_size((0, 0), natural, 800.0), natural);
+    assert_eq!(picture_size((100, 0), natural, 800.0), egui::vec2(100.0, 50.0));
+    assert_eq!(picture_size((0, 50), natural, 800.0), egui::vec2(100.0, 50.0));
+    assert_eq!(picture_size((300, 30), natural, 800.0), egui::vec2(300.0, 30.0));
+    assert_eq!(picture_size((0, 0), natural, 100.0), egui::vec2(100.0, 50.0));
+    for hostile in [picture_size((4096, 4096), egui::vec2(1.0, 8192.0), 0.0), picture_size((1, 0), egui::vec2(0.0, 0.0), -5.0)] {
+        assert!(hostile.x >= 1.0 && hostile.y >= 1.0 && hostile.y <= 4096.0 && hostile.x.is_finite());
+    }
 }

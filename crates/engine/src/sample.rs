@@ -66,7 +66,8 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard\\par Questions? See {\\field{\\*\\fldinst HYPERLINK \"https://parking.example.net/help\"}{\\fldrslt{\\ul\\cf1 parking.example.net/help}}}.\\par}";
 
 /// A shop's order mail the way such mail is built: a layout table, a banner, a data table, a
-/// remote logo and a tracking pixel (neither is ever fetched) and a hidden preview line.
+/// remote logo and a tracking pixel (neither is ever fetched), a picture sent along with the
+/// message (`cid:`) and a hidden preview line.
 const DEPOT_HTML: &str = "<html><head><style>td{font-family:sans-serif}</style></head><body bgcolor=\"#ffffff\">\
 <span style=\"display:none\">Order 48213 is ready at the front counter.</span>\
 <table width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td bgcolor=\"#1F4E79\" align=\"center\">\
@@ -80,6 +81,7 @@ weekdays <span style=\"color:#2E7D32;font-weight:bold\">8:30 to 17:00</span>.</p
 <tr><td>Folded leaflets, A5, full colour</td><td align=\"right\">200</td><td align=\"right\">64.00</td></tr>\
 <tr><td>Roll-up banner, 85 &times; 200 cm</td><td align=\"right\">2</td><td align=\"right\">118.00</td></tr>\
 <tr><td colspan=\"2\"><b>Total</b></td><td align=\"right\"><b>182.00</b></td></tr></table>\
+<p>The proof of your banner, as printed:<br><img src=\"cid:proof-48213@printdepot.example.com\" alt=\"Proof of the roll-up banner\" width=\"240\" height=\"96\"></p>\
 <p>Please bring this message with you. <a href=\"https://printdepot.example.com/orders/48213\">View the order online</a> \
 or <a href=\"mailto:orders@printdepot.example.com\">write to us</a> if anything looks wrong.</p>\
 <blockquote><i>Uncollected orders are kept for <u>30 days</u>.</i></blockquote>\
@@ -217,6 +219,11 @@ pub fn sample_store(now: i64) -> MemStore {
     ];
     for (i, m) in inbox_mail.iter().enumerate() {
         let mut it = m.item(now);
+        if m.from == DEPOT {
+            let mut proof = Attachment::file("banner-proof.png", "image/png", banner_proof());
+            proof.props.set_str(pid::ATTACH_CONTENT_ID, "proof-48213@printdepot.example.com");
+            it.attachments.push(proof);
+        }
         match i {
             2 => it.categories = vec!["Blue category".to_string()],
             4 => it.set_flag(Flag::Complete),
@@ -283,4 +290,75 @@ pub fn sample_store(now: i64) -> MemStore {
     };
     s.push_item(deleted, old.item(now));
     s
+}
+
+/// The banner proof in the print shop's mail: our own drawing, made here pixel by pixel. A dark
+/// field, a lighter slanted band, a pale disc and three bars standing in for lines of type.
+fn banner_proof() -> Vec<u8> {
+    const W: u32 = 240;
+    const H: u32 = 96;
+    png(W, H, |x, y| {
+        let (dx, dy) = (i64::from(x) - 48, i64::from(y) - 48);
+        let bar = |top: u32, right: u32| (top..top + 8).contains(&y) && (96..right).contains(&x);
+        if dx * dx + dy * dy <= 26 * 26 {
+            [0xF4, 0xD3, 0x5E]
+        } else if bar(28, 212) || bar(46, 188) || bar(64, 150) {
+            [0xFF, 0xFF, 0xFF]
+        } else if (x + y / 2) % 120 < 26 {
+            [0x2E, 0x6F, 0xA8]
+        } else {
+            [0x1F, 0x4E, 0x79]
+        }
+    })
+}
+
+/// A PNG file of `width` × `height` pixels, 8-bit RGB, with the pixel data stored uncompressed
+/// (PNG specification, W3C Recommendation, 2nd edition: §5 datastream structure, §11.2.2 IHDR;
+/// RFC 1950 for the zlib wrapper and RFC 1951 §3.2.4 for stored blocks).
+fn png(width: u32, height: u32, pixel: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+    let mut raw = Vec::new();
+    for y in 0..height {
+        raw.push(0); // filter type: none
+        for x in 0..width {
+            raw.extend_from_slice(&pixel(x, y));
+        }
+    }
+    let mut zlib = vec![0x78, 0x01];
+    let mut blocks = raw.chunks(0xFFFF).peekable();
+    while let Some(block) = blocks.next() {
+        let len = u16::try_from(block.len()).unwrap_or(u16::MAX);
+        zlib.push(u8::from(blocks.peek().is_none()));
+        zlib.extend_from_slice(&len.to_le_bytes());
+        zlib.extend_from_slice(&(!len).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &raw {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
+        let mut crc = !0u32;
+        for byte in kind.iter().chain(data) {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&(!crc).to_be_bytes());
+    };
+    let mut header = Vec::with_capacity(13);
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 2, 0, 0, 0]); // bit depth, colour type RGB, deflate, filter, no interlace
+    chunk(b"IHDR", &header);
+    chunk(b"IDAT", &zlib);
+    chunk(b"IEND", &[]);
+    out
 }

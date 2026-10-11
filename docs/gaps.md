@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 4 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 5 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,8 +9,11 @@
 2. **`.pst`/`.ost` are read-only.** No writer exists; every change to such a store is refused. Changes
    made in the sample mailbox live in memory and are lost on exit.
 3. **Formatted bodies are partly drawn.** HTML bodies show text styles, colours, headings, lists,
-   quotations, rules and tables. Not yet: pictures (attached and inline ones show a labelled
-   placeholder), style sheets (`<style>` rules and classes are ignored; only inline styles count),
+   quotations, rules and tables, and pictures the message carries as attachments (`cid:`; PNG,
+   JPEG, GIF first frame, BMP) at the size the body asks for. Not yet: pictures written into the
+   body itself (`data:` addresses) and other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a
+   labelled placeholder; text running beside a picture (a picture always stands on a row of its
+   own); animation; a backing for see-through pictures on the dark pane; style sheets (`<style>` rules and classes are ignored; only inline styles count),
    cell and block backgrounds as areas (a background is drawn behind the text only), fonts by name,
    exact widths and margins, and opening a link (its address is shown on hover). RTF bodies
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
@@ -51,6 +54,7 @@
 
 ## Revision history
 
+- 5 · 2026-10-11 — pictures attached to the message are drawn (item 3).
 - 4 · 2026-10-11 — RTF bodies are decoded and drawn (item 3).
 - 3 · 2026-10-11 — HTML bodies are drawn formatted (item 3 rewritten); item 18 added.
 - 2 · 2026-10-11 — `.msg` checked in Outlook Classic; first UI comparison.

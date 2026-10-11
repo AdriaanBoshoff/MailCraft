@@ -332,3 +332,16 @@ fn a_message_kept_only_as_rtf_has_text_a_preview_and_survives_as_html() {
     wrapped.props.set(pid::RTF_COMPRESSED, PropValue::Binary(vec![0xAB; 40]));
     assert_eq!((wrapped.body_html(), wrapped.body_text()), (None, String::new()));
 }
+
+#[test]
+fn a_picture_sent_with_a_message_is_an_attachment_the_body_shows_not_a_listed_one() {
+    let mut s = session();
+    run(&mut s, "mail.select", json!({ "index": 4 }));
+    let item = s.open.as_ref().unwrap();
+    assert_eq!(item.attachments.len(), 1);
+    let proof = &item.attachments[0];
+    assert_eq!((proof.name().as_str(), proof.mime()), ("banner-proof.png", "image/png"));
+    assert!(proof.data.starts_with(b"\x89PNG\r\n\x1a\n") && proof.data.ends_with(b"IEND\xAE\x42\x60\x82"));
+    assert!(item.body_html().unwrap().contains(&format!("cid:{}", proof.content_id().unwrap())));
+    assert_eq!(item.visible_attachments().count(), 0, "the body shows it, so the attachment list does not");
+}

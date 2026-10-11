@@ -62,6 +62,8 @@ pub struct Run {
     pub text: String,
     pub style: Style,
     pub picture: Option<Picture>,
+    /// Width and height the body asks a picture to be shown at, in pixels; 0 where it gives none.
+    pub extent: (u16, u16),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
