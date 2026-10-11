@@ -1,7 +1,7 @@
 //! The MailCraft desktop app.
 //!
 //! ```text
-//! mailcraft [--sample] [file.pst | file.ost | file.msg | file.eml | file.oft]...
+//! mailcraft [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...
 //! ```
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -96,8 +96,10 @@ fn main() -> ExitCode {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--sample" => app.run("file.openSample", Value::Null),
+            "--dark" => app.run("ui.theme", json!({ "theme": "dark" })),
+            "--classic-ribbon" => app.run("ui.ribbonMode", json!({ "mode": "classic" })),
             "--help" | "-h" => {
-                println!("mailcraft [--sample] [file.pst | file.ost | file.msg | file.eml | file.oft]...");
+                println!("mailcraft [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...");
                 return ExitCode::SUCCESS;
             }
             flag if flag.starts_with("--") => {

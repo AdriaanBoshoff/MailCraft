@@ -82,9 +82,18 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         label: "Open Menu",
         params: r#"{"menu": "categorize" | "followup" | "move" | "arrange" | "reading", "x": px, "y": px}"#,
     },
+    UiCommand { id: "ui.ribbonMode", label: "Simplified Ribbon", params: r#"{"mode": "classic" | "simplified"}; none switches"# },
+    UiCommand { id: "ui.theme", label: "Dark Mode", params: r#"{"theme": "light" | "dark"}; none switches"# },
     UiCommand { id: "ui.about", label: "About MailCraft", params: "" },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
+
+/// The ribbon's two layouts: three rows with labelled groups, or a single line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RibbonMode {
+    Classic,
+    Simplified,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Menu {
@@ -107,6 +116,8 @@ pub struct MailUi {
     pub requests: Vec<UiRequest>,
     pub tokens: Tokens,
     pub(crate) tab: Tab,
+    pub(crate) ribbon_mode: RibbonMode,
+    theme_applied: Option<bool>,
     pub(crate) actions: Vec<(String, Value)>,
     pub(crate) search: String,
     pub(crate) collapsed: HashSet<(usize, u64)>,
@@ -188,6 +199,8 @@ impl MailUi {
             requests: Vec::new(),
             tokens: Tokens::default(),
             tab: Tab::Home,
+            ribbon_mode: RibbonMode::Simplified,
+            theme_applied: None,
             actions: Vec::new(),
             search,
             collapsed: HashSet::new(),
@@ -201,6 +214,14 @@ impl MailUi {
 
     pub fn tab(&self) -> Tab {
         self.tab
+    }
+
+    pub fn ribbon_mode(&self) -> RibbonMode {
+        self.ribbon_mode
+    }
+
+    pub(crate) fn simplified(&self) -> bool {
+        self.ribbon_mode == RibbonMode::Simplified
     }
 
     /// Run a command by id: engine commands and `ui.*` commands alike. Never opens a dialog by
@@ -270,6 +291,25 @@ impl MailUi {
                 self.menu = Some((menu, pos2(coord("x"), coord("y"))));
                 self.menu_fresh = true;
             }
+            "ui.ribbonMode" => {
+                self.menu = None;
+                self.ribbon_mode = match (params.get("mode"), text("mode")) {
+                    (None, _) if self.simplified() => RibbonMode::Classic,
+                    (None, _) => RibbonMode::Simplified,
+                    (_, Some("classic")) => RibbonMode::Classic,
+                    (_, Some("simplified")) => RibbonMode::Simplified,
+                    _ => return Err("\"mode\" must be classic or simplified".to_string()),
+                };
+            }
+            "ui.theme" => {
+                let dark = match (params.get("theme"), text("theme")) {
+                    (None, _) => !self.tokens.dark,
+                    (_, Some("light")) => false,
+                    (_, Some("dark")) => true,
+                    _ => return Err("\"theme\" must be light or dark".to_string()),
+                };
+                self.tokens = Tokens::named(dark);
+            }
             "ui.about" => {
                 self.session.status =
                     format!("MailCraft {}: an independent open-source mail client. Not affiliated with Microsoft.", env!("CARGO_PKG_VERSION"));
@@ -291,28 +331,47 @@ impl MailUi {
         if !self.fonts_ready {
             // Fonts take effect next frame; the "bold" family must exist before anything uses it.
             install_fonts(&ctx);
-            ctx.set_theme(egui::Theme::Light);
             self.fonts_ready = true;
             ui.painter().rect_filled(full, 0.0, self.tokens.window);
             ctx.request_repaint();
             return;
         }
         let t = self.tokens.clone();
+        if self.theme_applied != Some(t.dark) {
+            // egui's own widgets (text fields, the name prompt) follow the same light or dark set.
+            ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
+            self.theme_applied = Some(t.dark);
+        }
         ui.painter().rect_filled(full, 0.0, t.window);
         self.shortcuts(ui);
 
-        let title = Rect::from_min_size(full.min, vec2(full.width(), t.title_h));
-        let tabs = Rect::from_min_size(title.left_bottom(), vec2(full.width(), t.tabs_h));
+        let simple = self.simplified();
+        let title = Rect::from_min_size(full.min, vec2(full.width(), if simple { t.simple_title_h } else { t.title_h }));
         let status = Rect::from_min_max(pos2(full.left(), full.bottom() - t.status_h), full.max);
         self.title_bar(ui, title);
-        self.tab_strip(ui, tabs);
         if self.tab == Tab::File {
+            let tabs = Rect::from_min_size(title.left_bottom(), vec2(full.width(), t.tabs_h));
+            self.tab_strip(ui, tabs);
             self.backstage(ui, Rect::from_min_max(tabs.left_bottom(), full.max));
+        } else if simple {
+            // The module strip runs the full height on the left; tabs, ribbon and panes sit beside it.
+            let nav = Rect::from_min_max(title.left_bottom(), pos2(full.left() + t.simple_nav_w, status.top()));
+            self.nav_strip(ui, nav);
+            let tabs = Rect::from_min_max(nav.right_top(), pos2(full.right(), nav.top() + t.tabs_h));
+            self.tab_strip(ui, tabs);
+            let top = tabs.bottom() + 2.0;
+            let ribbon = Rect::from_min_max(pos2(tabs.left(), top), pos2(full.right() - 16.0, top + t.simple_ribbon_h));
+            self.ribbon_simple(ui, ribbon);
+            let body = Rect::from_min_max(pos2(tabs.left(), ribbon.bottom() + 7.0), status.right_top());
+            self.body(ui, body, false);
+            self.status_bar(ui, status);
         } else {
+            let tabs = Rect::from_min_size(title.left_bottom(), vec2(full.width(), t.tabs_h));
+            self.tab_strip(ui, tabs);
             let ribbon = Rect::from_min_size(tabs.left_bottom(), vec2(full.width(), t.ribbon_h));
             self.ribbon(ui, ribbon);
             let body = Rect::from_min_max(ribbon.left_bottom(), status.right_top());
-            self.body(ui, body);
+            self.body(ui, body, true);
             self.status_bar(ui, status);
         }
         self.menu_popup(&ctx);
@@ -397,24 +456,31 @@ impl MailUi {
     fn title_bar(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
         let p = ui.painter_at(rect);
-        p.rect_filled(rect, 0.0, t.accent);
-        icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(16.0, 16.0)), Icon::Mail, t.on_accent);
+        p.rect_filled(rect, 0.0, t.title_bg);
+        icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(16.0, 16.0)), Icon::Mail, t.title_text);
         let place = self.session.current_folder().map(|f| f.name.clone()).unwrap_or_else(|| "No data file".to_string());
         let store = self.session.current.and_then(|(s, _)| self.session.stores.get(s)).map(|s| s.display_name()).unwrap_or_default();
         let caption = if store.is_empty() { format!("{place} - MailCraft") } else { format!("{place} - {store} - MailCraft") };
 
-        let box_w = (rect.width() * 0.36).clamp(160.0, 520.0);
-        let search = Rect::from_center_size(rect.center(), vec2(box_w, 24.0));
-        clip_text(&p, pos2(rect.left() + 40.0, rect.center().y - 8.0), search.left() - rect.left() - 52.0, &caption, font(12.5), t.on_accent);
-        p.rect_filled(search, 4.0, t.accent_soft);
-        icons::paint(&p, Rect::from_center_size(pos2(search.left() + 14.0, search.center().y), vec2(13.0, 13.0)), Icon::Search, t.on_accent);
-        let edit_rect = Rect::from_min_max(pos2(search.left() + 26.0, search.top() + 2.0), pos2(search.right() - 6.0, search.bottom() - 2.0));
+        let search = if self.simplified() {
+            // Lined up with the message list's left edge.
+            let left = rect.left() + t.simple_nav_w + if self.session.folder_pane { t.folder_w } else { 0.0 };
+            let left = left.min(rect.right() - 170.0).max(rect.left() + 44.0);
+            Rect::from_min_size(pos2(left, rect.center().y - 15.0), vec2((rect.right() - left - 150.0).clamp(120.0, 304.0), 30.0))
+        } else {
+            Rect::from_center_size(rect.center(), vec2((rect.width() * 0.36).clamp(160.0, 520.0), 24.0))
+        };
+        clip_text(&p, pos2(rect.left() + 40.0, rect.center().y - 8.0), search.left() - rect.left() - 52.0, &caption, font(12.5), t.title_text);
+        p.rect_filled(search, 4.0, t.title_field);
+        icons::paint(&p, Rect::from_center_size(pos2(search.left() + 14.0, search.center().y), vec2(13.0, 13.0)), Icon::Search, t.title_text);
+        let edit_rect =
+            Rect::from_min_max(pos2(search.left() + 26.0, search.center().y - 10.0), pos2(search.right() - 6.0, search.center().y + 10.0));
         let before = self.search.clone();
         let edit = egui::TextEdit::singleline(&mut self.search)
             .id(egui::Id::new("mailcraft-search"))
             .frame(egui::Frame::NONE)
-            .hint_text(egui::RichText::new("Search").color(Color32::from_white_alpha(190)))
-            .text_color(t.on_accent)
+            .hint_text(egui::RichText::new("Search").color(t.title_text.gamma_multiply(0.75)))
+            .text_color(t.title_text)
             .font(font(12.5))
             .desired_width(edit_rect.width());
         ui.put(edit_rect, edit);
@@ -466,16 +532,16 @@ impl MailUi {
         let t = &self.tokens;
         let s = &self.session;
         let p = ui.painter_at(rect);
-        p.rect_filled(rect, 0.0, t.accent);
+        p.rect_filled(rect, 0.0, t.bar_bg);
         let y = rect.center().y - 7.5;
         let mut x = rect.left() + 10.0;
         if s.module == Module::Mail {
             let unread = s.current_folder().map_or(0, |f| f.unread);
             let counts =
                 if s.search.is_empty() && !s.unread_only { format!("Items: {}", s.rows.len()) } else { format!("Filtered: {}", s.rows.len()) };
-            x += clip_text(&p, pos2(x, y), 160.0, &counts, font(11.5), t.on_accent) + 16.0;
+            x += clip_text(&p, pos2(x, y), 160.0, &counts, font(11.5), t.bar_text) + 16.0;
             if unread > 0 {
-                x += clip_text(&p, pos2(x, y), 160.0, &format!("Unread: {unread}"), font(11.5), t.on_accent) + 16.0;
+                x += clip_text(&p, pos2(x, y), 160.0, &format!("Unread: {unread}"), font(11.5), t.bar_text) + 16.0;
             }
         }
         let right = if s.stores.is_empty() {
@@ -486,8 +552,8 @@ impl MailUi {
             "Read-only data file"
         };
         let right_w = text_width(&p, right, font(11.5));
-        p.text(pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, right, font(11.5), t.on_accent);
-        clip_text(&p, pos2(x, y), rect.right() - right_w - 30.0 - x, &s.status, font(11.5), t.on_accent);
+        p.text(pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, right, font(11.5), t.bar_text);
+        clip_text(&p, pos2(x, y), rect.right() - right_w - 30.0 - x, &s.status, font(11.5), t.bar_text);
     }
 }
 

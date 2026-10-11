@@ -1,5 +1,5 @@
 //! Colour and size tokens. Every colour the UI paints comes from here; the values are our own
-//! choices for a light, blue-accented mail window.
+//! choices for a blue-accented mail window, in a light and a dark set.
 
 use egui::Color32;
 
@@ -24,10 +24,22 @@ pub struct Tokens {
     pub danger: Color32,
     pub ok: Color32,
     pub info_bar: Color32,
+    /// Title bar: background, text and the search field's fill.
+    pub title_bg: Color32,
+    pub title_text: Color32,
+    pub title_field: Color32,
+    /// Status bar background and text.
+    pub bar_bg: Color32,
+    pub bar_text: Color32,
+    pub dark: bool,
 
     pub title_h: f32,
     pub tabs_h: f32,
     pub ribbon_h: f32,
+    /// Simplified (single-line) ribbon: title bar, ribbon panel and module strip sizes.
+    pub simple_title_h: f32,
+    pub simple_ribbon_h: f32,
+    pub simple_nav_w: f32,
     pub status_h: f32,
     pub nav_w: f32,
     pub folder_w: f32,
@@ -36,6 +48,47 @@ pub struct Tokens {
 
 impl Default for Tokens {
     fn default() -> Self {
+        Self::light()
+    }
+}
+
+impl Tokens {
+    pub fn named(dark: bool) -> Self {
+        if dark { Self::dark() } else { Self::light() }
+    }
+
+    pub fn dark() -> Self {
+        Self {
+            accent: Color32::from_rgb(0x7D, 0xB8, 0xF0),
+            accent_dark: Color32::from_rgb(0x5E, 0xA2, 0xE0),
+            accent_soft: Color32::from_rgb(0x4E, 0x50, 0x54),
+            on_accent: Color32::from_rgb(0x10, 0x20, 0x33),
+            window: Color32::from_rgb(0x2E, 0x2F, 0x31),
+            chrome: Color32::from_rgb(0x2E, 0x2F, 0x31),
+            pane: Color32::from_rgb(0x37, 0x38, 0x3B),
+            surface: Color32::from_rgb(0x42, 0x44, 0x47),
+            hover: Color32::from_rgb(0x52, 0x55, 0x5A),
+            selected: Color32::from_rgb(0x2C, 0x55, 0x80),
+            line: Color32::from_rgb(0x26, 0x27, 0x29),
+            text: Color32::from_rgb(0xF2, 0xF2, 0xF2),
+            text_dim: Color32::from_rgb(0xC6, 0xC8, 0xCB),
+            text_faint: Color32::from_rgb(0x9C, 0x9F, 0xA3),
+            disabled: Color32::from_rgb(0x74, 0x77, 0x7B),
+            flag: Color32::from_rgb(0xF0, 0x6A, 0x6A),
+            danger: Color32::from_rgb(0xF0, 0x7C, 0x70),
+            ok: Color32::from_rgb(0x6C, 0xC0, 0x70),
+            info_bar: Color32::from_rgb(0x5A, 0x4E, 0x1E),
+            title_bg: Color32::from_rgb(0x22, 0x23, 0x25),
+            title_text: Color32::from_rgb(0xF2, 0xF2, 0xF2),
+            title_field: Color32::from_rgb(0x4A, 0x4C, 0x50),
+            bar_bg: Color32::from_rgb(0x22, 0x23, 0x25),
+            bar_text: Color32::from_rgb(0xDA, 0xDA, 0xDA),
+            dark: true,
+            ..Self::light()
+        }
+    }
+
+    pub fn light() -> Self {
         Self {
             accent: Color32::from_rgb(0x12, 0x62, 0xB3),
             accent_dark: Color32::from_rgb(0x0C, 0x4A, 0x8A),
@@ -56,10 +109,19 @@ impl Default for Tokens {
             danger: Color32::from_rgb(0xB3, 0x26, 0x1E),
             ok: Color32::from_rgb(0x2E, 0x7D, 0x32),
             info_bar: Color32::from_rgb(0xFF, 0xF4, 0xCE),
+            title_bg: Color32::from_rgb(0x12, 0x62, 0xB3),
+            title_text: Color32::WHITE,
+            title_field: Color32::from_rgb(0x3D, 0x86, 0xCF),
+            bar_bg: Color32::from_rgb(0x12, 0x62, 0xB3),
+            bar_text: Color32::WHITE,
+            dark: false,
 
             title_h: 34.0,
             tabs_h: 28.0,
             ribbon_h: 94.0,
+            simple_title_h: 48.0,
+            simple_ribbon_h: 48.0,
+            simple_nav_w: 64.0,
             status_h: 22.0,
             nav_w: 46.0,
             folder_w: 216.0,

@@ -74,6 +74,20 @@ const VIEW: &[Group] = &[
     ("Arrangement", &[small(Icon::Sort, "Arrange By", "menu:arrange"), small(Icon::Swap, "Reverse Sort", "view.reverseSort")]),
     ("Layout", &[small(Icon::Sidebar, "Folder Pane", "view.folderPane"), small(Icon::Panes, "Reading Pane", "menu:reading")]),
     ("Message", &[small(Icon::Info, "Properties", "mail.properties")]),
+    ("Window", &[small(Icon::Panes, "Simplified Ribbon", "ui.ribbonMode"), small(Icon::Swap, "Dark Mode", "ui.theme")]),
+];
+
+/// Commands the single-line ribbon shows as an icon alone; the label is the hover text.
+const ICON_ONLY: &[&str] = &[
+    "mail.delete",
+    "mail.archive",
+    "mail.junk",
+    "mail.reply",
+    "mail.replyAll",
+    "mail.forward",
+    "menu:categorize",
+    "menu:followup",
+    "view.reverseSort",
 ];
 
 const HELP: &[Group] = &[("Help", &[big(Icon::Info, "About\nMailCraft", "ui.about")])];
@@ -118,18 +132,68 @@ impl MailUi {
         }
     }
 
-    pub(crate) fn ribbon(&mut self, ui: &mut Ui, rect: Rect) {
-        let t = self.tokens.clone();
-        let p = ui.painter_at(rect);
-        p.rect_filled(rect, 0.0, t.surface);
-        p.hline(rect.x_range(), rect.bottom() - 0.5, (1.0, t.line));
-        let groups = match self.tab {
+    fn groups(&self) -> &'static [Group] {
+        match self.tab {
             Tab::Home => HOME,
             Tab::SendReceive => SEND_RECEIVE,
             Tab::Folder => FOLDER,
             Tab::View => VIEW,
             Tab::Help | Tab::File => HELP,
-        };
+        }
+    }
+
+    /// The single-line ribbon: one rounded panel, every command of the tab in a row.
+    pub(crate) fn ribbon_simple(&mut self, ui: &mut Ui, rect: Rect) {
+        let t = self.tokens.clone();
+        let p = ui.painter_at(rect.expand(1.0));
+        p.rect_filled(rect, 6.0, t.surface);
+        p.rect_stroke(rect, 6.0, (1.0, t.line), egui::StrokeKind::Inside);
+        let mut x = rect.left() + 8.0;
+        let (top, h) = (rect.center().y - 16.0, 32.0);
+        'groups: for (n, (name, buttons)) in self.groups().iter().enumerate() {
+            if n > 0 {
+                p.vline(x + 3.0, (rect.top() + 10.0)..=(rect.bottom() - 10.0), (1.0, t.line));
+                x += 8.0;
+            }
+            for b in *buttons {
+                let label = b.label.replace('\n', " ");
+                let icon_only = ICON_ONLY.contains(&b.cmd);
+                let menu = menu_of(b.cmd).is_some();
+                let text_w = if icon_only { 0.0 } else { text_width(&p, &label, font(12.5)) + 8.0 };
+                let w = 34.0 + text_w + if menu { 12.0 } else { 0.0 };
+                if x + w > rect.right() - 8.0 {
+                    break 'groups;
+                }
+                let r = Rect::from_min_size(pos2(x, top), vec2(w, h));
+                let on = self.available(b.cmd);
+                let resp = ui.interact(r, egui::Id::new(("ribbon1", *name, b.label)), if on { Sense::click() } else { Sense::hover() });
+                if on && resp.hovered() {
+                    p.rect_filled(r, 4.0, t.hover);
+                }
+                let tint = if on { t.accent } else { t.disabled };
+                icons::paint(&p, Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(18.0, 18.0)), b.icon, tint);
+                if !icon_only {
+                    p.text(pos2(r.left() + 32.0, r.center().y), Align2::LEFT_CENTER, &label, font(12.5), if on { t.text } else { t.disabled });
+                }
+                if menu {
+                    let c = if on { t.text_dim } else { t.disabled };
+                    icons::paint(&p, Rect::from_center_size(pos2(r.right() - 9.0, r.center().y), vec2(8.0, 8.0)), Icon::ChevronDown, c);
+                }
+                if on && resp.clicked() {
+                    self.press(b, pos2(r.left(), rect.bottom()));
+                }
+                resp.on_hover_text(if b.cmd.is_empty() { format!("{label} (not built yet)") } else { label });
+                x += w + 2.0;
+            }
+        }
+    }
+
+    pub(crate) fn ribbon(&mut self, ui: &mut Ui, rect: Rect) {
+        let t = self.tokens.clone();
+        let p = ui.painter_at(rect);
+        p.rect_filled(rect, 0.0, t.surface);
+        p.hline(rect.x_range(), rect.bottom() - 0.5, (1.0, t.line));
+        let groups = self.groups();
         let top = rect.top() + 4.0;
         let label_y = rect.bottom() - 11.0;
         let mut x = rect.left() + 6.0;
@@ -358,7 +422,7 @@ impl MailUi {
             if on && resp.hovered() {
                 p.rect_filled(r, 0.0, t.accent_dark);
             }
-            let color = if on { t.on_accent } else { Color32::from_white_alpha(110) };
+            let color = if on { t.on_accent } else { t.on_accent.gamma_multiply(0.45) };
             icons::paint(&p, Rect::from_center_size(pos2(r.left() + 24.0, r.center().y), vec2(16.0, 16.0)), icon, color);
             p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, label, font(13.0), color);
             if on && resp.clicked() {

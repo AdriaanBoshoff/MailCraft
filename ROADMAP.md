@@ -7,7 +7,7 @@
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 52, all passing |
+| Tests | 53, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -44,3 +44,6 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
 - **2026-10-11** — M1.4: Outlook Classic opens MailCraft-written `.msg` and `.oft` files and reads the
   same properties back; a file Outlook wrote survives a trip through MailCraft. Fixed the named-property
   lookup checksum, which had made Outlook drop categories. Added the `msg_dump` structure tool.
+- **2026-10-11** - M1.5/M1.6: first side-by-side with Outlook Classic ([docs/ui-parity.md](docs/ui-parity.md)).
+  Added the simplified single-line ribbon with the full-height module strip, and a dark colour set;
+  `mail.select` takes a folder.

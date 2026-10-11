@@ -40,3 +40,27 @@ fn engine_commands_run_through_the_ui_and_untrusted_text_is_flattened() {
     assert_eq!(one_line("a\r\nb\u{7}"), "a  b ");
     assert_eq!(one_line(&"x".repeat(5000)).len(), 400);
 }
+
+#[test]
+fn theme_and_ribbon_mode_switch_by_command() {
+    let mut ui = MailUi::new(Session::with_sample());
+    assert_eq!(ui.ribbon_mode(), RibbonMode::Simplified);
+    assert!(!ui.tokens.dark);
+    ui.execute("ui.theme", &Value::Null).unwrap();
+    assert!(ui.tokens.dark);
+    ui.execute("ui.theme", &json!({ "theme": "dark" })).unwrap();
+    assert!(ui.tokens.dark);
+    ui.execute("ui.theme", &json!({ "theme": "light" })).unwrap();
+    assert!(!ui.tokens.dark);
+    assert!(ui.execute("ui.theme", &json!({ "theme": 3 })).is_err());
+    ui.execute("ui.ribbonMode", &Value::Null).unwrap();
+    assert_eq!(ui.ribbon_mode(), RibbonMode::Classic);
+    ui.execute("ui.ribbonMode", &json!({ "mode": "simplified" })).unwrap();
+    assert_eq!(ui.ribbon_mode(), RibbonMode::Simplified);
+    assert!(ui.execute("ui.ribbonMode", &json!({ "mode": "sideways" })).is_err());
+    // The two sets differ where it matters and share their sizes.
+    let (light, dark) = (theme::Tokens::light(), theme::Tokens::dark());
+    assert_ne!(light.surface, dark.surface);
+    assert_ne!(light.text, dark.text);
+    assert_eq!(light.folder_w, dark.folder_w);
+}
