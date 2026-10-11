@@ -97,6 +97,17 @@ const LAUNCH_HTML: &str = "<html><body style=\"font-family:Aptos,Calibri,sans-se
 <p>Can you take the first one before <span style=\"color:#C00000\">Thursday noon</span>? I have attached the current timeline.</p>\
 <p>Thanks,<br>Priya</p></body></html>";
 
+const LURE_HTML: &str = r#"<html><body style="font-family:Arial,sans-serif;font-size:11pt">
+<p>Your mailbox has reached <b>98%</b> of its quota.</p>
+<p>Confirm your account within 24 hours to keep receiving mail:</p>
+<p><a href="https://mail.example.org.account-check.example.net/quota">https://mail.example.org/quota</a></p>
+<p>Or sign in at <a href="https://mail.example.org@sign-in.example.net/">mail.example.org</a>,
+or use <a href="http://192.0.2.44/owa">the web version</a>.</p>
+<p>Questions go to <a href="mailto:helpdesk@mailbox-notice.example.net">helpdesk@example.org</a>.
+Our real help pages are at <a href="https://example.org/help">example.org/help</a>.</p>
+<p>Mail Administrator</p>
+</body></html>"#;
+
 /// A writable in-memory mailbox dated around `now` (UTC FILETIME ticks).
 pub fn sample_store(now: i64) -> MemStore {
     let mut s = MemStore::with_default_folders("alex.morgan@example.org");
@@ -304,6 +315,22 @@ pub fn sample_store(now: i64) -> MemStore {
         read: true,
     };
     s.push_item(deleted, old.item(now));
+
+    // Mail of the kind that is after a password: every link in it says one place and goes to
+    // another, each in its own way. The names are made up and resolve nowhere.
+    if let Some(junk) = s.folder_by_kind(FolderKind::Junk) {
+        let lure = Mail {
+            from: ("Mail Administrator", "no-reply@mailbox-notice.example.net"),
+            to: &[ME],
+            cc: &[],
+            subject: "Your mailbox is almost full",
+            body: "Your mailbox has reached 98% of its quota. Confirm your account to keep receiving mail.",
+            html: Some(LURE_HTML),
+            age: 2 * DAY,
+            read: false,
+        };
+        s.push_item(junk, lure.item(now));
+    }
     s
 }
 

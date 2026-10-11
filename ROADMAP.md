@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 16 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 17 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 133, all passing |
+| Tests | 134, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -180,3 +180,12 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   finds everything), and the command answers with the count. The owner asked (2026-10-11) that
   every feature, those already built too, be made better than the one it follows where it can be;
   the pass goes on with links, saving attachments and print.
+- **2026-10-11** - M2.14: links that are not what they say, the second of the pass. Outlook shows
+  a link's address when the pointer rests on it and leaves the comparing to the reader. MailCraft
+  compares: a link whose text names one place and goes to another, one with a name before an `@`
+  in its address, one that goes to a number, one written in letters that can pass for others, and
+  one that is no web address at all (`javascript:`, `file:`) is underlined in the warning colour
+  before anyone points at it, and says what is wrong in a sentence when they do ([RFC 3986] 3.2).
+  A name and its own sub-sites count as one place, and a file's name is not taken for a site.
+  Nothing is opened, fetched or resolved to tell. The sample's Junk Email folder has a message
+  with each kind.

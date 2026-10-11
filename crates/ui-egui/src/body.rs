@@ -564,7 +564,7 @@ fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Ali
     let mut ends: Vec<usize> = Vec::with_capacity(runs.len());
     let mut placed: Vec<Placed> = Vec::new();
     let mut chars = 0usize;
-    for run in runs {
+    for (at, run) in runs.iter().enumerate() {
         let held = shown(run, look.pictures).and_then(|stand| {
             let size = picture_size(run.extent, stand.natural(run), wrap);
             holder(ui, size).map(|(space, format)| (stand, size, space, format))
@@ -574,7 +574,14 @@ fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Ali
                 placed.push(Placed { run, stand, size, holder: (space, size.y + BASELINE) });
                 (space.to_string(), format)
             }
-            None => section(run, look),
+            None => {
+                let (text, mut format) = section(run, look);
+                // A link that is not what its text says is marked before anyone points at it.
+                if run.picture.is_none() && mailcraft_formats::links::concern_at(runs, at).is_some() {
+                    format.underline = Stroke::new(2.0, look.t.danger);
+                }
+                (text, format)
+            }
         };
         chars = chars.saturating_add(text.chars().count());
         ends.push(chars);
@@ -643,7 +650,10 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
     // nothing else happens.
     if let Some(pointer) = response.hover_pos() {
         if let Some((p, _)) = placed.iter().zip(&spots).find(|(_, at)| at.contains(pointer)) {
-            let tip = tip(p.run, p.stand);
+            let mut tip = tip(p.run, p.stand);
+            if let Some(concern) = runs.iter().position(|r| std::ptr::eq(r, p.run)).and_then(|at| mailcraft_formats::links::concern_at(runs, at)) {
+                tip = format!("{}\n{tip}", concern.words());
+            }
             if !tip.is_empty() {
                 response.clone().on_hover_text_at_pointer(tip);
             }
@@ -652,10 +662,12 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
             if (pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y) {
                 let index = cursor.index.0;
-                let run = ends.iter().position(|end| index < *end).and_then(|i| runs.get(i));
-                if let Some(link) = run.and_then(|r| r.style.link.as_deref()) {
-                    let shown: String = link.chars().take(300).collect();
-                    response.clone().on_hover_text_at_pointer(format!("{shown}\nLinks are not opened from here."));
+                let at = ends.iter().position(|end| index < *end);
+                if let Some(link) = at.and_then(|i| runs.get(i)).and_then(|r| r.style.link.as_deref()) {
+                    let shown: String = link.chars().filter(|c| !c.is_control()).take(300).collect();
+                    let concern =
+                        at.and_then(|i| mailcraft_formats::links::concern_at(runs, i)).map(|c| format!("{}\n", c.words())).unwrap_or_default();
+                    response.clone().on_hover_text_at_pointer(format!("{concern}{shown}\nLinks are not opened from here."));
                 }
             }
         }

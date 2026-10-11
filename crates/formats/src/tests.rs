@@ -951,3 +951,101 @@ fn hostile_rtf_pictures_and_tables_are_capped() {
     let doc = crate::rtf::parse(rtf.as_bytes());
     assert!(tables(&doc).iter().all(|t| t.rows.iter().flatten().all(|c| c.rows <= 1000)));
 }
+
+#[test]
+fn a_link_that_is_not_what_its_text_says_is_told_apart() {
+    use crate::links::{Concern, Place, concern, concern_at, place, text_around};
+    let at = |link: &str| place(link).map(|p| p.host);
+    for (link, host) in [
+        ("https://Example.ORG/path?x=1#y", Some("example.org")),
+        ("http://www.example.org.", Some("example.org")),
+        ("https://example.org:8443/a@b", Some("example.org")),
+        ("https://user:secret@example.org/", Some("example.org")),
+        ("https://[2001:db8::1]:443/", Some("2001:db8::1")),
+        ("https:\\\\example.org\\path", Some("example.org")),
+        ("ht\ttps://exa\nmple.org/", Some("example.org")),
+        ("mailto:Ana.Costa@Example.org?subject=Hi", Some("example.org")),
+        ("ftp://files.example.net", Some("files.example.net")),
+        ("#top", None),
+        ("page.html", None),
+        ("tel:+15550100", None),
+        ("cid:logo@example.org", None),
+        ("https://", None),
+        ("https:///path", None),
+        ("mailto:nobody", None),
+        ("", None),
+        (":", None),
+        ("1http://example.org", None),
+    ] {
+        assert_eq!(at(link).as_deref(), host, "{link:?}");
+    }
+    assert_eq!(place("https://bank.example@evil.test/"), Some(Place { scheme: "https".into(), host: "evil.test".into(), disguised: true }));
+
+    let elsewhere = |says: &str, goes: &str| Some(Concern::Elsewhere { says: says.into(), goes: goes.into() });
+    for (text, link, want) in [
+        // What it seems.
+        ("our help pages", "https://parking.example.net/help", None),
+        ("parking.example.net/help", "https://parking.example.net/help", None),
+        ("www.example.org", "https://example.org/welcome", None),
+        ("example.org", "https://login.example.org/", None),
+        ("https://login.example.org/start", "https://example.org/", None),
+        ("See https://example.org/a.", "http://EXAMPLE.org/b", None),
+        ("ana@example.org", "mailto:ana@example.org", None),
+        ("Ana Costa", "mailto:ana@example.org", None),
+        ("report.pdf", "https://files.example.net/report.pdf", None),
+        ("Read more at once.", "https://news.example.net/", None),
+        ("v1.2", "https://example.org/releases", None),
+        ("ana@example.org", "https://example.net/people/ana", None),
+        ("here", "#section", None),
+        ("call us", "tel:+15550100", None),
+        // Not what it seems.
+        ("https://bank.example/login", "https://bank.example.evil.test/login", elsewhere("bank.example", "bank.example.evil.test")),
+        ("www.bank.example", "http://evil.test/bank.example", elsewhere("bank.example", "evil.test")),
+        ("bank.example", "https://evil.test/", elsewhere("bank.example", "evil.test")),
+        ("Sign in at https://bank.example today", "https://notbank.example/", elsewhere("bank.example", "notbank.example")),
+        ("help@bank.example", "mailto:help@evil.test", elsewhere("bank.example", "evil.test")),
+        ("bank.example", "https://bank.example@evil.test/", Some(Concern::Disguised { goes: "evil.test".into() })),
+        ("your account", "https://xn--bnk-5ma.example/", Some(Concern::OtherLetters { goes: "xn--bnk-5ma.example".into() })),
+        ("your account", "https://b\u{430}nk.example/", Some(Concern::OtherLetters { goes: "b\u{430}nk.example".into() })),
+        ("your account", "http://192.0.2.7/login", Some(Concern::Number { goes: "192.0.2.7".into() })),
+        ("your account", "http://0xC0.0.2.7/", Some(Concern::Number { goes: "0xc0.0.2.7".into() })),
+        ("your account", "http://3221225991/", Some(Concern::Number { goes: "3221225991".into() })),
+        ("your account", "http://[2001:db8::1]/", Some(Concern::Number { goes: "2001:db8::1".into() })),
+        ("abc.de", "https://abc.de/", None),
+        ("click", "javascript:alert(1)", Some(Concern::NotAnAddress { scheme: "javascript".into() })),
+        ("click", " Java\tScript:alert(1)", Some(Concern::NotAnAddress { scheme: "javascript".into() })),
+        ("the file", "file:///C:/Windows/system.ini", Some(Concern::NotAnAddress { scheme: "file".into() })),
+        ("open", "ms-word:ofe|u|https://example.org/x.docx", Some(Concern::NotAnAddress { scheme: "ms-word".into() })),
+    ] {
+        assert_eq!(concern(text, link), want, "{text:?} -> {link:?}");
+    }
+    assert_eq!(elsewhere("a.example", "b.example").unwrap().words(), "The text names a.example, but the link goes to b.example.");
+
+    // A link's text is all the runs that go to the same address, however they are styled.
+    let doc = parse(r#"<p>Go to <a href="https://evil.test/">www.<b>bank</b>.example</a> or <a href="https://bank.example/">bank.example</a>.</p>"#);
+    let Some(Block::Para(para)) = doc.blocks.first() else { panic!("a paragraph") };
+    let told: Vec<(String, bool)> = (0..para.runs.len()).map(|i| (text_around(&para.runs, i), concern_at(&para.runs, i).is_some())).collect();
+    let links: Vec<&(String, bool)> = told.iter().filter(|(text, _)| !text.is_empty()).collect();
+    assert_eq!(links.len(), 4, "three runs of the first link and one of the second");
+    assert!(links[..3].iter().all(|l| **l == ("www.bank.example".to_string(), true)));
+    assert_eq!(*links[3], ("bank.example".to_string(), false));
+
+    // Hostile: nothing here panics, whatever stands in an address or a text.
+    let pieces = [
+        "", ":", "//", "@", "[", "]", "\\", "?", "#", ".", "..", "xn--", "http", "https://", "mailto:", "é", "\u{0}", "\u{202e}", "www.", "a.b", "0x",
+    ];
+    for a in pieces {
+        for b in pieces {
+            for c in pieces {
+                let joined = format!("{a}{b}{c}");
+                let _ = concern(&joined, &joined);
+                let _ = concern(c, &joined);
+                let _ = place(&joined);
+            }
+        }
+    }
+    let long = "a.".repeat(100_000);
+    let _ = concern(&long, &format!("https://{long}@{long}/"));
+    assert_eq!(text_around(&[], 3), "");
+    assert_eq!(concern_at(&[], 0), None);
+}
