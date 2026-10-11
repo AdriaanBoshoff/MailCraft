@@ -608,15 +608,21 @@ impl MailUi {
         let mut body = draft.body.clone();
         let attachments: Vec<(String, usize)> = draft.attachments.iter().map(|a| (a.name(), a.size())).collect();
         let show_bcc = draft.show_bcc;
+        // What the writer should know is on show while the message can still be changed.
+        let cautions: Vec<String> = mailcraft_engine::outgoing::cautions(draft).iter().map(|c| c.words()).collect();
         let mut acts: Vec<(&str, Value)> = Vec::new();
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 10.0))), |ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             ui.horizontal(|ui| {
                 let send = ui.add(
-                    egui::Button::new(egui::RichText::new("Send").font(bold(13.0)).color(t.on_accent)).fill(t.accent).min_size(vec2(72.0, 30.0)),
+                    egui::Button::new(
+                        egui::RichText::new(if cautions.is_empty() { "Send" } else { "Send Anyway" }).font(bold(13.0)).color(t.on_accent),
+                    )
+                    .fill(t.accent)
+                    .min_size(vec2(72.0, 30.0)),
                 );
                 if send.on_hover_text("Files the message in Outbox. Sending needs an account, which is not built yet.").clicked() {
-                    acts.push(("compose.send", Value::Null));
+                    acts.push(("compose.send", json!({ "anyway": !cautions.is_empty() })));
                 }
                 for (label, cmd, params) in [
                     ("Attach File…", "ui.attachDialog", Value::Null),
@@ -629,6 +635,13 @@ impl MailUi {
                     }
                 }
             });
+            for caution in &cautions {
+                ui.horizontal(|ui| {
+                    let (mark, _) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::hover());
+                    icons::paint(ui.painter(), Rect::from_center_size(mark.center(), vec2(14.0, 14.0)), Icon::Importance, t.danger);
+                    ui.add(egui::Label::new(egui::RichText::new(one_line(caution)).font(font(12.0)).color(t.text)).wrap());
+                });
+            }
             ui.add_space(4.0);
             for (key, label, value, shown) in &mut fields {
                 if !*shown {

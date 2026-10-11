@@ -2,12 +2,13 @@
 //! Nothing here touches a network: "Send" files the message in the Outbox.
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
-use crate::{CmdResult, Draft, EngineError, Session};
+use crate::{CmdResult, Draft, EngineError, Session, outgoing};
 use mailcraft_model::{
     Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
     recipient_label, time,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
+use std::collections::HashSet;
 
 /// One attached file is at most this large, and a draft carries at most this many.
 const MAX_ATTACHMENT: u64 = 150 * 1024 * 1024;
@@ -90,6 +91,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: remove_attachment,
         },
         CommandSpec {
+            id: "compose.check",
+            label: "Check Before Sending",
+            tab: "Message",
+            group: "Message",
+            shortcut: "",
+            params: r#"returns {"cautions": what the writer should know before the message goes}"#,
+            enabled: composing,
+            run: check,
+        },
+        CommandSpec {
             id: "compose.send",
             label: "Send",
             tab: "Message",
@@ -150,7 +161,7 @@ fn prefixed(prefix: &str, subject: &str) -> String {
 
 /// The header block Outlook puts above the quoted text of a plain-text reply or forward.
 fn quoted(s: &Session, item: &Item) -> String {
-    let mut out = String::from("\n\n-----Original Message-----\n");
+    let mut out = format!("\n\n{}\n", outgoing::ORIGINAL);
     out.push_str(&format!("From: {}\n", mailbox(&item.sender_name(), &item.sender_email())));
     if item.time() > 0 {
         out.push_str(&format!("Sent: {}\n", time::civil(item.time(), s.tz_offset_min).full_stamp()));
@@ -165,11 +176,16 @@ fn quoted(s: &Session, item: &Item) -> String {
     out
 }
 
-fn recipients_of(s: &Session, item: &Item, kind: i32) -> Vec<String> {
+/// The recipients of `item` of one kind, each address once: one that is in `seen` already is
+/// left out, and the others are added to it.
+fn recipients_of(item: &Item, kind: i32, seen: &mut HashSet<String>) -> Vec<String> {
     item.recipients
         .iter()
         .filter(|r| r.i32(pid::RECIPIENT_TYPE).unwrap_or(RECIP_TO) == kind)
-        .filter(|r| !recipient_email(r).eq_ignore_ascii_case(&s.user_email))
+        .filter(|r| {
+            let address = recipient_email(r).trim().to_lowercase();
+            address.is_empty() || seen.insert(address)
+        })
         .map(|r| mailbox(&recipient_label(r), &recipient_email(r)))
         .collect()
 }
@@ -185,13 +201,32 @@ fn respond(s: &mut Session, kind: &'static str) -> CmdResult {
         }
         _ => {
             draft.subject = prefixed("RE:", &item.subject());
-            draft.to = sender.clone();
-            if kind == "Reply All" {
-                let others: Vec<String> = recipients_of(s, &item, RECIP_TO).into_iter().filter(|r| *r != sender).collect();
-                if !others.is_empty() {
-                    draft.to = format!("{sender}; {}", others.join("; "));
+            let own = s.user_email.trim().to_lowercase();
+            let from = item.sender_email().trim().to_lowercase();
+            // Nobody is named twice, and the writer not at all, however the message listed them.
+            let mut seen: HashSet<String> = [own.clone(), from.clone()].into_iter().filter(|a| !a.is_empty()).collect();
+            if !own.is_empty() && own == from {
+                // An answer to one's own message goes to those it went to, not back to oneself.
+                draft.to = recipients_of(&item, RECIP_TO, &mut seen).join("; ");
+                if kind == "Reply All" {
+                    draft.cc = recipients_of(&item, RECIP_CC, &mut seen).join("; ");
                 }
-                draft.cc = recipients_of(s, &item, RECIP_CC).join("; ");
+            } else {
+                draft.to = sender.clone();
+                if kind == "Reply All" {
+                    let named = |kind: i32| {
+                        item.recipients
+                            .iter()
+                            .filter(|r| r.i32(pid::RECIPIENT_TYPE).unwrap_or(RECIP_TO) == kind)
+                            .any(|r| recipient_email(r).trim().to_lowercase() == own)
+                    };
+                    draft.was_hidden = !own.is_empty() && !item.recipients.is_empty() && !named(RECIP_TO) && !named(RECIP_CC);
+                    let others = recipients_of(&item, RECIP_TO, &mut seen);
+                    if !others.is_empty() {
+                        draft.to = format!("{sender}; {}", others.join("; "));
+                    }
+                    draft.cc = recipients_of(&item, RECIP_CC, &mut seen).join("; ");
+                }
             }
         }
     }
@@ -304,10 +339,22 @@ fn file_draft(s: &mut Session, kind: FolderKind, sent: bool) -> Result<(), Engin
     s.reload_rows()
 }
 
-fn send(s: &mut Session, _: &Value) -> CmdResult {
+fn check(s: &mut Session, _: &Value) -> CmdResult {
+    let draft = s.compose.as_ref().ok_or_else(|| EngineError::Disabled("Check Before Sending".into()))?;
+    Ok(json!({"cautions": outgoing::cautions(draft).iter().map(|c| c.words()).collect::<Vec<_>>()}))
+}
+
+fn send(s: &mut Session, p: &Value) -> CmdResult {
     let has_recipient = s.compose.as_ref().is_some_and(|d| [&d.to, &d.cc, &d.bcc].iter().any(|l| !mailcraft_mime::parse_addresses(l).is_empty()));
     if !has_recipient {
         return Err(EngineError::Format("there must be at least one name or address in the To, Cc or Bcc box".into()));
+    }
+    // What the writer should know is said before the message goes, not after; it goes as it is
+    // when that is asked for.
+    let cautions = s.compose.as_ref().map(outgoing::cautions).unwrap_or_default();
+    if !cautions.is_empty() && !p_bool(p, "anyway").unwrap_or(false) {
+        let words: Vec<String> = cautions.iter().map(|c| c.words()).collect();
+        return Err(EngineError::Format(format!("{} It was not sent; send it with \"anyway\": true to send it as it is.", words.join(" "))));
     }
     file_draft(s, FolderKind::Outbox, true)?;
     s.status = "The message is in the Outbox. Sending needs an account, which this version does not have yet.".to_string();

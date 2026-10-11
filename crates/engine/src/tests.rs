@@ -1,4 +1,4 @@
-use crate::{EngineError, Session, catalog, registry};
+use crate::{Draft, EngineError, Session, catalog, registry};
 use mailcraft_model::{FolderKind, RECIP_CC, RECIP_TO, time};
 use serde_json::{Value, json};
 
@@ -219,6 +219,90 @@ fn send_files_in_the_outbox_and_never_leaves_the_machine() {
     run(&mut s, "compose.setField", json!({"field": "subject", "value": "Later"}));
     run(&mut s, "compose.saveDraft", Value::Null);
     assert_eq!(folder(&s, "Drafts").0, 2);
+}
+
+#[test]
+fn a_message_is_looked_over_before_it_goes() {
+    use crate::outgoing::{Caution, cautions, sendable};
+    for (address, want) in [
+        ("june.okafor@example.org", true),
+        ("a@b.co", true),
+        ("june@localhost", false),
+        ("june", false),
+        ("@example.org", false),
+        ("june@", false),
+        ("june@@example.org", false),
+        ("a@b@example.org", false),
+        ("june okafor@example.org", false),
+        ("june@example..org", false),
+        ("june@.example.org", false),
+        ("june@-example.org", false),
+        ("", false),
+    ] {
+        assert_eq!(sendable(address), want, "{address:?}");
+    }
+
+    let draft = |to: &str, subject: &str, body: &str| Draft { to: to.into(), subject: subject.into(), body: body.into(), ..Draft::default() };
+    assert!(cautions(&draft("june.okafor@example.org", "Rota", "Thanks.")).is_empty());
+    assert_eq!(cautions(&draft("june.okafor@example.org", " ", "Thanks.")), [Caution::NoSubject]);
+    assert_eq!(cautions(&draft("a@example.org", "Rota", "The rota is ATTACHED.")), [Caution::NothingAttached]);
+    assert_eq!(cautions(&draft("a@example.org", "Rota", "See the attachment")), [Caution::NothingAttached]);
+    // Only the new text is read, and only whole words.
+    assert!(cautions(&draft("a@example.org", "Rota", "Thanks.\n\n-----Original Message-----\nI attached it")).is_empty());
+    assert!(cautions(&draft("a@example.org", "Rota", "An unattached, reattaching sort of day")).is_empty());
+    assert_eq!(
+        cautions(&Draft {
+            cc: "A@Example.org; b@example.org".into(),
+            bcc: "a@example.org".into(),
+            ..draft("a@example.org; june; b@example.org", "Rota", "")
+        }),
+        [Caution::NotAnAddress("june".into()), Caution::Twice("A@Example.org".into()), Caution::Twice("b@example.org".into())]
+    );
+    assert!(Caution::NotAnAddress("june".into()).words().contains("june"));
+
+    // Sending says what it found and leaves the message open, until it is told to send anyway.
+    let mut s = session();
+    run(&mut s, "mail.new", Value::Null);
+    run(&mut s, "compose.setField", json!({"field": "to", "value": "June Okafor <june.okafor@example.org>; JUNE.OKAFOR@example.org"}));
+    run(&mut s, "compose.setField", json!({"field": "cc", "value": "june.okafor@example.org; helena.brandt@example.org"}));
+    run(&mut s, "compose.setField", json!({"field": "body", "value": "Rota attached."}));
+    let told = run(&mut s, "compose.check", Value::Null);
+    assert_eq!(told["cautions"].as_array().unwrap().len(), 3, "{told}");
+    assert_eq!(s.inspect()["composing"]["cautions"].as_array().unwrap().len(), 3);
+    let refused = s.run("compose.send", &Value::Null).unwrap_err().to_string();
+    assert!(refused.contains("no subject") && refused.contains("nothing is attached") && refused.contains("more than once"), "{refused}");
+    assert!(s.compose.is_some(), "what was written is kept");
+    assert_eq!(folder(&s, "Outbox").0, 0);
+    run(&mut s, "compose.send", json!({"anyway": true}));
+    assert_eq!(folder(&s, "Outbox").0, 1);
+
+    // An answer to one's own message goes to those it went to, each of them once.
+    run(&mut s, "folder.select", json!({"folder": "Outbox"}));
+    run(&mut s, "mail.select", json!({"index": 0}));
+    run(&mut s, "mail.reply", Value::Null);
+    assert_eq!(s.compose.as_ref().unwrap().to, "June Okafor <june.okafor@example.org>");
+    run(&mut s, "mail.replyAll", Value::Null);
+    let d = s.compose.clone().unwrap();
+    assert_eq!((d.to.as_str(), d.cc.as_str(), d.was_hidden), ("June Okafor <june.okafor@example.org>", "helena.brandt@example.org", false));
+
+    // A hidden recipient who answers everyone is told so; one who answers the sender is not.
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    s.user_email = "someone.else@example.org".to_string();
+    run(&mut s, "mail.reply", Value::Null);
+    assert!(!s.compose.as_ref().unwrap().was_hidden);
+    run(&mut s, "mail.replyAll", Value::Null);
+    let d = s.compose.clone().unwrap();
+    assert!(d.was_hidden && cautions(&d).contains(&Caution::WasHidden));
+    assert!(s.run("compose.send", &Value::Null).unwrap_err().to_string().contains("hidden"));
+
+    // Hostile: whatever is in the boxes, looking it over does not panic and says little.
+    for wild in ["@".repeat(5000), "a@b.c;".repeat(3000), "\u{202e}<\u{0}>,;\"".repeat(900), "\u{301}attach\u{301}".repeat(4000), "x".repeat(100_000)]
+    {
+        let found =
+            cautions(&Draft { to: wild.clone(), cc: wild.clone(), bcc: wild.clone(), subject: wild.clone(), body: wild.clone(), ..Draft::default() });
+        assert!(found.len() <= 12 && found.iter().all(|c| c.words().chars().count() <= 200), "{}", found.len());
+    }
 }
 
 #[test]

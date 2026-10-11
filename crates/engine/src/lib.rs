@@ -9,6 +9,7 @@ pub mod attachments;
 pub mod catalog;
 pub mod cmd;
 pub mod io;
+pub mod outgoing;
 pub mod pictures;
 pub mod print;
 pub mod sample;
@@ -131,6 +132,8 @@ pub struct Draft {
     pub show_bcc: bool,
     /// "New", "Reply", "Reply All" or "Forward": what opened this window.
     pub kind: &'static str,
+    /// The message this answers reached its writer as a hidden recipient, and it answers all.
+    pub was_hidden: bool,
 }
 
 pub struct Session {
@@ -501,7 +504,10 @@ impl Session {
             })).collect::<Vec<_>>(),
             "search": self.search,
             "unread_only": self.unread_only,
-            "composing": self.compose.as_ref().map(|d| json!({ "kind": d.kind, "to": d.to, "cc": d.cc, "subject": d.subject, "attachments": d.attachments.len() })),
+            "composing": self.compose.as_ref().map(|d| json!({
+                "kind": d.kind, "to": d.to, "cc": d.cc, "subject": d.subject, "attachments": d.attachments.len(),
+                "cautions": outgoing::cautions(d).iter().map(|c| c.words()).collect::<Vec<_>>(),
+            })),
             "status": self.status,
         })
     }

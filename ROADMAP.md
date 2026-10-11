@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 20 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 21 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 39 of 114 (34%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 138, all passing |
+| Tests | 139, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -217,3 +217,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   its month and then its year, not under one "Older". Messages that are equal by the
   arrangement stand newest first whichever way it runs (they stood oldest first in an ascending
   one). The groups are part of `session.inspect`.
+- **2026-10-11** - M2.18: answering and sending, the sixth of the pass. A message is looked
+  over before it goes, where Outlook asks only about a missing subject and a forgotten
+  attachment, and only once Send is pressed: MailCraft says, while the message is still being
+  written, that it has no subject, that its new text speaks of an attachment and none is
+  attached (the quoted original is not read), that something in To, Cc or Bcc is not an address
+  mail can be sent to, that an address is named more than once, and that a reply to all would
+  show the others the writer had the message as a hidden (Bcc) recipient. `compose.send` refuses
+  with those words and keeps the message open unless it is given `"anyway": true`;
+  `compose.check` and `session.inspect` tell them. Reply All names each address once however
+  the original listed it, and an answer to a message one sent oneself goes to those it went to,
+  not back to oneself.
