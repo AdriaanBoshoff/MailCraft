@@ -596,3 +596,15 @@ fn trees_that_point_at_themselves_end() {
     b.node(NID_ROOT_FOLDER, 6, 6, 0);
     assert!(PstStore::from_bytes(b.finish()).is_ok());
 }
+
+/// Offline stores written by Outlook carry the client magic "SO" where a .pst has "SM".
+#[test]
+fn offline_store_magic_is_accepted() {
+    let mut bytes = sample(true, 0);
+    bytes[8..10].copy_from_slice(b"SO");
+    let mut store = PstStore::from_bytes(bytes).unwrap();
+    assert!(!store.folders().unwrap().is_empty());
+    let mut other = sample(true, 0);
+    other[8..10].copy_from_slice(b"XX");
+    assert!(PstStore::from_bytes(other).is_err());
+}

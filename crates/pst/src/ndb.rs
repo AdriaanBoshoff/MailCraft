@@ -76,8 +76,9 @@ impl Ndb {
         let len = src.seek(SeekFrom::End(0))?;
         let mut ndb = Self { src, len, ver: Ver::Unicode, crypt: 0, nbt: HashMap::new(), bbt: HashMap::new() };
         let head = ndb.read_at(0, 564.min(usize::try_from(len).unwrap_or(564)))?;
-        // dwMagic "!BDN" and wMagicClient "SM" ([MS-PST] 2.2.2.6).
-        if head.get(..4) != Some(b"!BDN") || head.get(8..10) != Some(b"SM") {
+        // dwMagic "!BDN" and wMagicClient "SM" ([MS-PST] 2.2.2.6). Offline stores (.ost) carry
+        // "SO" there instead (observed in files; the NDB layout is otherwise the same).
+        if head.get(..4) != Some(b"!BDN") || !matches!(head.get(8..10), Some(b"SM" | b"SO")) {
             return Err(PstError::NotPst);
         }
         let wver = u16_at(&head, 10).ok_or(PstError::NotPst)?;

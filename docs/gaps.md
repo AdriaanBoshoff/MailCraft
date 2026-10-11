@@ -16,10 +16,12 @@
 
 ## Built but unproven
 
-7. **`.pst` reader has only met our own fixtures.** It is written from [MS-PST] and tested against files
-   produced by a test-only builder, including truncated, corrupted and cyclic ones. It has not been
-   checked against a broad set of Outlook-written files.
-8. **4K-page `.ost` (wVer 36)** support is a best effort from the specification, with no fixture at all.
+7. **`.pst` reader has met few real files.** It is written from [MS-PST] and tested against files
+   produced by a test-only builder, including truncated, corrupted and cyclic ones. Checked locally
+   against a few small Outlook-written 4K-page `.ost` files (wVer 36): every folder and every item
+   loaded. No Outlook-written Unicode or ANSI `.pst`, and no large mailbox, has been tried yet.
+8. **No committed fixture for 4K-page files.** The real files used for the check above are private and
+   stay local; the test builder only writes 512-byte-page files.
 9. **`.msg` output has not been opened in Outlook Classic.** It round-trips through our own reader and
    follows [MS-OXMSG]; that is not the same as Outlook accepting it.
 10. **The UI has not been compared side by side with Outlook Classic.** Layout follows the general

@@ -7,8 +7,8 @@
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 49, all passing |
-| File formats read | `.pst`/`.ost` (ANSI, Unicode; 4K pages untested), `.msg`, `.oft`, `.eml` |
+| Tests | 50, all passing |
+| File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
 
@@ -25,7 +25,8 @@
 
 ## Current focus (M1)
 
-1. Check the `.pst` reader against real Outlook-written files, locally (results are never published).
+1. Check the `.pst` reader against more real Outlook-written files, locally (results are never
+   published). Done so far: a few small 4K-page `.ost` files.
 2. Have Outlook Classic open MailCraft-written `.msg` files and compare, property by property.
 3. Side-by-side layout comparison with Outlook Classic and the interaction parity doc.
 
@@ -36,3 +37,5 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
 - **2026-10-11** — M1.1: item model, MIME, `.msg` and `.pst` readers, engine with 48 commands, CLI.
   M1.2: the egui window (ribbon, folder pane, message list, reading pane, inline compose, File page),
   headless screenshots, the desktop app, and `cargo xtask ci`.
+- **2026-10-11** — M1.3: `.ost` files are accepted (client magic "SO"); 4K-page reading confirmed
+  against real offline stores, locally.
