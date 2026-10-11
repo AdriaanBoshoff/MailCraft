@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 1 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 2 · 2026-10-11 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -22,8 +22,10 @@
    loaded. No Outlook-written Unicode or ANSI `.pst`, and no large mailbox, has been tried yet.
 8. **No committed fixture for 4K-page files.** The real files used for the check above are private and
    stay local; the test builder only writes 512-byte-page files.
-9. **`.msg` output has not been opened in Outlook Classic.** It round-trips through our own reader and
-   follows [MS-OXMSG]; that is not the same as Outlook accepting it.
+9. **`.msg`/`.oft` output is checked in Outlook Classic only for plain mail.** Outlook opens our
+   messages and templates and reads back subject, sender, recipients, times, flags, categories, bodies
+   and a file attachment ([file-format-parity.md](file-format-parity.md)). Attached messages, inline
+   pictures, non-mail items and opening from the Outlook window are unchecked.
 10. **The UI has not been compared side by side with Outlook Classic.** Layout follows the general
     arrangement; measurements, spacing and behaviour details are unverified.
 

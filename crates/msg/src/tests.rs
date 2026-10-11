@@ -92,6 +92,23 @@ fn layout_follows_the_specification() {
     assert_eq!(write_as(&sample(), Kind::Template).unwrap().len(), bytes.len());
 }
 
+/// Outlook finds a property by name through the lookup stream its checksum selects. With the wrong
+/// checksum the file opens but the categories are gone (seen with Outlook Classic).
+#[test]
+fn named_property_lookup_uses_the_zero_seeded_checksum() {
+    let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+    assert_eq!(crc32(&utf16("Keywords")), 0x2EDA_4D3B);
+    assert_eq!(crc32(&utf16("InTransitMessageCorrelator")), 0xFF0C_62AC);
+    assert_eq!(crc32(&[]), 0);
+
+    let bytes = write(&sample()).unwrap();
+    let mut cf = cfb::CompoundFile::open(std::io::Cursor::new(&bytes)).unwrap();
+    // Keywords is PS_PUBLIC_STRINGS (index 2) with a string name: 0x1000 + (crc ^ 5) % 0x1F.
+    let mut lookup = Vec::new();
+    std::io::Read::read_to_end(&mut cf.open_stream("/__nameid_version1.0/__substg1.0_10150102").unwrap(), &mut lookup).unwrap();
+    assert_eq!(&lookup[..8], &[0x3B, 0x4D, 0xDA, 0x2E, 0x05, 0x00, 0x00, 0x00]);
+}
+
 #[test]
 fn hostile_input_never_panics() {
     assert!(matches!(read(b""), Err(MsgError::NotMsg)));

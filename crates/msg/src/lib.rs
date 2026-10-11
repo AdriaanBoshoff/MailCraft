@@ -34,16 +34,18 @@ pub(crate) fn value_stream(id: u16, ty: u16) -> String {
     format!("__substg1.0_{id:04X}{ty:04X}")
 }
 
-/// CRC-32 (IEEE 802.3), used to pick a named property's lookup stream ([MS-OXMSG] 2.2.3.2.1).
+/// The checksum of a named property's name, which picks its lookup stream ([MS-OXMSG] 2.2.3.2.1).
+/// It is the CRC of [MS-OXRTFCP] 3.1.3.2: the IEEE 802.3 polynomial, but starting from zero and with
+/// no final inversion. With the common variant Outlook cannot find a property by its name.
 pub(crate) fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
+    let mut crc = 0u32;
     for &b in data {
         crc ^= u32::from(b);
         for _ in 0..8 {
             crc = if crc & 1 != 0 { crc >> 1 ^ 0xEDB8_8320 } else { crc >> 1 };
         }
     }
-    !crc
+    crc
 }
 
 #[cfg(test)]

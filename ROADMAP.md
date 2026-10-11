@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) in progress · revision 1 · 2026-10-11
+**Status:** M1 (data files first) in progress · revision 2 · 2026-10-11
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 38 of 114 (33%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 50, all passing |
+| Tests | 51, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml` |
 | Protocols | none |
@@ -27,7 +27,9 @@
 
 1. Check the `.pst` reader against more real Outlook-written files, locally (results are never
    published). Done so far: a few small 4K-page `.ost` files.
-2. Have Outlook Classic open MailCraft-written `.msg` files and compare, property by property.
+2. Have Outlook Classic open MailCraft-written `.msg` files and compare, property by property. Done
+   for plain mail with a file attachment ([docs/file-format-parity.md](docs/file-format-parity.md));
+   attached messages and inline pictures remain.
 3. Side-by-side layout comparison with Outlook Classic and the interaction parity doc.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
@@ -39,3 +41,6 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   headless screenshots, the desktop app, and `cargo xtask ci`.
 - **2026-10-11** — M1.3: `.ost` files are accepted (client magic "SO"); 4K-page reading confirmed
   against real offline stores, locally.
+- **2026-10-11** — M1.4: Outlook Classic opens MailCraft-written `.msg` and `.oft` files and reads the
+  same properties back; a file Outlook wrote survives a trip through MailCraft. Fixed the named-property
+  lookup checksum, which had made Outlook drop categories. Added the `msg_dump` structure tool.
