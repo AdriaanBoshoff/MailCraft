@@ -192,10 +192,10 @@ fn lines(glyphs: &[Glyph], width: f32) -> Vec<(usize, usize)> {
 /// Room a border takes inside its box, in points: left and top, then right and bottom.
 fn frame_room(frame: &Frame) -> ((f32, f32), (f32, f32)) {
     let side = |i: usize| frame.edges.get(i).map_or(0.0, |e| px(u16::from(e.width.min(MAX_EDGE))));
-    let pad = (px(frame.padding.1.min(MAX_CELL_ROOM)), px(frame.padding.0.min(MAX_CELL_ROOM)));
+    let [above, right, below, left] = frame.padding.map(|v| px(v.min(MAX_CELL_ROOM)));
     // Text does not touch a line beside it.
     let clear = |w: f32, pad: f32| if w > 0.0 { w + pad.max(1.5) } else { pad };
-    ((clear(side(3), pad.0), side(0) + pad.1), (clear(side(1), pad.0), side(2) + pad.1))
+    ((clear(side(3), left), side(0) + above), (clear(side(1), right), side(2) + below))
 }
 
 /// Room between a cell's edge and what it holds, in points: at the sides, then above and below.
@@ -851,7 +851,7 @@ impl<'f, 'l> Flow<'f, 'l> {
     }
 
     /// Paragraphs inside one border.
-    fn framed(&mut self, paras: &[Block], frame: &Frame, x: f32, width: f32, at: At, first: bool) -> At {
+    fn framed(&mut self, paras: &[Block], frame: &Frame, x: f32, width: f32, at: At, first: bool, depth: usize) -> At {
         let mut at = at;
         if let (false, Some(Block::Para(p)), true) = (first, paras.first(), at.y > self.top() + 0.01) {
             at.y += px(p.lead());
@@ -868,17 +868,19 @@ impl<'f, 'l> Flow<'f, 'l> {
         for (k, block) in paras.iter().enumerate() {
             if let Block::Para(p) = block {
                 if k > 0 && between > 0.0 && !self.full {
-                    let pad = f32::from(frame.padding.0.min(MAX_CELL_ROOM)) * PX;
-                    inner = self.room(At { page: inner.page, y: inner.y + pad }, between + pad);
+                    let [above, _, below, _] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)) * PX);
+                    inner = self.room(At { page: inner.page, y: inner.y + below }, between + above);
                     let y = inner.y + between / 2.0;
                     self.edge(inner.page, (x, y), (x + width, y), between, &frame.between, true);
-                    inner.y += between + pad;
+                    inner.y += between + above;
                 }
                 inner = self.para(p, left, room, inner, k == 0 || between > 0.0);
             }
         }
         let end = At { page: inner.page, y: inner.y + far.1 };
-        self.boxed(start, end, x, width, &frame.edges, None, 0, false);
+        // Over the fill of a cell it stands in, under any highlight of its text.
+        let over = u16::try_from(depth).unwrap_or(u16::MAX - 2).saturating_add(2).min(u16::MAX - 1);
+        self.boxed(start, end, x, width, &frame.edges, frame.fill, over, false);
         end
     }
 
@@ -899,7 +901,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     Some(frame) => {
                         let same = |b: &Block| matches!(b, Block::Para(q) if q.frame.as_ref().is_some_and(|f| Arc::ptr_eq(f, frame)));
                         step += list.get(i + 1..).unwrap_or_default().iter().take_while(|b| same(b)).count();
-                        at = self.framed(list.get(i..i.saturating_add(step)).unwrap_or_default(), frame, x, width, at, i == 0);
+                        at = self.framed(list.get(i..i.saturating_add(step)).unwrap_or_default(), frame, x, width, at, i == 0, depth);
                     }
                     None => at = self.para(para, x, width, at, i == 0),
                 },

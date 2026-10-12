@@ -109,6 +109,8 @@ const LAUNCH_HTML: &str = "<html><body style=\"font-family:Aptos,Calibri,sans-se
 <p>The <b>launch checklist</b> is in good shape. Three things are still open:</p>\
 <ul><li>Final sign-off on the pricing page</li><li>Support rota for the first week</li><li>The <i>welcome</i> email copy</li></ul>\
 <p>Can you take the first one before <span style=\"color:#C00000\">Thursday noon</span>? I have attached the current timeline.</p>\
+<div style=\"background:#DCEBF7;border-left:4px solid #1F4E79;padding:8px 14px 8px 12px\"><b>Reminder</b><br>\
+The rehearsal is on Wednesday at 15:00 in the small studio.</div>\
 <p>Thanks,<br>Priya</p></body></html>";
 
 const LURE_HTML: &str = r#"<html><body style="font-family:Arial,sans-serif;font-size:11pt">

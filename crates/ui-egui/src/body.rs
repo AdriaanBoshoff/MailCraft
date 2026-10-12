@@ -186,10 +186,10 @@ fn one(ui: &mut Ui, list: &[Block], i: usize, group: Group, look: Look, depth: u
 /// Room a border takes inside its box: left and top, then right and bottom.
 fn frame_room(frame: &Frame) -> (Vec2, Vec2) {
     let side = |i: usize| frame.edges.get(i).map_or(0.0, |e| f32::from(e.width.min(MAX_EDGE)));
-    let pad = vec2(f32::from(frame.padding.1.min(MAX_CELL_ROOM)), f32::from(frame.padding.0.min(MAX_CELL_ROOM)));
+    let [above, right, below, left] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)));
     // Text does not touch a line beside it.
     let clear = |w: f32, pad: f32| if w > 0.0 { w + pad.max(2.0) } else { pad };
-    (vec2(clear(side(3), pad.x), side(0) + pad.y), vec2(clear(side(1), pad.x), side(2) + pad.y))
+    (vec2(clear(side(3), left), side(0) + above), vec2(clear(side(1), right), side(2) + below))
 }
 
 /// Paragraphs inside one border.
@@ -203,6 +203,10 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
     let (near, far) = frame_room(frame);
     let left = (full.left() + near.x).min(full.right());
     let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0), top + near.y));
+    // The fill goes behind what the box holds, and what it holds is read against the fill.
+    let behind = ui.painter().add(egui::Shape::Noop);
+    let fill = frame.fill.map(|c| Color32::from_rgb(c[0], c[1], c[2]));
+    let look = Look { on: fill.unwrap_or(look.on), ..look };
     let mut child = ui.new_child(UiBuilder::new().id_salt(("framed", at)).max_rect(inside));
     child.spacing_mut().item_spacing = vec2(0.0, 0.0);
     let between = f32::from(frame.between.width.min(MAX_EDGE));
@@ -210,11 +214,11 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
         if let Block::Para(p) = block {
             // The line between one paragraph and the next, with the room the border keeps.
             if k > 0 && between > 0.0 {
-                let pad = f32::from(frame.padding.0.min(MAX_CELL_ROOM));
-                child.add_space(pad);
+                let [above, _, below, _] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)));
+                child.add_space(below);
                 let y = child.cursor().top();
                 let line = Rect::from_min_max(pos2(full.left(), y), pos2(full.right(), y + between));
-                child.add_space(between + pad);
+                child.add_space(between + above);
                 let only = [frame.between, Edge::default(), Edge::default(), Edge::default()];
                 edges(ui, line, &only, look, look.text());
             }
@@ -226,6 +230,9 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
     }
     let rect = Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(inside.top()) + far.y));
     ui.allocate_rect(rect, Sense::hover());
+    if let Some(fill) = fill {
+        ui.painter().set(behind, egui::Shape::rect_filled(rect, 0.0, fill));
+    }
     edges(ui, rect, &frame.edges, look, look.text());
 }
 

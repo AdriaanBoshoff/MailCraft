@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 36 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 37 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 174, all passing |
+| Tests | 176, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -71,9 +71,10 @@
 21. Done: line spacing in RTF and HTML bodies.
 22. Done: tab leaders, and the line between paragraphs in one border, in RTF bodies.
 23. Done: list numbers from the list tables of RTF bodies.
-24. Next: what is left of M2, in this order: backgrounds and padding on HTML blocks, and opening a
-    link; text beside pictures and kerning in print; page setup, Table Style and a print
-    preview; metafiles with a bitmap beside the drawing.
+24. Done: fills behind blocks, and room on each side of them, in HTML and RTF bodies.
+25. Next: what is left of M2, in this order: opening a link; text beside pictures and kerning in
+    print; page setup, Table Style and a print preview; metafiles with a bitmap beside the
+    drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -415,3 +416,15 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   without `\pntext`, kinds of number other than those named, and the indent a level asks for
   where the paragraph gives none. The second step of the sample receipt's list is counted
   this way. Nothing here goes beyond Outlook.
+- **2026-10-12** - M2.34: a block's background is behind all of the block. A background on a
+  paragraph, a heading, a `div`, a list item or a quotation (CSS 2.1 section 14.2) fills the
+  box its paragraphs stand in, on screen and in print; before, it was drawn as a highlight
+  behind the letters only. Padding is kept for each side (`padding` with one to four lengths,
+  `padding-top` and the others; CSS 2.1 section 8.4), and padding alone makes room without a
+  border. In RTF, `\cbpat` (RTF 1.9.1, "Paragraph Shading") is the same fill. Text in a
+  filled box is read against the fill, so text that names no colour stays readable on a dark
+  one, in the light pane and the dark one. Not yet: boxes inside one another (the inner one
+  is drawn alone, with the outer one's fill where it has none), a table inside a filled block
+  (it stands outside the fill), a fill on the body itself, background pictures, lengths in
+  `em` and percentages. The sample checklist message has a filled note. Nothing here goes
+  beyond Outlook.

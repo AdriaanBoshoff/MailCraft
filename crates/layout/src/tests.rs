@@ -197,7 +197,7 @@ fn a_table_stands_in_columns_inside_its_lines() {
 fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
     let rows: Vec<Vec<Cell>> = (0..60).map(|i| vec![cell(&format!("r{i}")), cell("v")]).collect();
     let edge = Edge { width: 4, color: Some([0, 0, 90]), line: Line::Double };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4), indent: 0, between: Edge::default() });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between: Edge::default(), fill: None });
     let framed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Table(Table { rows, border: true, frame: [edge; 4], ..Table::default() }), framed("in"), framed("frame")]);
     let printed = print(&body, SMALL);
@@ -243,7 +243,7 @@ fn nested(depth: usize) -> Block {
 #[test]
 fn hostile_bodies_never_panic_and_stay_within_the_limits() {
     let wild = Edge { width: 255, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX), indent: u8::MAX, between: wild });
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]) });
     let odd = |size: f32| Run {
         text: "odd \u{10ffff}\u{0}\n\n\t".repeat(20),
         style: Style { size: Some(size), family: Some(",,,;\"".into()), ..Style::default() },
@@ -449,7 +449,7 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
     let stop = |at, lead| Tab { at, kind: TabKind::Right, lead };
     let edge = Edge { width: 1, color: None, line: Line::Solid };
     let between = Edge { width: 2, color: Some([200, 0, 0]), line: Line::Solid };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4), indent: 0, between });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between, fill: None });
     let body = doc(vec![
         Block::Para(Para { tabs: vec![stop(160, Leader::Dots)], ..para("aa\t1") }),
         Block::Para(Para { tabs: vec![stop(160, Leader::None)], ..para("bb\t2") }),
@@ -485,9 +485,39 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
 
     // Hostile: lines of any width between many paragraphs, leaders with no room to stand in.
     let wild = Edge { width: u8::MAX, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX), indent: u8::MAX, between: wild });
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]) });
     let mut blocks: Vec<Block> = (0..300).map(|_| Block::Para(Para { frame: Some(frame.clone()), ..para("a") })).collect();
     blocks.push(Block::Para(Para { tabs: (1..40).map(|n| stop(n, Leader::ThickLine)).collect(), ..para(&"a\t".repeat(500)) }));
     blocks.push(Block::Para(Para { tabs: vec![stop(u16::MAX, Leader::Hyphens)], ..para("a\tb\t\t") }));
     within(&print(&doc(blocks), SMALL), SMALL);
+}
+
+#[test]
+fn a_filled_box_is_behind_its_paragraphs_with_its_room_on_each_side() {
+    let frame =
+        Arc::new(Frame { edges: Default::default(), padding: [6, 10, 14, 30], indent: 0, between: Edge::default(), fill: Some([0, 51, 102]) });
+    let boxed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
+    let body = doc(vec![Block::Para(para("before")), boxed("one"), boxed("two"), Block::Para(para("after"))]);
+    let printed = print(&body, Paper::A4);
+    let page = &printed.pages[0];
+    let find = |text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap();
+    let fills: Vec<_> = page.fills.iter().filter(|f| f.color == [0, 51, 102]).collect();
+    assert_eq!(fills.len(), 1, "one fill behind both paragraphs");
+    let fill = fills[0];
+    let (plain, one, two, after) = (find("before"), find("one"), find("two"), find("after"));
+    // The box is as wide as the text's room; its text stands in from the left by the room asked.
+    assert!((fill.x - plain.x).abs() < 0.01 && (one.x - fill.x - 30.0 * 0.75).abs() < 0.01, "{} {} {}", fill.x, plain.x, one.x);
+    assert!(fill.y < one.y - one.size * 0.5 && fill.y + fill.height > two.y + 14.0 * 0.75 - 0.01);
+    assert!(fill.y > plain.y && fill.y + fill.height < after.y);
+
+    // A box longer than a page is filled on each page it is on, inside the page's room.
+    let many: Vec<Block> = (0..80).map(|i| boxed(&format!("line {i}"))).collect();
+    let printed = print(&doc(many), SMALL);
+    assert!(printed.pages.len() > 2);
+    within(&printed, SMALL);
+    for page in &printed.pages {
+        let fills: Vec<_> = page.fills.iter().filter(|f| f.color == [0, 51, 102]).collect();
+        assert_eq!(fills.len(), 1);
+        assert!(fills[0].y >= 19.9 && fills[0].y + fills[0].height <= 280.1 && fills[0].height > 0.0);
+    }
 }

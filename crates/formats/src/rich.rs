@@ -200,12 +200,14 @@ pub fn any_edge(edges: &Edges) -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Frame {
     pub edges: Edges,
-    /// Room between the border and what it holds: above and below, then left and right.
-    pub padding: (u16, u16),
+    /// Room between the border and what it holds: above, right, below, left.
+    pub padding: [u16; 4],
     /// How far in the border itself stands, in the levels a paragraph's indent is counted in.
     pub indent: u8,
     /// The line between one paragraph and the next inside the border.
     pub between: Edge,
+    /// The colour the box is filled with, behind what it holds.
+    pub fill: Option<Rgb>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

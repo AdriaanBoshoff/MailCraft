@@ -40,8 +40,13 @@ fn text(text: &str, bold: bool, size: Option<f32>) -> Para {
 
 fn head(memo: &Memo) -> Vec<Block> {
     let line = Edge { width: 3, color: Some([0, 0, 0]), line: Line::Solid };
-    let frame =
-        Arc::new(Frame { edges: [Edge::default(), Edge::default(), line, Edge::default()], padding: (3, 0), indent: 0, between: Edge::default() });
+    let frame = Arc::new(Frame {
+        edges: [Edge::default(), Edge::default(), line, Edge::default()],
+        padding: [3, 0, 3, 0],
+        indent: 0,
+        between: Edge::default(),
+        fill: None,
+    });
     let mut owner = text(memo.owner, true, Some(12.0));
     owner.frame = Some(frame);
     let cell = |para: Para, width: u16| Cell { blocks: vec![Block::Para(para)], span: 1, rows: 1, width, padding: Some((1, 0)), ..Cell::default() };

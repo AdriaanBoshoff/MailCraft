@@ -256,6 +256,8 @@ struct Chars {
     tab_lead: Leader,
     /// The line between this paragraph and the next inside one border (`\brdrbtw`).
     between: Edge,
+    /// The colour behind the whole paragraph (`\cbpat`).
+    shade: Option<Rgb>,
     /// The height of the paragraph's lines (`\sl`), and whether it counts in 240ths of
     /// their own height (`\slmult1`) and not in twips.
     sl: i32,
@@ -486,6 +488,8 @@ impl Builder<'_> {
             "fs" => cur.style.size = param.map(|p| f32::from(u16::try_from(p.clamp(2, 800)).unwrap_or(24)) / 2.0),
             "cf" => cur.style.color = color(&self.colors),
             "highlight" | "cb" | "chcbpat" => cur.style.background = color(&self.colors),
+            // The colour behind a whole paragraph (RTF 1.9.1, "Paragraph Shading").
+            "cbpat" => cur.shade = color(&self.colors),
             "super" => cur.style.script = Script::Super,
             "sub" => cur.style.script = Script::Sub,
             "nosupersub" => cur.style.script = Script::None,
@@ -510,6 +514,7 @@ impl Builder<'_> {
                 (cur.left, cur.tab_kind, cur.tab_lead) = (0, TabKind::Left, Leader::None);
                 cur.tabs.clear();
                 cur.between = Edge::default();
+                cur.shade = None;
                 (cur.ls, cur.ilvl) = (None, 0);
                 (cur.sl, cur.sl_times) = (0, false);
             }
@@ -794,11 +799,12 @@ impl Builder<'_> {
     /// The border a paragraph stands inside: the one the paragraph before stands inside, when
     /// it is the same.
     fn frame_of(&mut self, cur: &Chars) -> Option<Arc<Frame>> {
-        if !any_edge(&cur.edges) {
+        if !any_edge(&cur.edges) && cur.shade.is_none() {
             return None;
         }
         // Where the body says nothing, a little room so that the text does not touch the lines.
-        let frame = Frame { edges: cur.edges, padding: (cur.pad.max(1), cur.pad.max(4)), indent: cur.indent, between: cur.between };
+        let (above, beside) = (cur.pad.max(1), cur.pad.max(4));
+        let frame = Frame { edges: cur.edges, padding: [above, beside, above, beside], indent: cur.indent, between: cur.between, fill: cur.shade };
         match &self.frame {
             Some(last) if **last == frame => Some(Arc::clone(last)),
             _ => {

@@ -251,7 +251,9 @@ struct Builder {
     clear: bool,
     /// The border and the padding the element being opened asks for in its style.
     css_border: Option<Edges>,
-    css_padding: Option<(u16, u16)>,
+    css_padding: Option<[u16; 4]>,
+    /// The background the element being opened asks for, as it is written.
+    css_fill: Option<Rgb>,
 }
 
 impl Builder {
@@ -707,11 +709,33 @@ impl Builder {
         let margin = self.common(name, attrs);
         // A border on a block is drawn round the paragraphs in it. On a quotation, the line at
         // its left is the quotation's bar.
-        if let Some(edges) = self.css_border.take().filter(any_edge)
-            && block
-            && !matches!(name, "body" | "html" | "blockquote")
-        {
-            self.fmt.frame = Some(Arc::new(Frame { edges, padding: self.css_padding.unwrap_or((0, 0)), indent: 0, between: Edge::default() }));
+        let edges = self.css_border.take().filter(any_edge).filter(|_| name != "blockquote");
+        let fill = self.css_fill.take();
+        let padding = self.css_padding.take().filter(|p| p.iter().any(|v| *v > 0));
+        if block && !matches!(name, "body" | "html") {
+            // A background on a block is behind all of it (CSS 2.1 section 14.2), and is not a
+            // highlight of its text. Inside a filled block, white is a colour like any other.
+            let within = self.fmt.frame.clone();
+            let inherited = within.as_ref().and_then(|f| f.fill);
+            if fill.is_some() {
+                self.fmt.style.background = None;
+            }
+            let fill = fill.and_then(|c| if inherited.is_some() { Some(c) } else { page_or(c) });
+            // Room alone makes a box only where there is none already: boxes do not stand
+            // inside one another here.
+            if edges.is_some() || fill.is_some() || (padding.is_some() && within.is_none()) {
+                let frame = Frame {
+                    edges: edges.unwrap_or_default(),
+                    padding: padding.unwrap_or_default(),
+                    indent: 0,
+                    between: Edge::default(),
+                    fill: fill.or(inherited),
+                };
+                self.fmt.frame = Some(match within {
+                    Some(same) if *same == frame => same,
+                    _ => Arc::new(frame),
+                });
+            }
         }
         // Word-processor paragraphs ("MsoNormal" and friends) are written with no margins.
         if margin == Some(false) || (name == "p" && attr(attrs, "class").is_some_and(|c| c.trim_start().to_ascii_lowercase().starts_with("mso"))) {
@@ -733,8 +757,10 @@ impl Builder {
         {
             self.fmt.align = a;
         }
+        self.css_fill = None;
         if let Some(c) = attr(attrs, "bgcolor").and_then(color) {
             self.fmt.style.background = page_or(c);
+            self.css_fill = Some(c);
         }
         if attr(attrs, "background").is_some_and(is_remote) {
             self.doc.remote_blocked += 1;
@@ -771,6 +797,7 @@ impl Builder {
                     }
                     if let Some(c) = color(v).or_else(|| v.split_whitespace().find_map(color)) {
                         style.background = page_or(c);
+                        self.css_fill = Some(c);
                     }
                 }
                 "font-weight" => match v {
@@ -837,7 +864,14 @@ impl Builder {
                         *e = edge(v);
                     }
                 }
-                "padding" => self.css_padding = cell_padding(v),
+                // Padding (CSS 2.1 section 8.4): all four sides, or one of them.
+                "padding" => self.css_padding = block_padding(v),
+                "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => {
+                    let side = ["padding-top", "padding-right", "padding-bottom", "padding-left"].iter().position(|p| *p == prop).unwrap_or(0);
+                    if let (Some(room), Some(slot)) = (pad_length(v), self.css_padding.get_or_insert_with(Default::default).get_mut(side)) {
+                        *slot = room;
+                    }
+                }
                 "clear" if matches!(v, "both" | "left" | "right" | "all") => {
                     self.end_para();
                     self.clear = true;
@@ -962,6 +996,8 @@ impl Builder {
     fn open_cell(&mut self, header: bool, span: u16) {
         self.end_para();
         let saved = self.fmt.clone();
+        // A box round the table is not a box round each paragraph in its cells.
+        self.fmt.frame = None;
         let open_len = self.open.len();
         let Some(t) = self.tables.last_mut() else { return };
         if t.rows.is_empty() {
@@ -1282,21 +1318,43 @@ fn cell_room(v: &str) -> Option<u16> {
 /// A cell's `padding`: above and below, then left and right. Lengths that depend on the text
 /// size, and percentages, are not understood.
 fn cell_padding(v: &str) -> Option<(u16, u16)> {
-    let length = |part: &str| {
-        let (number, scale) = match part.strip_suffix("pt") {
-            Some(points) => (points, 4.0 / 3.0),
-            None => (part.trim_end_matches("px"), 1.0),
-        };
-        let n = number.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
-        Some((n * scale).round().min(MAX_CELL_ROOM) as u16)
-    };
     let mut parts = v.split_whitespace();
-    let vertical = length(parts.next()?)?;
+    let vertical = pad_length(parts.next()?)?;
     let horizontal = match parts.next() {
-        Some(part) => length(part)?,
+        Some(part) => pad_length(part)?,
         None => vertical,
     };
     Some((vertical, horizontal))
+}
+
+/// One length of a `padding`, in pixels.
+fn pad_length(part: &str) -> Option<u16> {
+    let (number, scale) = match part.strip_suffix("pt") {
+        Some(points) => (points, 4.0 / 3.0),
+        None => (part.trim_end_matches("px"), 1.0),
+    };
+    let n = number.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+    Some((n * scale).round().min(MAX_CELL_ROOM) as u16)
+}
+
+/// A block's `padding`: above, right, below, left, from one to four lengths (CSS 2.1 section
+/// 8.4). Lengths that depend on the text size, and percentages, are not understood.
+fn block_padding(v: &str) -> Option<[u16; 4]> {
+    let mut given = [0u16; 4];
+    let mut count = 0usize;
+    for part in v.split_whitespace().take(5) {
+        // A fifth length makes it no padding at all.
+        *given.get_mut(count)? = pad_length(part)?;
+        count += 1;
+    }
+    let [a, b, c, d] = given;
+    match count {
+        1 => Some([a; 4]),
+        2 => Some([a, b, a, b]),
+        3 => Some([a, b, c, b]),
+        4 => Some([a, b, c, d]),
+        _ => None,
+    }
 }
 
 /// The value a list of declarations ends up giving one property, lower case.

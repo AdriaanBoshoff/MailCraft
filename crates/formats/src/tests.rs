@@ -592,7 +592,7 @@ fn borders_set_in_styles_are_kept_for_paragraphs_tables_and_cells() {
     // Paragraphs inside one bordered block share its border, so that it is drawn round them once.
     let (c, d) = (p[2].frame.as_ref().expect("c"), p[3].frame.as_ref().expect("d"));
     assert!(std::sync::Arc::ptr_eq(c, d));
-    assert_eq!((c.edges[0].line, c.padding), (Line::Dashed, (10, 10)));
+    assert_eq!((c.edges[0].line, c.padding), (Line::Dashed, [10; 4]));
     assert!(!std::sync::Arc::ptr_eq(p[0].frame.as_ref().expect("a"), p[1].frame.as_ref().expect("b")));
     let e = frame(4).expect("a line under");
     assert_eq!((e.edges[2].width, e.edges[2].line, e.edges[0].width), (3, Line::Double, 0));
@@ -1958,13 +1958,13 @@ fn rtf_paragraphs_have_borders_and_room_above() {
     // All four sides at once, and the room between the lines and the text.
     let boxed = p[1].frame.as_ref().unwrap();
     assert!(boxed.edges.iter().all(|e| (e.width, e.color, e.line) == (2, Some([0, 102, 153]), Line::Double)));
-    assert_eq!(boxed.padding, (5, 5));
+    assert_eq!(boxed.padding, [5; 4]);
     // Paragraphs that follow one another with the same border stand inside one.
     assert!(Arc::ptr_eq(boxed, p[2].frame.as_ref().unwrap()));
     // Sides of their own; where nothing is said of the room, the text still does not touch.
     let left = p[3].frame.as_ref().unwrap();
     assert_eq!(left.edges.map(|e| (e.width, e.line)), [(0, Line::Solid), (0, Line::Solid), (1, Line::Dotted), (3, Line::Solid)]);
-    assert_eq!(left.padding, (1, 4));
+    assert_eq!(left.padding, [1, 4, 1, 4]);
     // The same border written again is the same border: a side that is said to have no line
     // has none, and the line between paragraphs is not a side.
     assert!(Arc::ptr_eq(left, p[4].frame.as_ref().unwrap()));
@@ -2003,7 +2003,7 @@ fn hostile_rtf_paragraph_borders_and_spacing_never_panic() {
     for p in paras(&doc) {
         assert!(p.above <= 96 && p.lead() <= 108);
         if let Some(frame) = &p.frame {
-            assert!(frame.edges.iter().all(|e| e.width <= 12) && frame.padding.0 <= 64 && frame.padding.1 <= 64);
+            assert!(frame.edges.iter().all(|e| e.width <= 12) && frame.padding.iter().all(|v| *v <= 64));
         }
     }
 }
@@ -2299,4 +2299,70 @@ fn rtf_list_numbers_are_counted_where_the_writer_left_none() {
         }
     }
     assert!(paras(&doc).len() > 100);
+}
+
+#[test]
+fn blocks_have_fills_and_room_on_each_side() {
+    // CSS 2.1 section 14.2: a block's background is behind all of it. Section 8.4: padding.
+    let doc = parse(
+        "<div style=\"background:#036;padding:4px 8px 12px 16px;color:#fff\"><h2>Title</h2><p>Text <span style=\"background:#ff0\">marked</span></p>\
+         <div style=\"background-color:#ffffff;padding-left:9pt\">card</div></div>\
+         <p style=\"padding:6px 10px\">roomy</p>\
+         <p bgcolor=\"#cc0000\" style=\"border:1px solid #000;padding-top:3px;padding-bottom:5px\">both</p>\
+         <div style=\"background:#fefefe\">page</div>\
+         <div style=\"border:1px solid #000\"><p style=\"padding:20px\">inside</p></div>\
+         <blockquote style=\"background:#ddd;border-left:3px solid #999\">quoted</blockquote>\
+         <div style=\"background:#036\"><table border=1><tr><td>cell</td><td>two</td></tr></table>after</div>\
+         <p style=\"padding:1px 2px 3px 4px 5px\">five</p><p style=\"padding:0\">none</p><p style=\"padding:2em\">em</p>",
+    );
+    let p = paras(&doc);
+    let frame = |n: usize| p[n].frame.as_ref().unwrap();
+    assert_eq!(p[0].text(), "Title");
+    assert_eq!((frame(0).fill, frame(0).padding), (Some([0, 51, 102]), [4, 8, 12, 16]));
+    assert!(!crate::rich::any_edge(&frame(0).edges));
+    // The paragraphs of one block stand in one box, and their text is not highlighted.
+    assert!(Arc::ptr_eq(frame(0), frame(1)));
+    assert!(p[0].runs.iter().all(|r| r.style.background.is_none() && r.style.color == Some([255, 255, 255])));
+    assert_eq!(p[1].runs.iter().map(|r| r.style.background).collect::<Vec<_>>(), [None, Some([255, 255, 0])]);
+    // Inside a filled block, white is a colour: the card is white, with its own room.
+    assert_eq!((frame(2).fill, frame(2).padding), (Some([255, 255, 255]), [0, 0, 0, 12]));
+    // Room alone is a box with no lines and no fill.
+    assert_eq!((frame(3).fill, frame(3).padding, crate::rich::any_edge(&frame(3).edges)), (None, [6, 10, 6, 10], false));
+    assert_eq!((frame(4).fill, frame(4).padding, frame(4).edges[0].width), (Some([204, 0, 0]), [3, 0, 5, 0], 1));
+    // On the page itself, white is no fill.
+    assert_eq!((p[5].text(), p[5].frame.is_none()), ("page".to_string(), true));
+    // Room asked for inside a box that is there already does not take the box away.
+    assert_eq!((frame(6).edges[0].width, frame(6).padding), (1, [0; 4]));
+    // A quotation's line at the left is its bar; its fill is a fill.
+    assert_eq!((p[7].quote, frame(7).fill, crate::rich::any_edge(&frame(7).edges)), (1, Some([221, 221, 221]), false));
+    // A table inside a filled block: its cells' paragraphs are not boxes of their own.
+    let Some(Block::Table(table)) = doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    assert!(matches!(&table.rows[0][0].blocks[0], Block::Para(q) if q.frame.is_none()));
+    assert_eq!((p[8].text(), frame(8).fill), ("after".to_string(), Some([0, 51, 102])));
+    // More lengths than four, none, and lengths that are not understood.
+    assert!(p[9].frame.is_none() && p[10].frame.is_none() && p[11].frame.is_none());
+
+    // RTF 1.9.1, "Paragraph Shading": `\cbpat` is the colour behind the paragraph.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\colortbl;\\red255\\green242\\blue204;}\\pard\\cbpat1 shaded\\par same\\par \\pard plain\\par \
+          \\pard\\cbpat9 none\\par \\pard\\box\\brdrs\\cbpat1 both\\par}",
+    );
+    let p = paras(&doc);
+    assert_eq!(p[0].frame.as_ref().unwrap().fill, Some([255, 242, 204]));
+    assert!(Arc::ptr_eq(p[0].frame.as_ref().unwrap(), p[1].frame.as_ref().unwrap()));
+    assert!(p[2].frame.is_none() && p[3].frame.is_none());
+    let both = p[4].frame.as_ref().unwrap();
+    assert_eq!((both.fill, both.edges[0].width > 0), (Some([255, 242, 204]), true));
+
+    // Hostile: thousands of filled blocks inside one another, and room of any size.
+    let mut body = String::new();
+    for i in 0..3000 {
+        body.push_str(&format!("<div style=\"background:#{:06x};padding:{}px 99999999px -4px 1e39px;padding-left:{}pt\">x", i * 5000, i, u64::MAX));
+    }
+    let doc = parse(&body);
+    for p in paras(&doc) {
+        if let Some(frame) = &p.frame {
+            assert!(frame.padding.iter().all(|v| *v <= 64));
+        }
+    }
 }
