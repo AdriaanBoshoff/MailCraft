@@ -23,7 +23,8 @@ const USAGE: &str = "usage:
   openmailclient-cli commands                      list every command id
   openmailclient-cli parity                        Outlook Classic feature checklist (Markdown)
   openmailclient-cli inspect <file> [--check]      folders of a .pst/.ost, or the header of a .msg/.eml;
-                                              --check also loads every item and counts failures
+                                              --check also loads every item and counts failures,
+                                              and holds the file's structure against the format
   openmailclient-cli convert <in> <out>            .msg/.oft/.eml to .msg/.oft/.eml
   openmailclient-cli run [--template sample] [--open <file>]... [--cmd id[=json]]... [--save <out>]
                                               run commands in order; --save writes the open item";
@@ -117,6 +118,28 @@ fn inspect(path: &Path, check: bool) -> Result<(), String> {
             }
             if check {
                 println!("check: {listed} rows listed, {loaded} items loaded, {failed} failed");
+                match io::check_structure(path).map_err(|e| e.to_string())? {
+                    None => println!("structure: not checked for this kind of data file yet"),
+                    Some(s) => {
+                        println!(
+                            "structure: {} pages, {} blocks, {} nodes, {} bytes free, {} problems",
+                            s.pages,
+                            s.blocks,
+                            s.nodes,
+                            s.free,
+                            s.problems.len() as u64 + s.more
+                        );
+                        for p in &s.problems {
+                            println!("  {p}");
+                        }
+                        if s.more > 0 {
+                            println!("  and {} more", s.more);
+                        }
+                        if !s.problems.is_empty() {
+                            return Err("the structure of the file is not sound".into());
+                        }
+                    }
+                }
                 if failed > 0 {
                     return Err(format!("{failed} items could not be loaded"));
                 }

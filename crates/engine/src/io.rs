@@ -33,6 +33,29 @@ fn kind_by_extension(path: &Path) -> Option<Kind> {
     }
 }
 
+/// What a look at a data file's structure found (`openmailclient_pst::check`).
+pub struct Structure {
+    pub pages: u64,
+    pub blocks: u64,
+    pub nodes: u64,
+    pub free: u64,
+    pub problems: Vec<String>,
+    /// Problems beyond the ones spelled out.
+    pub more: u64,
+}
+
+/// Hold a data file's structure against the format: checksums, allocation maps, the two indexes
+/// and the reference counts. Read-only. `None` for a kind of data file that is not checked yet.
+pub fn check_structure(path: &Path) -> Result<Option<Structure>, EngineError> {
+    let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
+    match openmailclient_pst::check(&mut file) {
+        Ok(c) => Ok(Some(Structure { pages: c.pages, blocks: c.blocks, nodes: c.nodes, free: c.free, problems: c.problems, more: c.more })),
+        Err(openmailclient_pst::PstError::Unsupported(_)) => Ok(None),
+        Err(openmailclient_pst::PstError::Io(e)) => Err(EngineError::Io(e)),
+        Err(e) => Err(EngineError::Format(e.to_string())),
+    }
+}
+
 /// Open a file read-only. The extension decides; without a known one, the first bytes do.
 pub fn open_path(path: &Path) -> Result<Opened, EngineError> {
     let mut file = std::fs::File::open(path)?;

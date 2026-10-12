@@ -1,16 +1,24 @@
-//! Outlook data files: `.pst` and `.ost` ([MS-PST]), read-only.
+//! Outlook data files: `.pst` and `.ost` ([MS-PST]).
 //!
 //! A data file is three layers: the node database (`ndb`: blocks and two B-trees that index
 //! them), lists/tables/properties on top of nodes (`ltp`), and the messaging layer here, which
 //! says which node is a folder, a message, a recipient table or an attachment ([MS-PST] 2.4).
 //!
-//! Nothing in this crate writes. The file is opened read-only and stays untouched.
+//! Opening is read-only and leaves the file untouched. Writing (`write`) always makes a whole
+//! new file, never a change inside an existing one; so far it reaches the node database, the
+//! lowest of the three layers. `check` holds a file's structure against the specification.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod check;
 mod crypt;
 mod crypt_table;
 mod ltp;
 mod ndb;
+// The writer's first caller outside the tests is the messaging layer (M3.3).
+#[cfg_attr(not(test), allow(dead_code))]
+mod write;
+
+pub use check::{Check, check};
 
 use ltp::Raw;
 use ndb::{Ndb, Subnodes, u32_at};
@@ -30,6 +38,8 @@ pub enum PstError {
     Unsupported(String),
     #[error("the data file is damaged: {0}")]
     Damaged(String),
+    #[error("the data file cannot be written: {0}")]
+    Write(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -322,3 +332,5 @@ impl Store for PstStore {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_write;

@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 5 · 2026-10-11 · RTF-only and inline-picture `.msg` files checked in Outlook; RTF bodies are decoded for reading
+**Status:** revision 6 · 2026-10-12 · the node database of a `.pst` is written (M3.1), not yet anything Outlook can open
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -45,7 +45,25 @@ Outlook window (only the automation interface was used).
 
 ## `.pst` and `.ost` ([MS-PST])
 
-Read only. See [gaps.md](gaps.md) items 2, 7 and 8.
+Read: ANSI, Unicode and 4K-page files. See [gaps.md](gaps.md) items 2, 7 and 8.
+
+Written so far (M3.1), Unicode with 512-byte pages only:
+
+| Part ([MS-PST]) | Written | Checked by |
+|---|---|---|
+| Header, both checksums (2.2.2.6) | yes | our reader, our structure check; the checksum against the specification's sample header |
+| Allocation maps, page maps, density list (2.2.2.7.2 to 2.2.2.7.4) | yes | our structure check |
+| Free map and free page map pages (2.2.2.7.5, 2.2.2.7.6) | yes; their places are worked out, the specification gives none | a 33 MB file of ours; no Outlook-written file |
+| Blocks, plain, permuted and cyclic (2.2.2.8) | yes | read back in each encoding |
+| Data trees, one and two levels (2.2.2.8.3.2) | yes | read back, 33 MB item |
+| Subnode trees with an index block (2.2.2.8.3.3) | yes | read back, 800 subnodes |
+| Block and node B-trees (2.2.2.7.7) | yes | read back, 1,000 nodes |
+| Heaps, property lists, tables (2.3) | no | M3.2 |
+| Folders, messages, the nodes every file must have (2.4, 2.7) | no | M3.3 |
+
+No file from this writer has been opened in Outlook: there is nothing above the node layer to
+open yet. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
+the format (ANSI and 4K-page files are not checked yet).
 
 ## `.eml` (RFC 5322, MIME)
 

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 47 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress · revision 48 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 216, all passing |
+| Tests | 224, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -18,7 +18,7 @@
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
-| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
+| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: the node database is written (M3.1) |
 | M3b | The do-later batch from M2 (see "Do later (from M2)") | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -82,7 +82,8 @@
 31. Done: M2 is closed; what it leaves is scheduled under "Do later (from M2)".
 32. Done: right-to-left text is drawn and printed in the order it is read, and Arabic letters are joined (M2.41).
 33. Done: print shapes text from each font's own tables, and a PDF says what its glyphs stand for (M2.42).
-34. Next: M3 (writing `.pst`).
+34. Done: the node database of a `.pst` is written, and a data file's structure can be checked (M3.1).
+35. Next: M3.2 (writing the heaps, property lists and tables that sit on nodes), then M3.3 (folders and messages, save as `.pst`).
 
 ## Do later (from M2)
 
@@ -99,6 +100,10 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | Keeping the page setup between runs | M3, with the first settings that are saved |
+| A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile) | M3.3, when there is a mailbox to open |
+| The structure check for ANSI and 4K-page (`.ost`) files | M3b |
+| The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
+| Writing ANSI and 4K-page data files (a re-saved file keeps its kind) | M3b |
 | The selected rows only, the view's own columns and group headings in Table Style | M3b, the batch after M3 |
 | A zoom in the print preview | M3b |
 | SVG, WebP and TIFF pictures; GIF animation | M3b |
@@ -608,3 +613,27 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   300 damaged copies of them) and by looking at a printed page of our own text in Latin,
   Arabic, Hebrew, Devanagari and Thai with the fonts installed here; no PDF reader's copying
   was tried, and Outlook's printing of the same text was not compared.
+- **2026-10-12** - M3.1: the lowest layer of a `.pst` is written. `crates/pst/src/write.rs` makes a whole
+  Unicode data file (512-byte pages, the kind Outlook 2003 and later open) from blocks and
+  nodes: the header with both checksums, an allocation map in front of every 253,952 bytes and
+  the page maps older readers expect, the density list, blocks with their trailers, data trees
+  of one and two levels for items up to 4 GB, subnode trees with an index block, and the two
+  B-trees of pages, with every reference count kept. Blocks can be left plain or encoded either
+  way Outlook does. A file is always written whole and front to back, never changed in place,
+  which is what the temporary-file-and-swap of M3.4 needs. Nothing a user can reach writes a
+  `.pst` yet: the layers above (M3.2, M3.3) are next. Made better on the way: blocks with the
+  same bytes are stored once and counted (the same attachment in fifty messages is one set of
+  blocks; the format allows it through its reference counts); and
+  `openmailclient-cli inspect file.pst --check` now also holds the file's structure against
+  the format - header checksums, allocation maps, every page and block checksum and signature,
+  blocks that overlap or lie in space called free, and reference counts - where it only loaded
+  every item before (opening a mailbox checks no checksums). The check reads only; it covers
+  Unicode files with 512-byte pages and says so for ANSI and 4K-page files (slot: M3b).
+  Checked by 8 tests: what is written is read back by our reader in all three encodings, a
+  33 MB item across 133 sections, 800 subnodes, 1,000 nodes, refusals for what the format cannot
+  hold, and 400 damaged copies that the check and the reader survive. Not checked: no file
+  from this writer has been opened in Outlook (there is nothing above the node layer to open
+  yet), and the places of the free map and free page map pages in files over 32 MB and 2 GB are
+  worked out from the coverage the specification gives, not compared with a file Outlook wrote.
+  The bit order of the allocation maps was seen in the structure of a local data file; our
+  files fill them in whole bytes, so they do not depend on it.

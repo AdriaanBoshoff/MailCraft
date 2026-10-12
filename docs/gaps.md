@@ -1,12 +1,14 @@
 # Gaps
 
-**Status:** revision 37 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 38 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 1. **No accounts, no sending, no receiving.** IMAP, POP3, SMTP and Exchange are absent. `compose.send`
    files the message in Outbox and says so.
-2. **`.pst`/`.ost` are read-only.** No writer exists; every change to such a store is refused. Changes
+2. **`.pst`/`.ost` are read-only.** The writer reaches the node database only (M3.1: blocks, nodes,
+   maps and indexes, read back by our reader, never opened in Outlook); property lists, tables, folders
+   and messages are M3.2 and M3.3, so every change to such a store is still refused. Changes
    made in the sample mailbox live in memory and are lost on exit.
 3. **Formatted bodies are partly drawn.** Every "not yet" below has a slot in
    [ROADMAP.md](../ROADMAP.md#do-later-from-m2). HTML bodies show text styles, colours, headings, lists,
@@ -71,6 +73,7 @@
 
 ## Revision history
 
+- 38 · 2026-10-12 — the node database of a `.pst` is written (item 2); a structure check exists (item 7).
 - 37 · 2026-10-12 — shaping from the font's own tables in print (item 1).
 - 36 · 2026-10-12 — right-to-left text and joined Arabic letters (item 1).
 - 35 · 2026-10-12 — what item 3 leaves is scheduled in ROADMAP.md, "Do later (from M2)".

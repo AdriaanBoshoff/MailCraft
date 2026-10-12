@@ -13,8 +13,7 @@ pub(crate) fn permute_decode(data: &mut [u8]) {
     }
 }
 
-/// NDB_CRYPT_PERMUTE, encoding direction: each byte through mpbbR. Only fixtures are written so far.
-#[cfg(test)]
+/// NDB_CRYPT_PERMUTE, encoding direction: each byte through mpbbR.
 pub(crate) fn permute_encode(data: &mut [u8]) {
     for b in data {
         *b = table(0, *b);
