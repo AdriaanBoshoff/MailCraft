@@ -19,7 +19,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "Ctrl+O",
-            params: r#"{"path": a .pst, .ost, .msg, .oft or .eml file}; opened read-only"#,
+            params: r#"{"path": a .pst, .ost, .msg, .oft or .eml file}; nothing is written to it until file.save"#,
             enabled: always,
             run: open,
         },
@@ -42,6 +42,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"path": target ending in .msg, .oft or .eml, or a folder to save it in under its subject without replacing anything; "format": "msg" (default), "eml" or "oft" for a folder}"#,
             enabled: has_selection,
             run: save_as,
+        },
+        CommandSpec {
+            id: "file.save",
+            label: "Save Changes",
+            tab: "File",
+            group: "Save",
+            shortcut: "Ctrl+S",
+            params: r#"{"store": index}; default: every data file with unsaved changes. The data file is written anew beside itself, checked, read back and only then put in the old one's place; returns {"saved": how many, "kept": where each file as it first was is kept}"#,
+            enabled: unsaved,
+            run: save,
         },
         CommandSpec {
             id: "file.export",
@@ -109,7 +119,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "Folder",
             group: "Actions",
             shortcut: "",
-            params: r#"{"store": index}; default: the current one"#,
+            params: r#"{"store": index (default: the current one), "save": true or "discard": true when it has unsaved changes}"#,
             enabled: has_store,
             run: close_store,
         },
@@ -118,6 +128,41 @@ pub(super) fn commands() -> Vec<CommandSpec> {
 
 fn has_store(s: &Session) -> bool {
     !s.stores.is_empty()
+}
+
+fn unsaved(s: &Session) -> bool {
+    s.unsaved()
+}
+
+/// Put the changes made to data files into them.
+fn save(s: &mut Session, p: &Value) -> CmdResult {
+    let which: Vec<usize> = match p_u64(p, "store") {
+        Some(i) => {
+            let idx = usize::try_from(i).unwrap_or(usize::MAX);
+            if idx >= s.stores.len() {
+                return Err(EngineError::BadParams(format!("there is no data file {idx}")));
+            }
+            vec![idx]
+        }
+        None => (0..s.stores.len()).collect(),
+    };
+    let (mut saved, mut kept) = (Vec::new(), Vec::new());
+    for idx in which {
+        let id = io::new_store_id(s.now);
+        let Some(store) = s.stores.get_mut(idx).filter(|st| st.unsaved()) else { continue };
+        store.save(id)?;
+        saved.push(store.display_name());
+        if let Some(original) = store.path().map(openmailclient_pst::original_beside).filter(|o| o.exists()) {
+            kept.push(original.display().to_string());
+        }
+        s.refresh_folders(idx);
+    }
+    s.status = match saved.as_slice() {
+        [] => "There are no unsaved changes".to_string(),
+        [one] => format!("Saved {one}"),
+        many => format!("Saved {} data files", many.len()),
+    };
+    Ok(json!({ "saved": saved.len(), "kept": kept }))
 }
 
 fn open(s: &mut Session, p: &Value) -> CmdResult {
@@ -134,7 +179,8 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
             let name = store.display_name();
             let idx = s.add_store(store);
             s.select_default_folder(idx);
-            s.status = format!("Opened {name} (read-only)");
+            let mode = if s.stores.get(idx).is_some_and(|st| st.writable()) { "changes are kept when saved" } else { "read-only" };
+            s.status = format!("Opened {name} ({mode})");
             Ok(json!({ "store": idx }))
         }
         Opened::Item(item) => {
@@ -377,6 +423,16 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
     };
     if idx >= s.stores.len() {
         return Err(EngineError::BadParams(format!("there is no data file {idx}")));
+    }
+    // Changes are not thrown away, and a file is not written, without being asked.
+    if s.stores.get(idx).is_some_and(|st| st.unsaved()) {
+        if p_bool(p, "save").unwrap_or(false) {
+            save(s, &json!({ "store": idx }))?;
+        } else if !p_bool(p, "discard").unwrap_or(false) {
+            return Err(EngineError::BadParams(
+                r#"the data file has unsaved changes: file.save first, or close it with {"save": true} or {"discard": true}"#.into(),
+            ));
+        }
     }
     s.stores.remove(idx);
     // The steps name data files by their place in the list, which has just changed.

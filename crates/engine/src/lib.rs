@@ -462,6 +462,11 @@ impl Session {
         Ok(())
     }
 
+    /// True when a data file has changes that are not in the file yet.
+    pub fn unsaved(&self) -> bool {
+        self.stores.iter().any(|s| s.unsaved())
+    }
+
     /// The store new mail and loose files go to: the current one if writable, else the first writable.
     pub fn writable_store(&self) -> Option<usize> {
         if let Some((s, _)) = self.current
@@ -486,6 +491,7 @@ impl Session {
                     "name": s.display_name(),
                     "path": s.path().map(|p| p.display().to_string()),
                     "writable": s.writable(),
+                    "unsaved": s.unsaved(),
                     "folders": folders.iter().map(|f| json!({
                         "id": f.id.0, "parent": f.parent.map(|p| p.0), "name": f.name, "kind": format!("{:?}", f.kind),
                         "total": f.total, "unread": f.unread,

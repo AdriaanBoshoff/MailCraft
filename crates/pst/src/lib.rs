@@ -12,6 +12,7 @@
 mod check;
 mod crypt;
 mod crypt_table;
+mod edit;
 mod ltp;
 mod ltp_write;
 mod ndb;
@@ -19,6 +20,7 @@ mod store_write;
 mod write;
 
 pub use check::{Check, check};
+pub use edit::original_beside;
 pub use store_write::{Written, write_store};
 
 use ltp::Raw;
@@ -83,10 +85,14 @@ pub struct PstStore {
     names: Vec<Option<NamedKey>>,
     root: u32,
     special: HashMap<u32, FolderKind>,
+    /// Changes made and not yet saved.
+    edits: Option<edit::Edits>,
+    /// The file's length and time of writing when it was opened or last saved.
+    stamp: Option<(u64, std::time::SystemTime)>,
 }
 
 impl PstStore {
-    /// Open a data file read-only.
+    /// Open a data file. Nothing is written to it until changes are saved.
     pub fn open(path: &Path) -> Result<Self, PstError> {
         let file = std::fs::File::open(path)?;
         let mut store = Self::from_source(Box::new(file))?;
@@ -94,6 +100,7 @@ impl PstStore {
             store.name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         }
         store.path = Some(path.to_path_buf());
+        store.note_stamp();
         Ok(store)
     }
 
@@ -104,7 +111,16 @@ impl PstStore {
 
     fn from_source(src: Box<dyn ndb::Source>) -> Result<Self, PstError> {
         let ndb = Ndb::open(src)?;
-        let mut store = Self { ndb, path: None, name: String::new(), names: Vec::new(), root: NID_ROOT_FOLDER, special: HashMap::new() };
+        let mut store = Self {
+            ndb,
+            path: None,
+            name: String::new(),
+            names: Vec::new(),
+            root: NID_ROOT_FOLDER,
+            special: HashMap::new(),
+            edits: None,
+            stamp: None,
+        };
         // The message store node ([MS-PST] 2.4.3): display name and the entry ids of the special folders.
         if let Ok((bag, _)) = store.node_props(NID_MESSAGE_STORE) {
             store.name = bag.str(pid::DISPLAY_NAME).unwrap_or("").to_string();
@@ -258,24 +274,9 @@ impl PstStore {
         s.has_attachments = item.flags() & MSGFLAG_HASATTACH != 0;
         s
     }
-}
 
-/// The code page of an object's 8-bit strings: its own, else Windows-1252.
-fn code_page(raws: &[Raw]) -> u32 {
-    let own = |want: u16| raws.iter().find(|r| r.id == want && r.ty == ptype::INT32).and_then(|r| u32_at(&r.data, 0)).filter(|c| *c != 0);
-    own(pid::MESSAGE_CODEPAGE).or_else(|| own(pid::INTERNET_CODEPAGE)).unwrap_or(1252)
-}
-
-impl Store for PstStore {
-    fn display_name(&self) -> String {
-        if self.name.is_empty() { "Outlook Data File".to_string() } else { self.name.clone() }
-    }
-
-    fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-
-    fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
+    /// The folders as the file has them.
+    fn file_folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
         let mut out: Vec<FolderInfo> = Vec::new();
         let mut seen: HashSet<u32> = HashSet::from([self.root]);
         // Each folder is followed by everything inside it, as a folder pane shows them.
@@ -308,7 +309,8 @@ impl Store for PstStore {
         Ok(out)
     }
 
-    fn list(&mut self, folder: FolderId) -> Result<Vec<Summary>, StoreError> {
+    /// A folder's messages as the file has them.
+    fn file_list(&mut self, folder: FolderId) -> Result<Vec<Summary>, StoreError> {
         let nid = u32::try_from(folder.0).map_err(|_| StoreError::NoFolder)?;
         if !self.ndb.nbt.contains_key(&nid) {
             return Err(StoreError::NoFolder);
@@ -330,15 +332,85 @@ impl Store for PstStore {
         Ok(nids.into_iter().filter_map(|n| self.node_props(n).ok().map(|(bag, _)| self.summary(n, bag))).collect())
     }
 
-    fn load(&mut self, _folder: FolderId, id: ItemId) -> Result<Item, StoreError> {
+    fn file_load(&mut self, id: ItemId) -> Result<Item, StoreError> {
         let nid = u32::try_from(id.0).map_err(|_| StoreError::NoItem)?;
         let (data, sub) = self.node(nid).map_err(|_| StoreError::NoItem)?;
         Ok(self.message(data, sub, 0)?)
     }
 }
 
+/// The code page of an object's 8-bit strings: its own, else Windows-1252.
+fn code_page(raws: &[Raw]) -> u32 {
+    let own = |want: u16| raws.iter().find(|r| r.id == want && r.ty == ptype::INT32).and_then(|r| u32_at(&r.data, 0)).filter(|c| *c != 0);
+    own(pid::MESSAGE_CODEPAGE).or_else(|| own(pid::INTERNET_CODEPAGE)).unwrap_or(1252)
+}
+
+impl Store for PstStore {
+    fn display_name(&self) -> String {
+        if self.name.is_empty() { "Outlook Data File".to_string() } else { self.name.clone() }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
+        self.e_folders()
+    }
+
+    fn list(&mut self, folder: FolderId) -> Result<Vec<Summary>, StoreError> {
+        self.e_list(folder)
+    }
+
+    fn load(&mut self, folder: FolderId, id: ItemId) -> Result<Item, StoreError> {
+        self.e_load(folder, id)
+    }
+
+    fn writable(&self) -> bool {
+        self.can_edit()
+    }
+
+    fn unsaved(&self) -> bool {
+        self.e_unsaved()
+    }
+
+    fn save(&mut self, seed: [u8; 16]) -> Result<(), StoreError> {
+        self.e_save(seed)
+    }
+
+    fn update(&mut self, folder: FolderId, id: ItemId, item: Item) -> Result<(), StoreError> {
+        self.e_update(folder, id, item)
+    }
+
+    fn add(&mut self, folder: FolderId, item: Item) -> Result<ItemId, StoreError> {
+        self.e_add(folder, item)
+    }
+
+    fn remove(&mut self, folder: FolderId, id: ItemId) -> Result<Item, StoreError> {
+        self.e_remove(folder, id)
+    }
+
+    fn create_folder(&mut self, parent: FolderId, name: &str) -> Result<FolderId, StoreError> {
+        self.e_create_folder(parent, name)
+    }
+
+    fn rename_folder(&mut self, folder: FolderId, name: &str) -> Result<(), StoreError> {
+        self.e_rename_folder(folder, name)
+    }
+
+    fn delete_folder(&mut self, folder: FolderId) -> Result<(), StoreError> {
+        self.e_delete_folder(folder)
+    }
+
+    fn move_folder(&mut self, folder: FolderId, parent: FolderId) -> Result<(), StoreError> {
+        self.e_move_folder(folder, parent)
+    }
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_edit;
 #[cfg(test)]
 mod tests_store;
 #[cfg(test)]

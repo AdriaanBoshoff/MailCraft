@@ -1,17 +1,18 @@
 # Gaps
 
-**Status:** revision 40 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 41 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 1. **No accounts, no sending, no receiving.** IMAP, POP3, SMTP and Exchange are absent. `compose.send`
    files the message in Outbox and says so.
-2. **An open `.pst`/`.ost` cannot be changed.** A whole mailbox is saved as a new `.pst`
-   (`file.export`, M3.3), read back by our reader and never opened in Outlook; hidden (associated)
-   items and folder properties beyond name, class and counts are not carried, and the new file
-   does not say which folder is the Calendar or Contacts. Every change to a store read from disk
-   is still refused (M3.4). Changes made in the sample mailbox live in memory and are lost on
-   exit unless exported.
+2. **Changes to a data file are kept only when saved, and only for a Unicode `.pst`.** `file.save`
+   (M3.4) rewrites the whole file beside itself and swaps it in; nothing we write has been opened in
+   Outlook. Changes are not journalled as they are made, so a crash loses what was not saved (never
+   the file). An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` (M3.3) goes
+   through the model: hidden (associated) items and folder properties beyond name, class and counts
+   are not carried, and the new file does not say which folder is the Calendar or Contacts. Changes
+   made in the sample mailbox live in memory and are lost on exit unless exported.
 3. **Formatted bodies are partly drawn.** Every "not yet" below has a slot in
    [ROADMAP.md](../ROADMAP.md#do-later-from-m2). HTML bodies show text styles, colours, headings, lists,
    quotations, rules and tables, and pictures the message carries as attachments (`cid:`) or
@@ -75,6 +76,7 @@
 
 ## Revision history
 
+- 41 · 2026-10-12 — M3.4: changes to an open Unicode `.pst` are kept by `file.save`; `.ost`, ANSI and 4K-page files stay read-only.
 - 40 · 2026-10-12 — M3.3: a mailbox is saved as a new `.pst` (`file.export`); changing an open `.pst` is M3.4.
 - 39 · 2026-10-12 — property lists and tables of a `.pst` are written (item 2).
 - 38 · 2026-10-12 — the node database of a `.pst` is written (item 2); a structure check exists (item 7).

@@ -148,7 +148,7 @@ pub struct Summary {
     pub categories: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Attachment {
     pub props: PropBag,
     pub data: Vec<u8>,
@@ -207,7 +207,7 @@ pub const MSGFLAG_UNSENT: i32 = 0x08;
 pub const MSGFLAG_HASATTACH: i32 = 0x10;
 
 /// A message, appointment, contact or task: a property bag plus recipient and attachment tables.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Item {
     pub props: PropBag,
     pub recipients: Vec<PropBag>,
@@ -512,6 +512,15 @@ pub trait Store {
     }
     fn writable(&self) -> bool {
         false
+    }
+    /// True when changes were made that `save` has not yet put where the store is kept.
+    fn unsaved(&self) -> bool {
+        false
+    }
+    /// Put the changes made so far where the store is kept. `seed` is 16 unpredictable bytes
+    /// for the ids of what is new. A store that keeps nothing anywhere has nothing to do.
+    fn save(&mut self, _seed: [u8; 16]) -> Result<(), StoreError> {
+        Ok(())
     }
     /// Every folder under the visible root (the "IPM subtree"), parents before children.
     fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError>;

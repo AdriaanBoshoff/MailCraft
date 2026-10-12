@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 8 · 2026-10-12 · a whole mailbox is saved as a new Unicode `.pst` (M3.3), read back by our reader, not yet opened in Outlook
+**Status:** revision 9 · 2026-10-12 · changes to an open Unicode `.pst` are kept when saved (M3.4): what was not changed is copied as stored; read back by our reader, not yet opened in Outlook
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -67,13 +67,17 @@ Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 | Messages with recipients and attachments (2.4.5, 2.4.6) | yes; properties we do not understand go out as they were read | read back, sample mailbox and three local files (counts only) |
 | A message attached to a message (2.4.6.2.3) | yes, to 32 deep; where it is kept is our reading | read back |
 | Named properties (2.4.7) | yes; the bucket of a name is our reading | read back, 600 names |
-| Hidden (associated) items; folder properties beyond name, class and counts | no | M3.4 |
-| Which folder is the Calendar, Contacts, Tasks (ids on the root and the Inbox) | no | M3.4 |
-| Changing a file that is open | no | M3.4 |
+| Hidden (associated) items; folder properties beyond name, class and counts | kept by `file.save` (copied as stored); not carried by `file.export` | a hidden message and a folder property our writer never makes survive a save |
+| Which folder is the Calendar, Contacts, Tasks (ids on the root and the Inbox) | kept by `file.save`; not written by `file.export` | M3b |
+| Changing a Unicode `.pst` that is open (`file.save`) | yes: nodes not touched are copied block for block; a changed message keeps every stored property that was not changed, also those under ids no name stands for | read back: messages changed, moved, deleted and added, folders made, renamed, moved and deleted; damaged files; three local copies (counts only) |
+| Changing an ANSI `.pst`, a 4K-page file, an `.ost` | no: read-only | M3b (an `.ost` never) |
 
 No file from this writer has been opened in Outlook: that adds a data file to the owner's
 profile and waits for their say. `file.export` writes the new file beside the target, holds it
-against the structure check and only then puts it in the target's place. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
+against the structure check and only then puts it in the target's place. `file.save` does the
+same for an open file, reads the new file back and compares it with what was shown, refuses
+when another program wrote the file since it was opened or has it open, and on the first save
+keeps the file as it was beside it (`name.before-openmailclient.pst`). `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
 the format (ANSI and 4K-page files are not checked yet).
 
 ## `.eml` (RFC 5322, MIME)

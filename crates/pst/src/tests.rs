@@ -463,7 +463,8 @@ fn sample(wide: bool, crypt: u8) -> Vec<u8> {
 fn check(wide: bool, crypt: u8) {
     let mut store = PstStore::from_bytes(sample(wide, crypt)).unwrap();
     assert_eq!(store.display_name(), "Test Mailbox");
-    assert!(!store.writable());
+    // Changes to a Unicode file can be kept; an ANSI file is only read.
+    assert_eq!(store.writable(), wide);
     let folders = store.folders().unwrap();
     let names: Vec<&str> = folders.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["Inbox", "Projects", "Recycle"]);
@@ -501,7 +502,7 @@ fn check(wide: bool, crypt: u8) {
     assert_eq!(loose.iter().map(|s| s.subject.as_str()).collect::<Vec<_>>(), ["Loose"]);
     assert!(matches!(store.list(FolderId(0xDEAD_BEEF)), Err(StoreError::NoFolder)));
     assert!(matches!(store.load(inbox.id, ItemId(0x7777)), Err(StoreError::NoItem)));
-    assert!(matches!(store.add(inbox.id, Item::new_mail()), Err(StoreError::ReadOnly)));
+    assert_eq!(matches!(store.add(inbox.id, Item::new_mail()), Err(StoreError::ReadOnly)), !wide);
 }
 
 #[test]

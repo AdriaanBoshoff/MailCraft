@@ -252,6 +252,11 @@ impl Ndb {
         Ok(out)
     }
 
+    /// How many blocks the file has.
+    pub(crate) fn block_count(&self) -> usize {
+        self.bbt.len()
+    }
+
     /// A node's data as one buffer.
     pub(crate) fn data(&mut self, bid: u64) -> Result<Vec<u8>, PstError> {
         Ok(self.data_blocks(bid)?.concat())

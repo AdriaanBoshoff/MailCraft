@@ -467,10 +467,11 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 10] = [
+        let entries: [(Icon, &str, &str, Value); 11] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
+            (Icon::Save, "Save Changes", "file.save", Value::Null),
             (Icon::Save, "Save Message As…", "ui.saveAsDialog", Value::Null),
             (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
             (Icon::Clip, "Save All Attachments…", "ui.saveAllAttachmentsDialog", Value::Null),
@@ -527,13 +528,17 @@ impl MailUi {
             p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(4.0, 40.0)), 2.0, t.accent);
             clip_text(&p, pos2(x + 14.0, y), width, &store.display_name(), bold(14.0), t.text);
             let location = store.path().map_or_else(|| "In memory (not saved to disk)".to_string(), |path| path.display().to_string());
-            let mode = if store.writable() { "editable" } else { "read-only" };
+            let mode = match (store.writable(), store.unsaved()) {
+                (_, true) => "unsaved changes",
+                (true, false) => "editable",
+                (false, _) => "read-only",
+            };
             clip_text(&p, pos2(x + 14.0, y + 20.0), width, &format!("{location}  ·  {folders} folders  ·  {mode}"), font(12.0), t.text_dim);
             y += 54.0;
         }
         y += 12.0;
         for line in [
-            "Data files open read-only. Export writes a new .pst and never changes the file it reads.",
+            "A data file is not written to until Save Changes; the first save keeps the file as it was beside it.",
             "Messages can be saved as .msg, .oft or .eml. Sending and accounts are not built yet.",
         ] {
             clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);

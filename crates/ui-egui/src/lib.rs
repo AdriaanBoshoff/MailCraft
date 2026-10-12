@@ -158,6 +158,8 @@ pub struct MailUi {
     pub(crate) tab: Tab,
     pub(crate) ribbon_mode: RibbonMode,
     theme_applied: Option<bool>,
+    /// Exit was asked for once while changes were unsaved.
+    quit_asked: bool,
     /// Messages are read as plain text even when they have a formatted body.
     pub(crate) plain_bodies: bool,
     /// The open message's formatted body, kept until another message is opened.
@@ -267,6 +269,7 @@ impl MailUi {
             tab: Tab::Home,
             ribbon_mode: RibbonMode::Simplified,
             theme_applied: None,
+            quit_asked: false,
             plain_bodies: false,
             body_doc: None,
             pictures: pictures::Pictures::default(),
@@ -296,9 +299,23 @@ impl MailUi {
         self.ribbon_mode == RibbonMode::Simplified
     }
 
+    /// True when the window may close. With unsaved changes the first asking only says so;
+    /// asking again straight after throws them away. No data file is written by closing.
+    pub fn may_quit(&mut self) -> bool {
+        if !self.session.unsaved() || self.quit_asked {
+            return true;
+        }
+        self.quit_asked = true;
+        self.session.status = "There are unsaved changes: Ctrl+S saves them. Exit again to leave without saving.".to_string();
+        false
+    }
+
     /// Run a command by id: engine commands and `ui.*` commands alike. Never opens a dialog by
     /// itself; dialog commands only queue a [`UiRequest`] for the host.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        if id != "ui.quit" {
+            self.quit_asked = false;
+        }
         if id.starts_with("ui.") {
             return self.ui_command(id, params);
         }
@@ -431,7 +448,11 @@ impl MailUi {
                 self.session.status =
                     format!("OpenMailClient {}: an independent open-source mail client. Not affiliated with Microsoft.", env!("CARGO_PKG_VERSION"));
             }
-            "ui.quit" => self.requests.push(UiRequest::Quit),
+            "ui.quit" => {
+                if self.may_quit() {
+                    self.requests.push(UiRequest::Quit);
+                }
+            }
             _ => return Err(format!("unknown command {}", one_line(id))),
         }
         Ok(Value::Null)
@@ -578,6 +599,9 @@ impl MailUi {
         }
         if hit(Modifiers::NONE, Key::F12) {
             run.push(("ui.saveAsDialog", Value::Null));
+        }
+        if hit(ctrl, Key::S) && self.session.is_enabled("file.save") {
+            run.push(("file.save", Value::Null));
         }
         if hit(ctrl, Key::P) && self.session.is_enabled("file.print") {
             run.push(("ui.printPreview", Value::Null));

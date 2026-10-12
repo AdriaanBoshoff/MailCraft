@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress: a mailbox is saved as a new `.pst` · revision 50 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress: changes to an open `.pst` are kept when saved · revision 51 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 237, all passing |
+| Tests | 246, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -18,7 +18,7 @@
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
-| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: a mailbox is saved as a new `.pst` (M3.1 to M3.3); changing an open one is M3.4 |
+| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: a mailbox is saved as a new `.pst` and changes to an open one are kept (M3.1 to M3.4); rules and settings are M3.5 |
 | M3b | The do-later batch from M2 (see "Do later (from M2)") | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -85,7 +85,8 @@
 34. Done: the node database of a `.pst` is written, and a data file's structure can be checked (M3.1).
 35. Done: property lists and tables of a `.pst` are written (M3.2).
 36. Done: a mailbox is saved as a new `.pst`: folders, messages, attachments, the nodes every data file must have (M3.3).
-37. Next: M3.4 (changes to an open `.pst` kept: rewrite to a temporary file and swap, unchanged items copied as they are).
+37. Done: changes to an open Unicode `.pst` are kept: `file.save` writes the file anew beside itself, with everything untouched copied as it is stored (M3.4).
+38. Next: M3.5 (rules and the page setup kept between runs), then the M3b batch.
 
 ## Do later (from M2)
 
@@ -103,13 +104,21 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | Keeping the page setup between runs | M3, with the first settings that are saved |
 | A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile); with it, where a message attached to a message is kept and the bucket of a named property, both written from the specification alone | when the owner says so |
-| Hidden (associated) items and a folder's own properties beyond name, class and counts carried into a saved `.pst` | M3.4, with the copy of unchanged items |
-| The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts | M3.4 |
+| ~~Hidden (associated) items and a folder's own properties beyond name, class and counts kept when an open `.pst` is saved~~ | done: M3.4 |
+| Hidden (associated) items and a folder's own properties carried by `file.export` (it goes through the model; it should copy nodes as `file.save` does when the source is a `.pst`) | M3b |
+| Changes journalled as they are made, or saved on their own after a while: a crash loses what was not saved (never the file) | M3b |
+| A save that does not rewrite the whole data file; saving off the UI thread, with progress | M3b |
+| Unknown properties of an attachment kept when a message's attachments change (the list is rewritten from the model then) | M3b |
+| The cells of a changed message in search-folder tables (rows of deleted messages are taken out; changed ones keep their old cells) | M3b |
+| Changes to an ANSI `.pst` and a 4K-page file kept; an `.ost` stays read-only for good (it is a server's copy) | M3b, with writing those kinds |
+| The node-id counters of a file's header carried into the rewritten file | M3b |
+| A choice not to keep the file as it was beside a data file on its first save | M3b |
+| The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export` (a saved file keeps the ones it had) | M3b |
 | Export off the UI thread, with progress and a way to stop | M3b |
 | Table cells whose type differs from the column's kept in a saved `.pst`'s tables (the item keeps them; the list does not show them) | M3b |
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
 | The structure check reaching into heaps, property lists and tables (it stops at blocks and nodes) | M3b |
-| 32-bit floats, currency and error values keeping their type when an item is written from the model | M3.4, with the copy of unchanged items |
+| 32-bit floats, currency and error values keeping their type when an item is written from the model (a value that was not changed keeps it since M3.4) | M3b |
 | A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
 | Writing ANSI and 4K-page data files (a re-saved file keeps its kind) | M3b |
@@ -686,3 +695,28 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   (associated) items and folder properties beyond name, class and counts; the ids that tell
   Outlook which folder is the Calendar or Contacts; export off the UI thread with progress;
   table cells whose type differs from the column's.
+- **2026-10-12** - M3.4: changes to an open `.pst` are kept. A Unicode `.pst` now opens editable: reading,
+  flagging, moving, deleting, new messages and folder changes are held beside the open file
+  (`crates/pst/src/edit.rs`), which stays byte for byte as it was until `file.save` (File >
+  Save Changes, Ctrl+S). Saving writes a whole new file beside the old one. Every node the
+  changes do not touch is copied as it is stored, block for block, so hidden (associated)
+  items, views, search folders, folder properties and values the model has no place for go
+  across untouched; a changed message keeps every stored property that was not changed, and
+  its recipients and attachments as stored when they are the same; a moved message keeps its
+  node and its id. The new file is held against the structure check, read back and compared
+  with what was shown, and only then put in the old one's place in one step. A save is
+  refused, with the file left alone and the changes still there, when another program wrote
+  the file since it was opened or (on Windows) has it open. An `.ost`, an ANSI file and a
+  4K-page file stay read-only. Closing a data file with unsaved changes is refused unless it
+  says `{"save": true}` or `{"discard": true}`; leaving the app with unsaved changes says so
+  once and needs a second asking. Nothing is ever written without being asked for. Checked
+  through our own reader only (the sample mailbox, a file given content our writer never
+  makes, damaged files, and three local copies converted and then changed: counts only);
+  **not opened in Outlook**. Made better on the way: the first save of a data file keeps the
+  file as it was beside it (`name.before-openmailclient.pst`, a second name for the same bytes,
+  so no copying), and later saves never write over that; the File page says which data files
+  have unsaved changes. Left for later, each with a slot: changes journalled as they are made
+  (a crash loses what was not saved, never the file); a save that does not rewrite the whole
+  file; saving off the UI thread; unknown properties of an attachment when a message's
+  attachments change; stale cells for a changed message in search-folder tables; `file.export`
+  still goes through the model.

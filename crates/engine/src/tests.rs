@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 43, "parity fell to {done} of {total}");
+    assert!(done >= 44, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -2046,5 +2046,81 @@ fn a_mailbox_is_exported_to_a_pst_and_opens_again() {
     assert!(blocked.join("inside").is_dir());
     drop(other);
     assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn changes_to_an_open_pst_are_saved_into_it() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-save-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.pst");
+    run(&mut session(), "file.export", json!({"path": path}));
+    let first = std::fs::read(&path).unwrap();
+
+    let mut s = Session::new();
+    s.now = now();
+    assert!(!s.is_enabled("file.save"));
+    run(&mut s, "file.open", json!({"path": path}));
+    assert!(s.status.ends_with("(changes are kept when saved)"), "{}", s.status);
+    assert_eq!(s.inspect()["stores"][0]["unsaved"], false);
+    let (total, _) = folder(&s, "Inbox");
+
+    // Changes through the same commands as anywhere else: flag, move, delete, a new folder.
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let flagged = s.selected.unwrap();
+    let flag_was = s.open.as_ref().unwrap().flag();
+    run(&mut s, "mail.flag", Value::Null);
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 1}));
+    let moved = s.selected.unwrap();
+    run(&mut s, "mail.move", json!({"folder": "Sent Items"}));
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 1}));
+    run(&mut s, "mail.delete", Value::Null);
+    run(&mut s, "folder.new", json!({"name": "Kept here"}));
+    assert!(s.is_enabled("file.save") && s.unsaved());
+    assert_eq!(s.inspect()["stores"][0]["unsaved"], true);
+    assert_eq!(std::fs::read(&path).unwrap(), first, "nothing is written before it is asked for");
+
+    // Closing does not throw the changes away, nor write them, unless told which.
+    assert!(s.run("file.closeStore", &Value::Null).is_err());
+    assert_eq!((s.stores.len(), std::fs::read(&path).unwrap() == first), (1, true));
+
+    let done = run(&mut s, "file.save", Value::Null);
+    assert_eq!(done["saved"], 1);
+    assert!(!s.unsaved() && !s.is_enabled("file.save"));
+    assert!(s.status.starts_with("Saved "));
+    // The file as it was is kept beside the new one, and nothing else is.
+    let kept = std::path::PathBuf::from(done["kept"][0].as_str().unwrap());
+    assert_eq!(std::fs::read(&kept).unwrap(), first);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    assert!(crate::io::check_structure(&path).unwrap().unwrap().problems.is_empty());
+    assert!(s.run("file.save", &Value::Null).is_err(), "there is nothing to save");
+    // The session goes on from what it showed.
+    assert_eq!(folder(&s, "Inbox").0, total - 2);
+    let kept_folders: Vec<String> = s.folders[0].iter().map(|f| f.name.clone()).collect();
+
+    let mut other = Session::new();
+    run(&mut other, "file.open", json!({"path": path}));
+    assert_eq!(other.folders[0].iter().map(|f| f.name.clone()).collect::<Vec<_>>(), kept_folders);
+    assert_eq!(folder(&other, "Inbox").0, total - 2);
+    let inbox = other.folders[0].iter().find(|f| f.name == "Inbox").unwrap().id;
+    let sent = other.folders[0].iter().find(|f| f.name == "Sent Items").unwrap().id;
+    let again = other.stores[0].load(inbox, openmailclient_model::ItemId(flagged)).unwrap();
+    assert_ne!(again.flag(), flag_was);
+    assert!(again.is_read());
+    assert!(other.stores[0].list(sent).unwrap().iter().any(|m| m.id == moved));
+    drop(other);
+
+    // A change, then closing with it saved; and one thrown away.
+    run(&mut s, "folder.new", json!({"name": "Second"}));
+    run(&mut s, "file.closeStore", json!({"save": true}));
+    assert!(s.stores.is_empty());
+    run(&mut s, "file.open", json!({"path": path}));
+    assert!(s.folders[0].iter().any(|f| f.name == "Second"));
+    let before = std::fs::read(&path).unwrap();
+    run(&mut s, "folder.new", json!({"name": "Third"}));
+    run(&mut s, "file.closeStore", json!({"discard": true}));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(std::fs::read(&kept).unwrap(), first, "the file as it first was is not written over");
     std::fs::remove_dir_all(&dir).unwrap();
 }

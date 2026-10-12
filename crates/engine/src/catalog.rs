@@ -99,6 +99,7 @@ pub const FEATURES: &[Feature] = &[
     f("File", "Open & Export", "", "Open Outlook Data File", "file.open"),
     f("File", "Open & Export", "", "Open Calendar", ""),
     f("File", "Open & Export", "", "Import/Export", "file.export"),
+    f("File", "Save", "", "Save", "file.save"),
     f("File", "Save As", "", "Save As", "file.saveAs"),
     f("File", "Save Attachments", "", "Save Attachments", "file.saveAllAttachments"),
     f("File", "Print", "", "Print", "file.print"),

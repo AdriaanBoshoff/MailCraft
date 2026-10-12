@@ -10,9 +10,9 @@ use openmailclient_model::{
 };
 use std::io::Cursor;
 
-const UID: [u8; 16] = [0xA5; 16];
+pub(super) const UID: [u8; 16] = [0xA5; 16];
 
-fn save(store: &mut dyn Store) -> (Vec<u8>, Written) {
+pub(super) fn save(store: &mut dyn Store) -> (Vec<u8>, Written) {
     let (out, done) = write_store(Cursor::new(Vec::new()), store, UID).unwrap();
     let bytes = out.into_inner();
     let found = check(&mut Cursor::new(&bytes)).unwrap();
@@ -30,7 +30,7 @@ fn recipient(kind: i32, name: &str, email: &str) -> PropBag {
     r
 }
 
-fn mail(subject: &str, read: bool) -> Item {
+pub(super) fn mail(subject: &str, read: bool) -> Item {
     let mut it = Item::new_mail();
     it.set_subject(subject);
     it.set_sender("Robin Vale", "robin@example.org");
@@ -44,7 +44,7 @@ fn mail(subject: &str, read: bool) -> Item {
 }
 
 /// A mailbox with a little of everything.
-fn mailbox() -> MemStore {
+pub(super) fn mailbox() -> MemStore {
     let mut s = MemStore::with_default_folders("Synthetic mailbox");
     let inbox = s.folder_by_kind(FolderKind::Inbox).unwrap();
     let sent = s.folder_by_kind(FolderKind::Sent).unwrap();
@@ -86,7 +86,7 @@ fn mailbox() -> MemStore {
 }
 
 /// Every folder of a store by its path of names, with what it holds.
-fn tree(store: &mut dyn Store) -> Vec<(String, FolderInfo, Vec<Summary>)> {
+pub(super) fn tree(store: &mut dyn Store) -> Vec<(String, FolderInfo, Vec<Summary>)> {
     let folders = store.folders().unwrap();
     let mut out = Vec::new();
     for f in &folders {
@@ -136,7 +136,7 @@ fn a_mailbox_saved_as_pst_comes_back() {
 }
 
 /// Everything of `want` is in `got`; `got` may have the properties a data file adds.
-fn same(want: &Item, got: &Item, at: &str) {
+pub(super) fn same(want: &Item, got: &Item, at: &str) {
     for (id, v) in want.props.iter().filter(|(id, _)| ![pid::MESSAGE_FLAGS, pid::MESSAGE_SIZE].contains(id)) {
         assert_eq!(got.props.get(id), Some(v), "{at}: property {id:#06x}");
     }

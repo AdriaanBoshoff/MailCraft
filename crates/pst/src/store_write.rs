@@ -45,11 +45,13 @@ const TYPE_ASSOC: u32 = 0x0F;
 const FIRST_FOLDER: u32 = 0x404;
 const FIRST_MESSAGE: u32 = 0x1_0000;
 /// A node id keeps 27 bits for the index.
-const MAX_INDEX: u32 = (1 << 27) - 1;
+pub(crate) const MAX_INDEX: u32 = (1 << 27) - 1;
 /// The node an attached message is kept in, among its attachment's subnodes.
 const NID_EMBEDDED: u32 = FIRST_MESSAGE << 5 | TYPE_MESSAGE;
 /// Messages attached to messages are written this deep; the model never holds more.
 const MAX_DEPTH: usize = 32;
+/// A value longer than this is not put in a row of a folder's table.
+pub(crate) const MAX_CELL: usize = 1024;
 /// PidTagNameidBucketCount SHOULD be 251 ([MS-PST] 2.4.7.5).
 const BUCKETS: u32 = 251;
 
@@ -62,10 +64,10 @@ const X: u16 = ptype::BINARY;
 
 /// The columns every hierarchy table has ([MS-PST] 2.4.4.4.1). PidTagContainerClass is a
 /// string here, as in the files Outlook writes.
-const HIERARCHY: &[(u16, u16)] =
+pub(crate) const HIERARCHY: &[(u16, u16)] =
     &[(0x0E30, I), (0x0E33, L), (0x0E34, X), (0x0E38, I), (0x3001, S), (0x3602, I), (0x3603, I), (0x360A, B), (0x3613, S), (0x6635, I), (0x6636, I)];
 /// The columns every contents table has ([MS-PST] 2.4.4.5.1).
-const CONTENTS: &[(u16, u16)] = &[
+pub(crate) const CONTENTS: &[(u16, u16)] = &[
     (0x0017, I),
     (0x001A, S),
     (0x0036, I),
@@ -94,9 +96,9 @@ const CONTENTS: &[(u16, u16)] = &[
 ];
 /// Columns our own contents tables add, so a message list shows who a message is from and
 /// its follow-up flag without each message being opened.
-const CONTENTS_MORE: &[(u16, u16)] = &[(pid::SENDER_NAME, S), (pid::FLAG_STATUS, I)];
+pub(crate) const CONTENTS_MORE: &[(u16, u16)] = &[(pid::SENDER_NAME, S), (pid::FLAG_STATUS, I)];
 /// The columns every table of folder-associated items has ([MS-PST] 2.4.4.6.1).
-const ASSOC: &[(u16, u16)] = &[
+pub(crate) const ASSOC: &[(u16, u16)] = &[
     (0x001A, S),
     (0x0E07, I),
     (0x0E17, I),
@@ -169,23 +171,23 @@ fn fits(columns: &[(u16, u16)], raw: &Raw) -> bool {
     columns.iter().all(|(id, ty)| *id != raw.id || *ty == raw.ty)
 }
 
-fn copy(raw: &Raw) -> Raw {
+pub(crate) fn copy(raw: &Raw) -> Raw {
     Raw { id: raw.id, ty: raw.ty, data: raw.data.clone() }
 }
 
-fn int(id: u16, v: i32) -> Raw {
+pub(crate) fn int(id: u16, v: i32) -> Raw {
     encode(id, &PropValue::Int32(v))
 }
 
-fn text(id: u16, s: &str) -> Raw {
+pub(crate) fn text(id: u16, s: &str) -> Raw {
     encode(id, &PropValue::String(s.to_string()))
 }
 
-fn flag(id: u16, v: bool) -> Raw {
+pub(crate) fn flag(id: u16, v: bool) -> Raw {
     encode(id, &PropValue::Bool(v))
 }
 
-fn count(n: u64) -> i32 {
+pub(crate) fn count(n: u64) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
 }
 
@@ -196,18 +198,45 @@ fn raws(bag: &PropBag) -> BTreeMap<u16, Raw> {
 
 /// Named properties get ids 0x8000, 0x8001, … in order of first use ([MS-PST] 2.4.7).
 #[derive(Default)]
-struct Names {
+pub(crate) struct Names {
+    /// How many ids the data file had given out before: new names come after them.
+    base: usize,
+    /// The names that are new here.
     keys: Vec<NamedKey>,
     ids: BTreeMap<NamedKey, u16>,
 }
 
 impl Names {
-    fn id_for(&mut self, key: &NamedKey) -> Result<u16, PstError> {
+    /// The names a data file already has, by their place: the id of each is 0x8000 and that.
+    pub(crate) fn seeded(known: &[Option<NamedKey>]) -> Self {
+        let mut names = Self { base: known.len(), ..Self::default() };
+        for (i, key) in known.iter().enumerate().take(0x7FFE) {
+            if let Some(key) = key {
+                names.ids.entry(key.clone()).or_insert(0x8000 + i as u16);
+            }
+        }
+        names
+    }
+
+    /// The id a name has, when it has one.
+    pub(crate) fn known(&self, key: &NamedKey) -> Option<u16> {
+        self.ids.get(key).copied()
+    }
+
+    /// True when names were added to those the data file had.
+    pub(crate) fn grew(&self) -> bool {
+        !self.keys.is_empty()
+    }
+
+    pub(crate) fn id_for(&mut self, key: &NamedKey) -> Result<u16, PstError> {
         if let Some(id) = self.ids.get(key) {
             return Ok(*id);
         }
-        let id =
-            u16::try_from(self.keys.len()).ok().filter(|n| *n < 0x7FFE).map(|n| 0x8000 + n).ok_or_else(|| cannot("that many named properties"))?;
+        let id = u16::try_from(self.base.saturating_add(self.keys.len()))
+            .ok()
+            .filter(|n| *n < 0x7FFE)
+            .map(|n| 0x8000 + n)
+            .ok_or_else(|| cannot("that many named properties"))?;
         self.keys.push(key.clone());
         self.ids.insert(key.clone(), id);
         Ok(id)
@@ -216,10 +245,22 @@ impl Names {
     /// The property list of the name-to-id map: the bucket count, the GUID, entry and string
     /// streams, and the hash buckets ([MS-PST] 2.4.7.1 to 2.4.7.5).
     fn props(&self) -> Vec<Raw> {
-        let mut guids: Vec<[u8; 16]> = Vec::new();
-        let (mut entries, mut strings) = (Vec::new(), Vec::new());
+        let mut out = Vec::new();
+        self.add_to(&mut out);
+        out
+    }
+
+    /// Add the new names to the property list of a name-to-id map: to the end of its streams
+    /// and to the buckets they fall in. What is there stays as it is.
+    pub(crate) fn add_to(&self, map: &mut Vec<Raw>) {
+        let mut take = |id: u16| map.iter().position(|r| r.id == id).map(|at| map.swap_remove(at).data).unwrap_or_default();
+        let count = take(0x0001).first_chunk::<4>().map_or(0, |b| u32::from_le_bytes(*b));
+        let count = if count == 0 { BUCKETS } else { count };
+        let mut guids: Vec<[u8; 16]> = take(0x0002).chunks_exact(16).filter_map(|g| <[u8; 16]>::try_from(g).ok()).collect();
+        let (mut entries, mut strings) = (take(0x0003), take(0x0004));
         let mut buckets: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
         for (index, key) in self.keys.iter().enumerate() {
+            let index = self.base + index;
             // wGuid: 1 and 2 are the two well-known sets, 3 and up an index into the GUID stream.
             let guid_index: u32 = if key.guid == pset::PS_MAPI {
                 1
@@ -250,16 +291,20 @@ impl Names {
             entries.extend(first.to_le_bytes());
             entries.extend(&tail);
             // The bucket: the first four bytes of the record XOR the next two, modulo the count.
-            let bucket = 0x1000 + ((hashed ^ u32::from(guid_kind)) % BUCKETS) as u16;
+            let bucket = 0x1000u16.saturating_add((hashed ^ u32::from(guid_kind)).checked_rem(count).unwrap_or(0) as u16);
             let record = buckets.entry(bucket).or_default();
             record.extend(hashed.to_le_bytes());
             record.extend(&tail);
         }
-        let mut out = vec![int(0x0001, BUCKETS as i32)];
-        for (id, bytes) in [(0x0002, guids.concat()), (0x0003, entries), (0x0004, strings)].into_iter().chain(buckets) {
-            out.push(Raw { id, ty: X, data: bytes });
+        for (id, more) in buckets {
+            let mut bytes = map.iter().position(|r| r.id == id).map(|at| map.swap_remove(at).data).unwrap_or_default();
+            bytes.extend(more);
+            map.push(Raw { id, ty: X, data: bytes });
         }
-        out
+        map.push(int(0x0001, count as i32));
+        for (id, bytes) in [(0x0002, guids.concat()), (0x0003, entries), (0x0004, strings)] {
+            map.push(Raw { id, ty: X, data: bytes });
+        }
     }
 }
 
@@ -288,16 +333,16 @@ impl Folder {
     }
 }
 
-struct Out<W: Read + Write + Seek> {
-    w: NdbWriter<W>,
-    names: Names,
-    uid: [u8; 16],
-    serial: u64,
+pub(crate) struct Out<W: Read + Write + Seek> {
+    pub(crate) w: NdbWriter<W>,
+    pub(crate) names: Names,
+    pub(crate) uid: [u8; 16],
+    pub(crate) serial: u64,
 }
 
 impl<W: Read + Write + Seek> Out<W> {
     /// A top-level node holding a property list.
-    fn pc_node(&mut self, nid: u32, parent: u32, props: &[Raw]) -> Result<(), PstError> {
+    pub(crate) fn pc_node(&mut self, nid: u32, parent: u32, props: &[Raw]) -> Result<(), PstError> {
         let mut subs = Subs::new(1);
         let data = write_pc(&mut self.w, props, &mut subs)?;
         let sub = self.w.subnodes(subs.list)?;
@@ -313,7 +358,7 @@ impl<W: Read + Write + Seek> Out<W> {
     }
 
     /// A top-level node holding a table. Tables have no parent.
-    fn tc_node(&mut self, nid: u32, columns: &[(u16, u16)], rows: &[Row]) -> Result<(), PstError> {
+    pub(crate) fn tc_node(&mut self, nid: u32, columns: &[(u16, u16)], rows: &[Row]) -> Result<(), PstError> {
         let (data, sub) = self.table(columns, rows)?;
         self.w.node(nid, 0, data, sub);
         Ok(())
@@ -347,7 +392,7 @@ impl<W: Read + Write + Seek> Out<W> {
 
     /// A message as a node's data and subnodes ([MS-PST] 2.4.5), and the cells of its row in a
     /// contents table.
-    fn message(&mut self, item: &Item, depth: usize) -> Result<(u64, u64, Vec<Raw>), PstError> {
+    pub(crate) fn message(&mut self, item: &Item, depth: usize) -> Result<(u64, u64, Vec<Raw>), PstError> {
         if depth > MAX_DEPTH {
             return Err(cannot("messages attached to messages that deep"));
         }
@@ -383,14 +428,22 @@ impl<W: Read + Write + Seek> Out<W> {
             let size = props.values().map(|r| r.data.len()).chain(item.attachments.iter().map(Attachment::size)).fold(0usize, usize::saturating_add);
             props.insert(pid::MESSAGE_SIZE, int(pid::MESSAGE_SIZE, i32::try_from(size).unwrap_or(i32::MAX)));
         }
-        let cells: Vec<Raw> = CONTENTS.iter().chain(CONTENTS_MORE).filter_map(|(id, ty)| props.get(id).filter(|r| r.ty == *ty)).map(copy).collect();
+        // Short values only: these become the message's row in its folder's table.
+        let cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
 
         let props: Vec<Raw> = props.into_values().collect();
         let mut subs = Subs::new(1);
         let data = write_pc(&mut self.w, &props, &mut subs)?;
         drop(props);
 
-        // The recipient table, one row a recipient ([MS-PST] 2.4.5.3).
+        subs.list.push(self.recipients(item)?);
+        subs.list.extend(self.attachments(item, depth)?);
+        let sub = self.w.subnodes(subs.list)?;
+        Ok((data, sub, cells))
+    }
+
+    /// The recipient table of a message, one row a recipient ([MS-PST] 2.4.5.3), as a subnode.
+    pub(crate) fn recipients(&mut self, item: &Item) -> Result<Sub, PstError> {
         let mut rows = Vec::with_capacity(item.recipients.len());
         for (i, r) in item.recipients.iter().enumerate() {
             let id = u32::try_from(i).map_err(|_| cannot("that many recipients"))?;
@@ -399,9 +452,13 @@ impl<W: Read + Write + Seek> Out<W> {
             rows.push(Row { id, cells: cells.into_values().filter(|c| fits(RECIPIENTS, c)).collect() });
         }
         let (table, table_sub) = self.table(RECIPIENTS, &rows)?;
-        subs.list.push(Sub { nid: NID_RECIPIENT_TABLE, data: table, sub: table_sub });
+        Ok(Sub { nid: NID_RECIPIENT_TABLE, data: table, sub: table_sub })
+    }
 
-        // The attachment table, and each attachment in a subnode its row names ([MS-PST] 2.4.6).
+    /// The attachment table of a message and each attachment in a subnode its row names
+    /// ([MS-PST] 2.4.6), as subnodes; none when the message has no attachments.
+    pub(crate) fn attachments(&mut self, item: &Item, depth: usize) -> Result<Vec<Sub>, PstError> {
+        let mut list = Vec::new();
         if !item.attachments.is_empty() {
             let mut rows = Vec::with_capacity(item.attachments.len());
             for (i, a) in item.attachments.iter().enumerate() {
@@ -412,14 +469,13 @@ impl<W: Read + Write + Seek> Out<W> {
                     .map(|i| i << 5 | TYPE_ATTACHMENT)
                     .ok_or_else(|| cannot("that many attachments"))?;
                 let (data, sub, cells) = self.attachment(a, i, depth)?;
-                subs.list.push(Sub { nid, data, sub });
+                list.push(Sub { nid, data, sub });
                 rows.push(Row { id: nid, cells });
             }
             let (table, table_sub) = self.table(ATTACHMENTS, &rows)?;
-            subs.list.push(Sub { nid: NID_ATTACHMENT_TABLE, data: table, sub: table_sub });
+            list.push(Sub { nid: NID_ATTACHMENT_TABLE, data: table, sub: table_sub });
         }
-        let sub = self.w.subnodes(subs.list)?;
-        Ok((data, sub, cells))
+        Ok(list)
     }
 
     /// An attachment as a subnode's data and subnodes ([MS-PST] 2.4.6.2), and the cells of its
@@ -555,6 +611,7 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
             let message = index << 5 | TYPE_MESSAGE;
             let (data, sub, cells) = o.message(&item, 0)?;
             o.w.node(message, nid, data, sub);
+            let cells = cells.into_iter().filter(|c| CONTENTS.iter().chain(CONTENTS_MORE).any(|(id, ty)| *id == c.id && *ty == c.ty)).collect();
             rows.push(Row { id: message, cells });
             total += 1;
             unread += u64::from(item.flags() & MSGFLAG_READ == 0);

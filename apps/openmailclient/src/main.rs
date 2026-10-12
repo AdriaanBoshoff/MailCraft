@@ -152,6 +152,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.ui.ui(ui);
         let ctx = ui.ctx().clone();
+        // Closing the window with unsaved changes asks once before they are thrown away.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.ui.may_quit() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
         self.serve(&ctx);
     }
 }

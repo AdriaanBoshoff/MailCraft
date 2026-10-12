@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M2%20closed%20%C2%B7%20M3%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-237%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-246%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -51,7 +51,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 | | Read | Written |
 |---|---|---|
-| `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | a whole mailbox as a new Unicode `.pst` (not yet opened in Outlook); changing an open file is M3.4 |
+| `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | a whole mailbox as a new Unicode `.pst`; changes to an open Unicode `.pst` are kept by Save Changes (neither opened in Outlook yet) |
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
@@ -59,7 +59,10 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 ## What works today
 
-- Opens Outlook data files (`.pst`, `.ost`) read-only, and single messages (`.msg`, `.oft`, `.eml`).
+- Opens Outlook data files (`.pst`, `.ost`) and single messages (`.msg`, `.oft`, `.eml`). Nothing is
+  written to a data file until Save Changes (Ctrl+S): changes to a Unicode `.pst` are then written
+  to a new file that is checked, read back and swapped in, with the file as it was kept beside
+  it on the first save. `.ost`, ANSI and 4K-page files are read-only.
 - An Outlook-Classic-style window: ribbon (simplified and classic), folder pane, message list with
   date groups, reading pane, light and dark themes.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
@@ -78,8 +81,9 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 ## What does not work yet
 
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
-- **Writing `.pst` files.** Data files are read-only; changes to them are refused. The lowest layer
-  of the writer exists (blocks, nodes, maps, indexes); folders and messages do not yet.
+- **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. Changes
+  are kept only when saved (no journal: a crash loses what was not saved, never the file), and
+  ANSI and 4K-page data files cannot be changed.
 - **Parts of formatted bodies.** Right-to-left text outside the message body; complex scripts
   on screen beyond what egui shapes; SVG, WebP and
   TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a
@@ -118,7 +122,7 @@ cargo run --release -p openmailclient-ui-egui --example ui_shot
 ## Safety rules the code follows
 
 - **Never crash, never lose mail.** No panics in non-test code; every reader has a hostile-input test;
-  data files are opened read-only and saved files are written to a temporary file and swapped in.
+  a data file is not written to until a save is asked for, and a save writes a temporary file, checks it and swaps it in.
 - **Mail is hostile and private.** Message content is data: nothing in a message is run, and remote
   content is never fetched. Attachments are only ever saved to a file you choose.
 - **Clean room.** Formats come from public specifications ([MS-PST], [MS-OXMSG], RFC 5322, …). No

@@ -145,6 +145,22 @@ pub(crate) fn read_pc(ndb: &mut Ndb, data: u64, subs: &Subnodes) -> Result<Vec<R
     Ok(out)
 }
 
+/// The subnodes a Property Context keeps values in: those too large for its heap.
+pub(crate) fn pc_value_subnodes(ndb: &mut Ndb, data: u64) -> Result<Vec<u32>, PstError> {
+    let heap = Heap::new(ndb.data_blocks(data)?, ndb.ver)?;
+    if heap.client_sig != SIG_PC {
+        return Err(damaged("an item's properties are not where the index says"));
+    }
+    let mut out = Vec::new();
+    for (_, d) in bth(&heap, heap.user_root)? {
+        let (Some(ty), Some(value)) = (u16_at(&d, 0), u32_at(&d, 2)) else { continue };
+        if !ptype::fixed_size(ty).is_some_and(|n| n <= 4) && value & 0x1F != 0 {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) struct Row {
     pub id: u32,
     pub cells: Vec<Raw>,
@@ -152,6 +168,11 @@ pub(crate) struct Row {
 
 /// Read a Table Context ([MS-PST] 2.3.4), rows in table order.
 pub(crate) fn read_tc(ndb: &mut Ndb, data: u64, subs: &Subnodes) -> Result<Vec<Row>, PstError> {
+    Ok(read_table(ndb, data, subs)?.1)
+}
+
+/// A table's columns (id, type) and its rows.
+pub(crate) fn read_table(ndb: &mut Ndb, data: u64, subs: &Subnodes) -> Result<(Vec<(u16, u16)>, Vec<Row>), PstError> {
     let heap = Heap::new(ndb.data_blocks(data)?, ndb.ver)?;
     if heap.client_sig != SIG_TC {
         return Err(damaged("a table is not where the index says"));
@@ -174,8 +195,9 @@ pub(crate) fn read_tc(ndb: &mut Ndb, data: u64, subs: &Subnodes) -> Result<Vec<R
             Some(((tag >> 16) as u16, tag as u16, usize::from(u16_at(d, 4)?), usize::from(*d.get(6)?), usize::from(*d.get(7)?)))
         })
         .collect();
+    let shape: Vec<(u16, u16)> = columns.iter().map(|c| (c.0, c.1)).collect();
     if row_size == 0 || rows_hnid == 0 {
-        return Ok(Vec::new());
+        return Ok((shape, Vec::new()));
     }
     // The row matrix: rows never span a block ([MS-PST] 2.3.4.4.1).
     let blocks: Vec<Vec<u8>> = if rows_hnid & 0x1F == 0 {
@@ -215,7 +237,7 @@ pub(crate) fn read_tc(ndb: &mut Ndb, data: u64, subs: &Subnodes) -> Result<Vec<R
         }
         out.push(Row { id, cells });
     }
-    Ok(out)
+    Ok((shape, out))
 }
 
 /// Turn a stored value into a typed one. `cp` is the code page of 8-bit strings.
