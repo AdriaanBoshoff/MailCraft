@@ -2234,3 +2234,69 @@ fn rtf_tabs_have_leaders_and_borders_a_line_between() {
     assert!(!Arc::ptr_eq(frame, p[2].frame.as_ref().unwrap()));
     assert!(p[3].frame.is_none());
 }
+
+#[test]
+fn rtf_list_numbers_are_counted_where_the_writer_left_none() {
+    // RTF 1.9.1, "List Table" and "List Override Table": a paragraph names a list (`\ls`) and
+    // a level (`\ilvl`); the level says how its number is written and where it starts.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi\
+          {\\*\\listtable{\\list\\listtemplateid1\
+          {\\listlevel\\levelnfc0\\levelstartat3{\\leveltext\\'02\\'00.;}{\\levelnumbers\\'01;}}\
+          {\\listlevel\\levelnfc4\\levelstartat1{\\leveltext\\'03\\'00.\\'01;}{\\levelnumbers\\'01\\'03;}}\
+          {\\listname Numbers;}\\listid7}\
+          {\\list{\\listlevel\\levelnfc23{\\leveltext\\'01\\u-3913 ?;}{\\levelnumbers;}}\\listid9}\
+          {\\list{\\listlevel\\levelnfc1}\\listid11}}\
+          {\\*\\listoverridetable{\\listoverride\\listid7\\listoverridecount0\\ls1}\
+          {\\listoverride\\listid9\\listoverridecount0\\ls2}{\\listoverride\\listid11\\ls3}}\
+          \\pard\\ls1\\ilvl0 one\\par two\\par \
+          \\pard\\ls1\\ilvl1 deep\\par deeper\\par \
+          \\pard\\ls1\\ilvl0 three\\par \
+          \\pard\\ls1\\ilvl1 again\\par \
+          \\pard\\ls2 dot\\par \
+          \\pard plain\\par \
+          \\pard\\ls1{\\listtext\\pard\\plain X.\\tab}written\\par \
+          \\pard\\ls1 after\\par \
+          \\pard\\ls99 none\\par \
+          \\pard\\ls3 roman\\par \\pard\\ls3\\par \\pard\\ls3 more\\par}",
+    );
+    let kinds: Vec<String> = paras(&doc)
+        .iter()
+        .map(|p| match &p.kind {
+            ParaKind::Item(marker) => marker.clone(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, ["3.", "4.", "4.a", "4.b", "5.", "5.a", "\u{2022}", "Body", "X.", "7.", "Body", "I.", "II.", "III."]);
+    assert!(paras(&doc).iter().all(|p| !p.text().contains("Numbers")));
+    assert!(paras(&doc).iter().filter(|p| matches!(p.kind, ParaKind::Item(_))).all(|p| p.indent >= 1));
+
+    // Hostile: more lists and levels than are kept, numbers at the edge of what can be counted,
+    // words that say they are longer than they are, levels and lists that are not there.
+    let mut body = String::from("{\\rtf1\\ansi{\\*\\listtable");
+    for i in 0..600 {
+        body.push_str("{\\list");
+        for _ in 0..20 {
+            body.push_str("{\\listlevel\\levelnfc3\\levelstartat2147483647{\\leveltext\\'ff\\'00\\'08\\'07\\'01.;}}");
+        }
+        body.push_str(&format!("\\listid{i}}}"));
+    }
+    body.push_str(
+        "{\\list\\listid-1}{\\list{\\listlevel\\levelnfc-2147483648\\levelstartat-2147483648{\\leveltext}}\\listid600}}{\\*\\listoverridetable",
+    );
+    for i in 0..3000 {
+        body.push_str(&format!("{{\\listoverride\\listid{}\\ls{i}}}", i % 602 - 1));
+    }
+    body.push('}');
+    for i in 0..3000 {
+        body.push_str(&format!("\\pard\\ls{}\\ilvl{} a\\par ", i % 700, i % 13 - 2));
+    }
+    body.push_str("\\pard\\ls-2147483648\\ilvl2147483647 b\\par\\pard\\ls601 c\\par c\\par}");
+    let doc = crate::rtf::parse(body.as_bytes());
+    for p in paras(&doc) {
+        if let ParaKind::Item(marker) = &p.kind {
+            assert!(!marker.is_empty() && marker.chars().count() <= 12 && !marker.chars().any(char::is_control), "{marker:?}");
+        }
+    }
+    assert!(paras(&doc).len() > 100);
+}

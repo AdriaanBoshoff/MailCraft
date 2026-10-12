@@ -98,6 +98,42 @@ enum Dest {
     /// The number or bullet a list paragraph starts with, as the writer worked it out
     /// (`\listtext`, `\pntext`).
     Marker,
+    /// The lists the body has (`\listtable`), and the words a level's number is made of
+    /// (`\leveltext`).
+    Lists,
+    LevelText,
+    /// Which list each list paragraph is of (`\listoverridetable`).
+    Overrides,
+}
+
+/// Lists a body may describe, levels a list has, lists paragraphs may name, and characters
+/// in the words a level's number is made of.
+const MAX_LISTS: usize = 256;
+const MAX_LEVELS: usize = 9;
+const MAX_OVERRIDES: usize = 1024;
+const MAX_LEVEL_TEXT: usize = 32;
+
+/// One level of a list (RTF 1.9.1, "List Table").
+#[derive(Clone, Default)]
+struct ListLevel {
+    /// How its number is written (`\levelnfc`): 0 is 1, 2, 3; 23 is a bullet.
+    nfc: i32,
+    start: i32,
+    /// The words its number is made of: how many characters follow, then those characters,
+    /// where one below 9 stands for the number of the level it counts.
+    text: Vec<char>,
+}
+
+#[derive(Default)]
+struct List {
+    id: i32,
+    levels: Vec<ListLevel>,
+}
+
+/// Where a list has counted to: the number of each level, where it has one.
+#[derive(Clone, Copy, Default)]
+struct Count {
+    at: [Option<i32>; MAX_LEVELS],
 }
 
 /// A picture being read.
@@ -212,6 +248,9 @@ struct Chars {
     /// Twips from the margin to the paragraph's text (`\li`), and its tab stops, in twips
     /// from the margin, with how the stop being described holds its text.
     left: i32,
+    /// The list the paragraph is of (`\ls`), and its level there (`\ilvl`).
+    ls: Option<i32>,
+    ilvl: u8,
     tabs: Vec<(i32, TabKind, Leader)>,
     tab_kind: TabKind,
     tab_lead: Leader,
@@ -248,6 +287,13 @@ struct Builder<'a> {
     runs: Vec<Run>,
     /// The number or bullet of the paragraph being read, when it is one of a list.
     marker: String,
+    /// The lists the body describes, the one being read, which list each number that
+    /// paragraphs name stands for, and where each has counted to.
+    lists: Vec<List>,
+    list: Option<List>,
+    override_id: i32,
+    overrides: HashMap<i32, i32>,
+    counts: HashMap<i32, Count>,
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
     mono_fonts: HashSet<i32>,
@@ -312,7 +358,15 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                         }
                     }
                     Dest::Picture => b.picture_word(&mut scope.cur, word, param, star),
-                    Dest::Skip | Dest::Instruction | Dest::Marker => {}
+                    Dest::Lists => b.list_word(&mut scope.cur, word, param, star),
+                    Dest::Overrides => match word {
+                        "listid" => b.override_id = param.unwrap_or(0),
+                        "ls" if b.overrides.len() < MAX_OVERRIDES => {
+                            b.overrides.insert(param.unwrap_or(0), b.override_id);
+                        }
+                        _ => {}
+                    },
+                    Dest::Skip | Dest::Instruction | Dest::Marker | Dest::LevelText => {}
                 }
             }
             Event::Bin(data, whole) => {
@@ -354,6 +408,12 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                         let room = (MAX_MARKER * 4).saturating_sub(b.marker.chars().count());
                         b.marker.extend(text.chars().take(room));
                     }
+                    Dest::LevelText => {
+                        if let Some(level) = b.list.as_mut().and_then(|l| l.levels.last_mut()) {
+                            let room = MAX_LEVEL_TEXT.saturating_sub(level.text.len());
+                            level.text.extend(text.chars().take(room));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -362,6 +422,7 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
         reader.count_text(!matches!(scope.cur.dest, Dest::Skip | Dest::Picture));
     }
     b.end_picture();
+    b.end_list();
     b.end_para(&scope.cur, 0, false);
     b.end_table();
     // Empty paragraphs at the end are the writer's, not the reader's.
@@ -378,6 +439,12 @@ impl Builder<'_> {
         let color = |colors: &[Option<Rgb>]| usize::try_from(param.unwrap_or(0)).ok().and_then(|i| colors.get(i).copied()).flatten();
         match word {
             "fonttbl" => cur.dest = Dest::Fonts,
+            // The lists, and which of them each list paragraph is of (RTF 1.9.1, "List Table"
+            // and "List Override Table").
+            "listtable" => cur.dest = Dest::Lists,
+            "listoverridetable" => cur.dest = Dest::Overrides,
+            "ls" => cur.ls = param,
+            "ilvl" => cur.ilvl = u8::try_from(param.unwrap_or(0).clamp(0, 8)).unwrap_or(0),
             "colortbl" => cur.dest = Dest::Colors,
             "fldinst" => {
                 cur.dest = Dest::Instruction;
@@ -443,6 +510,7 @@ impl Builder<'_> {
                 (cur.left, cur.tab_kind, cur.tab_lead) = (0, TabKind::Left, Leader::None);
                 cur.tabs.clear();
                 cur.between = Edge::default();
+                (cur.ls, cur.ilvl) = (None, 0);
                 (cur.sl, cur.sl_times) = (0, false);
             }
             // Line spacing (RTF 1.9.1, "Spacing").
@@ -604,6 +672,97 @@ impl Builder<'_> {
             set(edge);
             edge.width = edge.width.max(1);
         });
+    }
+
+    /// A control word inside `\listtable` (RTF 1.9.1, "List Table").
+    fn list_word(&mut self, cur: &mut Chars, word: &str, param: Option<i32>, star: bool) {
+        match word {
+            "list" => {
+                self.end_list();
+                self.list = Some(List::default());
+            }
+            "listlevel" => {
+                if let Some(list) = &mut self.list
+                    && list.levels.len() < MAX_LEVELS
+                {
+                    list.levels.push(ListLevel { start: 1, ..ListLevel::default() });
+                }
+            }
+            // The newer word says the same as the older one, and more kinds.
+            "levelnfc" | "levelnfcn" => self.level(|l| l.nfc = param.unwrap_or(0)),
+            "levelstartat" => self.level(|l| l.start = param.unwrap_or(1)),
+            "leveltext" => {
+                cur.dest = Dest::LevelText;
+                self.level(|l| l.text.clear());
+            }
+            "listid" => {
+                if let Some(list) = &mut self.list {
+                    list.id = param.unwrap_or(0);
+                }
+            }
+            // Names, and the places of the numbers in a level's words: not read.
+            "levelnumbers" | "listname" | "liststylename" | "listpicture" => cur.dest = Dest::Skip,
+            _ if star => cur.dest = Dest::Skip,
+            _ => {}
+        }
+    }
+
+    fn level(&mut self, set: impl FnOnce(&mut ListLevel)) {
+        if let Some(level) = self.list.as_mut().and_then(|l| l.levels.last_mut()) {
+            set(level);
+        }
+    }
+
+    /// Keep the list that was being read.
+    fn end_list(&mut self) {
+        if let Some(list) = self.list.take()
+            && self.lists.len() < MAX_LISTS
+        {
+            self.lists.push(list);
+        }
+    }
+
+    /// Count a paragraph of a list, and give the number or bullet it has: one more than the
+    /// paragraph before it at its level, and the levels below it start again.
+    fn counted(&mut self, cur: &Chars) -> Option<String> {
+        let ls = cur.ls?;
+        self.end_list();
+        let id = *self.overrides.get(&ls)?;
+        let list = self.lists.iter().find(|l| l.id == id)?;
+        let at = usize::from(cur.ilvl).min(MAX_LEVELS - 1);
+        let level = list.levels.get(at)?;
+        if self.counts.len() >= MAX_OVERRIDES && !self.counts.contains_key(&ls) {
+            return None;
+        }
+        let count = self.counts.entry(ls).or_default();
+        let slot = count.at.get_mut(at)?;
+        *slot = Some(slot.map_or(level.start, |n| n.saturating_add(1)));
+        for deeper in count.at.iter_mut().skip(at + 1) {
+            *deeper = None;
+        }
+        let count = *count;
+        // The words say how many characters they are, then the characters.
+        let many = level.text.first().map_or(0, |c| *c as usize);
+        let words = level.text.get(1..).unwrap_or_default();
+        let words = words.get(..many.min(words.len())).unwrap_or_default();
+        if level.nfc == 23 {
+            return Some(words.iter().filter(|c| **c as u32 >= 9).collect());
+        }
+        let mut out = String::new();
+        for c in words {
+            match usize::try_from(*c as u32).ok().filter(|n| *n < MAX_LEVELS) {
+                Some(of) => {
+                    let nfc = list.levels.get(of).map_or(0, |l| l.nfc);
+                    let n = count.at.get(of).copied().flatten().or_else(|| list.levels.get(of).map(|l| l.start)).unwrap_or(1);
+                    out.push_str(&numbered(n, nfc));
+                }
+                None => out.push(*c),
+            }
+        }
+        if level.text.is_empty() {
+            out = format!("{}.", numbered(count.at.get(at).copied().flatten().unwrap_or(1), level.nfc));
+        }
+        Some(out)
     }
 
     /// Say which border the words that follow describe: a side of a cell of the row being
@@ -793,7 +952,10 @@ impl Builder<'_> {
         let above = cur.before.saturating_add(std::mem::replace(&mut self.below, cur.after)).min(u8::try_from(MAX_ABOVE).unwrap_or(u8::MAX));
         // A border stands at the paragraph's indent, and the text just inside it.
         let mut indent = if frame.is_some() { 0 } else { cur.indent };
-        let kind = match marker(&std::mem::take(&mut self.marker)) {
+        // The number the writer left; where it left none, the one the list's own table gives.
+        let counted = self.counted(cur);
+        let written = marker(&std::mem::take(&mut self.marker)).or_else(|| counted.as_deref().and_then(marker));
+        let kind = match written {
             // The number or bullet stands in the room the indent leaves.
             Some(marker) => {
                 indent = indent.max(1);
@@ -853,6 +1015,54 @@ fn leading(cur: &Chars) -> Leading {
         (n, false) if n > 0 => Leading::AtLeast(px(n)),
         (n, false) => Leading::Exactly(px(i32::try_from(n.unsigned_abs()).unwrap_or(i32::MAX))),
     }
+}
+
+/// A number as a level of a list writes it (RTF 1.9.1, `\levelnfc`): 0 is 1, 2, 3; 1 and 2
+/// are roman numerals, 3 and 4 letters, 22 has a nought before one figure. Kinds that are
+/// not known, and numbers a kind cannot write, are written in figures.
+fn numbered(n: i32, nfc: i32) -> String {
+    let letters = |from: u8| {
+        // a to z, then aa to zz, as lists do.
+        let n = u32::try_from(n).ok().filter(|n| (1..=780).contains(n))?;
+        let (times, which) = ((n - 1) / 26 + 1, (n - 1) % 26);
+        let c = char::from(from.saturating_add(u8::try_from(which).unwrap_or(0)));
+        Some(std::iter::repeat_n(c, usize::try_from(times).unwrap_or(1)).collect::<String>())
+    };
+    let roman = || {
+        let mut n = u32::try_from(n).ok().filter(|n| (1..=3999).contains(n))?;
+        let mut out = String::new();
+        for (value, mark) in [
+            (1000, "M"),
+            (900, "CM"),
+            (500, "D"),
+            (400, "CD"),
+            (100, "C"),
+            (90, "XC"),
+            (50, "L"),
+            (40, "XL"),
+            (10, "X"),
+            (9, "IX"),
+            (5, "V"),
+            (4, "IV"),
+            (1, "I"),
+        ] {
+            while n >= value {
+                out.push_str(mark);
+                n -= value;
+            }
+        }
+        Some(out)
+    };
+    let written = match nfc {
+        1 => roman(),
+        2 => roman().map(|r| r.to_lowercase()),
+        3 => letters(b'A'),
+        4 => letters(b'a'),
+        22 if (0..10).contains(&n) => Some(format!("0{n}")),
+        255 => Some(String::new()),
+        _ => None,
+    };
+    written.unwrap_or_else(|| n.to_string())
 }
 
 /// A paragraph's tab stops as the model keeps them: in pixels from where its text starts, the

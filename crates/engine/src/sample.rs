@@ -57,6 +57,8 @@ const PARKING: (&str, &str) = ("Riverside Car Park", "permits@parking.example.ne
 /// HTML body beside it.
 const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss Arial;}{\\f1\\fmodern Courier New;}}\
 {\\colortbl;\\red0\\green102\\blue153;\\red255\\green242\\blue204;}\r\n\
+{\\*\\listtable{\\list{\\listlevel\\levelnfc0\\levelstartat1{\\leveltext\\'02\\'00.;}{\\levelnumbers\\'01;}}\\listid1}}\
+{\\*\\listoverridetable{\\listoverride\\listid1\\listoverridecount0\\ls1}}\r\n\
 \\pard\\qc\\b\\fs32\\cf1 Riverside Car Park\\b0\\fs20\\cf0\\par\r\n\
 \\pard Receipt for permit {\\f1 RP-20418}, paid by card. Thank you.\\par\\par\r\n\
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl\\b Item\\cell Amount\\b0\\cell\\row\r\n\
@@ -69,8 +71,8 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard\\intbl\\cell\\pard\\intbl\\cell\\row\r\n\
 \\pard\\sb240\\sa120\\li720\\brdrl\\brdrs\\brdrw45\\brdrcf1\\brsp120 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
 \\pard To use the permit:\\par\r\n\
-{\\listtext\\pard\\plain 1.\\tab}\\pard\\fi-360\\li720\\sl360\\slmult1 Print the card below.\\par\r\n\
-{\\listtext\\pard\\plain 2.\\tab}Leave it where it can be read through the windscreen.\\par\r\n\
+{\\listtext\\pard\\plain 1.\\tab}\\pard\\ls1\\fi-360\\li720\\sl360\\slmult1 Print the card below.\\par\r\n\
+Leave it where it can be read through the windscreen.\\par\r\n\
 \\pard\\sb120\\tx2100\\tqdec\\tldot\\tx4800 Next payment\\tab 1 November\\tab 62.00\\par\r\n\
 \\pard\\tx2100\\tqdec\\tldot\\tx4800 Late fee\\tab after the 5th\\tab 7.50\\par\r\n\
 \\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\

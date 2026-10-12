@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 35 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 36 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 173, all passing |
+| Tests | 174, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -70,9 +70,10 @@
 20. Done: tab stops in RTF bodies (left, centre, right, decimal).
 21. Done: line spacing in RTF and HTML bodies.
 22. Done: tab leaders, and the line between paragraphs in one border, in RTF bodies.
-23. Next: what is left of M2, in this order: list numbers from the list tables; backgrounds and
-    padding on HTML blocks, and opening a link; text beside pictures and kerning in print;
-    page setup, Table Style and a print preview; metafiles with a bitmap beside the drawing.
+23. Done: list numbers from the list tables of RTF bodies.
+24. Next: what is left of M2, in this order: backgrounds and padding on HTML blocks, and opening a
+    link; text beside pictures and kerning in print; page setup, Table Style and a print
+    preview; metafiles with a bitmap beside the drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -403,3 +404,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   foot of its line and not at the foot of its letters. The line between paragraphs is covered
   by tests and has not been looked at on screen. The sample receipt has dot leaders. Nothing
   here goes beyond Outlook.
+- **2026-10-12** - M2.33: a list paragraph whose writer left its number out is counted. The lists of
+  a body (`\listtable`) and which of them a paragraph is of (`\listoverridetable`, `\ls`,
+  `\ilvl`) are read (RTF 1.9.1, "List Table" and "List Override Table"): each level's kind of
+  number (figures, roman numerals, letters, a nought before one figure, a bullet), where it
+  starts, and the words around it, with the numbers of the levels above where the words ask
+  for them ("4.a"). A number the writer did write (`\listtext`) is still the one shown, and
+  the paragraph is still counted. Before, such paragraphs were plain text with no number.
+  Not yet: a start or a level changed in the override (`\lfolevel`), the older `\pn` lists
+  without `\pntext`, kinds of number other than those named, and the indent a level asks for
+  where the paragraph gives none. The second step of the sample receipt's list is counted
+  this way. Nothing here goes beyond Outlook.
