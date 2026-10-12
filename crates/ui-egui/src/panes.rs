@@ -720,7 +720,7 @@ impl MailUi {
                 ui.horizontal(|ui| {
                     let (mark, _) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::hover());
                     icons::paint(ui.painter(), Rect::from_center_size(mark.center(), vec2(14.0, 14.0)), Icon::Importance, t.danger);
-                    ui.add(egui::Label::new(egui::RichText::new(one_line(caution)).font(font(12.0)).color(t.text)).wrap());
+                    ui.add(egui::Label::new(crate::seen_line(caution, font(12.0), t.text)).wrap());
                 });
             }
             ui.add_space(4.0);
@@ -730,7 +730,7 @@ impl MailUi {
                 }
                 ui.horizontal(|ui| {
                     ui.add_sized(vec2(58.0, 24.0), egui::Label::new(egui::RichText::new(*label).font(font(12.5)).color(t.text_dim)));
-                    let edit = egui::TextEdit::singleline(value).font(font(13.0)).desired_width(f32::INFINITY).id(egui::Id::new(("compose", *key)));
+                    let edit = crate::line_edit::LineEdit::new(value, egui::Id::new(("compose", *key))).font(font(13.0));
                     if ui.add(edit).changed() {
                         acts.push(("compose.setField", json!({ "field": key, "value": value })));
                     }
@@ -740,7 +740,7 @@ impl MailUi {
                 ui.horizontal_wrapped(|ui| {
                     for (i, (name, size)) in attachments.iter().enumerate() {
                         let label = format!("{}  ({})  ✕", one_line(name), human_size(*size));
-                        if ui.add(egui::Button::new(egui::RichText::new(label).font(font(12.0)))).on_hover_text("Remove this attachment").clicked() {
+                        if ui.add(egui::Button::new(crate::seen_line(&label, font(12.0), t.text))).on_hover_text("Remove this attachment").clicked() {
                             acts.push(("compose.removeAttachment", json!({ "index": i })));
                         }
                     }

@@ -12,6 +12,8 @@
 //! {"sample": true}                           open the sample mailbox
 //! {"command": "mail.select", "params": {"index": 0}}
 //! {"shot": "plan/shots/inbox.png"}
+//! {"click": [640, 18]}                       press and let go at a place in the window
+//! {"type": "words"}                          type into what has the keyboard
 //! ```
 //!
 //! Without a script it opens the sample mailbox and writes `plan/shots/ui_shot.png`.
@@ -67,6 +69,16 @@ fn run() -> Result<(), String> {
             if let Err(e) = harness.state_mut().execute(id, &params) {
                 eprintln!("ui_shot: {id}: {e}");
             }
+        } else if let Some(at) = step.get("click").and_then(Value::as_array) {
+            let part = |i: usize| at.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let at = egui::pos2(part(0), part(1));
+            harness.hover_at(at);
+            harness.run_steps(1);
+            harness.drag_at(at);
+            harness.run_steps(1);
+            harness.drop_at(at);
+        } else if let Some(text) = step.get("type").and_then(Value::as_str) {
+            harness.event(egui::Event::Text(text.to_string()));
         } else if let Some(path) = step.get("shot").and_then(Value::as_str) {
             harness.run_steps(4);
             let image = harness.render()?;

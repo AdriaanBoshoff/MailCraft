@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 59 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 60 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 265, all passing |
+| Tests | 266, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -94,7 +94,8 @@
 43. Done: the head and foot of a printed page and the markers of lists are shaped and turned as the body is (M3b.5).
 44. Done: a paragraph written from the right has its indent, its list marker and its quotation bars at the right, on screen and in print (M3b.6).
 45. Done: the journal of unsaved changes is kept in a folder of our own when it cannot be kept beside the data file, is forced to disk once a second, and says exactly how many changes a damaged journal lost when that can be known (M3b.7).
-46. Next: M3b.8: the rest of the M3b list, taking right-to-left text while it is typed next (the compose box, the search box, a folder being renamed).
+46. Done: a line that is typed (the search box, a folder's new name, the address and subject lines, a page's head and foot) is seen in the order it is read while it is typed, with the cursor, the selection and a click where the text is seen (M3b.8).
+47. Next: M3b.9: the rest of the M3b list, taking what is left of a right-to-left paragraph next (tab stops and leaders, a frame's indent, table columns, `<bdo>`).
 
 ## Do later (from M2)
 
@@ -108,7 +109,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Shaping for the text print sets itself: the name and page number at the head and foot of a page, list markers, the header's field names and values~~ | done: M3b.5 |
 | Copying text out of our PDFs tried in PDF readers (the file says what its glyphs stand for; no reader was tried) | M3b |
 | ~~Right-to-left text in the message list, the header of the reading pane and folder names~~ | done: M3b.4 |
-| Right-to-left text while it is typed: the compose box, the search box and a folder's name being changed (egui's text editor draws them as stored; the cursor has to follow the turned text) | M3b |
+| ~~Right-to-left text while it is typed in a field of one line: the search box, a folder's name being changed, the address and subject lines~~ | done: M3b.8 |
+| Right-to-left text while it is typed in the body of a message being written (the toolkit's box draws it as stored; the body gets its own editor with the item windows) | M5 |
 | A right-to-left line in the list, the header and the folder pane set from the right of its cell | M5, with views |
 | ~~For a right-to-left paragraph: list markers, indents and quotation bars at the right~~ | done: M3b.6 |
 | For a right-to-left paragraph: tab stops and their leaders counted from the right; a frame's own indent at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
@@ -861,3 +863,20 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   one; only when a length itself is wrong, so that records cannot be told apart any more,
   does the status line say "or more" (`lostMore` in what `file.open` returns). Pinned in
   `crates/pst/src/tests_journal.rs` and the engine's tests.
+- **2026-10-12** - M3b.8: right-to-left text while it is typed. Every field of one line is now our own
+  (`crates/ui-egui/src/line_edit.rs`): the search box, a folder's new name, the To, Cc, Bcc
+  and Subject lines and the head and foot of a printed page. The toolkit's field drew text as
+  it is stored, so Hebrew or Arabic mixed with other writing came out in the wrong order and
+  the cursor stood at the wrong end of it. The line is now put in the order it is read as it
+  is typed, Arabic letters joined; the cursor stands where the next letter will go on from;
+  what is selected is marked where it is seen; a click lands on the letter under it; and the
+  arrow keys go the way the eye does in a line read from the right. Made better on the way:
+  a field come to with the keyboard has its text selected, to be typed over; what is typed
+  or pasted is one line and brings no mark that turns text round, and one that is already in
+  a name is shown as a dot and can be seen to be taken out; a paste is cut to what the field
+  takes; typing is taken back a word at a time (Ctrl+Z, Ctrl+Y); and the lines above a message
+  being written that say what is wrong with it, the names on its attachments and the words
+  of the link question read the right way too (they were missed in M3b.4). Looked at in the
+  window headlessly: `ui_shot` scripts can now click and type. Not yet, and listed: the body
+  of a message being written is still the toolkit's box; it gets its own editor with the
+  item windows (M5), where its text also stops being plain.

@@ -1102,3 +1102,130 @@ fn one_line_with_right_to_left_writing_is_drawn_in_the_order_it_is_read() {
         }
     }
 }
+
+/// One frame of a field of one line, with the keyboard in it, and what was copied out of it.
+fn field_frame(ctx: &egui::Context, text: &mut String, events: Vec<egui::Event>) -> (line_edit::State, Option<String>, bool) {
+    let id = egui::Id::new("field under test");
+    let mut lost = false;
+    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 200.0))), events, ..Default::default() };
+    let mut output = ctx.run_ui(input, |ui| {
+        if ui.memory(|m| m.focused().is_none()) && !FIELD_LEFT.with(|left| left.get()) {
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+        let field = line_edit::LineEdit::new(text, id).char_limit(40).desired_width(300.0);
+        let response = ui.put(Rect::from_min_size(pos2(20.0, 20.0), vec2(300.0, 24.0)), field);
+        lost = response.lost_focus();
+        if lost {
+            FIELD_LEFT.with(|left| left.set(true));
+        }
+    });
+    output.textures_delta.clear();
+    let copied = output.platform_output.commands.iter().find_map(|c| match c {
+        egui::OutputCommand::CopyText(text) => Some(text.clone()),
+        _ => None,
+    });
+    (line_edit::state(ctx, id).unwrap_or_default(), copied, lost)
+}
+
+thread_local! {
+    static FIELD_LEFT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+}
+
+#[test]
+fn a_line_that_is_typed_keeps_its_cursor_where_the_text_is_seen() {
+    use egui::{Event, Key, Modifiers};
+    let none = Modifiers::NONE;
+    // Where each character is, with every character ten wide.
+    let edges = |text: &str| {
+        let chars: Vec<char> = text.chars().collect();
+        line_edit::line(&chars, &font(13.0), Color32::WHITE, |piece| piece.chars().count() as f32 * 10.0).edges
+    };
+    assert_eq!(edges("abc"), [(0.0, 10.0), (10.0, 20.0), (20.0, 30.0)]);
+    // Written from the right: the first letter is at the right, and ends at its left.
+    assert_eq!(edges("\u{5d0}\u{5d1}\u{5d2}"), [(30.0, 20.0), (20.0, 10.0), (10.0, 0.0)]);
+    // In a line read from the left the Hebrew word stands after the blank, turned.
+    assert_eq!(edges("ab \u{5d0}\u{5d1}"), [(0.0, 10.0), (10.0, 20.0), (20.0, 30.0), (50.0, 40.0), (40.0, 30.0)]);
+    // In a line read from the right the other writing stands at the left, as it is read.
+    assert_eq!(edges("\u{5d0}\u{5d1} ab"), [(50.0, 40.0), (40.0, 30.0), (30.0, 20.0), (0.0, 10.0), (10.0, 20.0)]);
+    // A mark that would turn what follows is a character like another, and turns nothing.
+    assert_eq!(edges("a\u{202e}bc"), [(0.0, 10.0), (10.0, 20.0), (20.0, 30.0), (30.0, 40.0)]);
+    assert!(edges("").is_empty());
+
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    FIELD_LEFT.with(|left| left.set(false));
+    let mut text = String::new();
+    field_frame(&ctx, &mut text, Vec::new());
+    let (state, ..) = field_frame(&ctx, &mut text, vec![Event::Text("abc".to_string())]);
+    assert_eq!((text.as_str(), state.cursor, state.anchor), ("abc", 3, 3));
+    let end = state.caret_x;
+    assert!(end > 10.0);
+    let (state, ..) = field_frame(&ctx, &mut text, vec![key(Key::ArrowLeft, none)]);
+    assert!(state.cursor == 2 && state.caret_x < end);
+    // What is selected is typed over; what was typed is taken back, and put back.
+    let (state, copied, _) = field_frame(&ctx, &mut text, vec![key(Key::Home, Modifiers::SHIFT), Event::Copy, Event::Text("X".to_string())]);
+    assert_eq!((text.as_str(), state.cursor, copied.as_deref()), ("Xc", 1, Some("ab")));
+    field_frame(&ctx, &mut text, vec![key(Key::Z, Modifiers::COMMAND)]);
+    assert_eq!(text, "abc");
+    field_frame(&ctx, &mut text, vec![key(Key::Y, Modifiers::COMMAND)]);
+    assert_eq!(text, "Xc");
+    let (state, copied, _) = field_frame(&ctx, &mut text, vec![key(Key::A, Modifiers::COMMAND), Event::Cut]);
+    assert_eq!((text.as_str(), state.cursor, copied.as_deref()), ("", 0, Some("Xc")));
+
+    // Hebrew, a letter at a time: the cursor goes on at the left of what was typed.
+    let mut last = 0.0;
+    for letter in ["\u{5e9}", "\u{5dc}", "\u{5d5}", "\u{5dd}"] {
+        let (state, ..) = field_frame(&ctx, &mut text, vec![Event::Text(letter.to_string())]);
+        assert!(state.caret_x.abs() < 0.5, "{}", state.caret_x);
+        last = state.caret_x;
+    }
+    assert_eq!(text, "\u{5e9}\u{5dc}\u{5d5}\u{5dd}");
+    // The arrows go the way the eye does: right is back towards the first letter.
+    let (state, ..) = field_frame(&ctx, &mut text, vec![key(Key::ArrowLeft, none)]);
+    assert_eq!(state.cursor, 4, "there is nothing further to the left");
+    let (state, ..) = field_frame(&ctx, &mut text, vec![key(Key::ArrowRight, none)]);
+    assert!(state.cursor == 3 && state.caret_x > last);
+    let (state, ..) = field_frame(&ctx, &mut text, vec![key(Key::Home, none)]);
+    let right = state.caret_x;
+    assert!(state.cursor == 0 && right > 15.0);
+    // A click at the right end of the word is before its first letter; one at its left, after its last.
+    let click = |text: &mut String, x: f32| {
+        let at = pos2(x, 32.0);
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: none };
+        field_frame(&ctx, text, vec![Event::PointerMoved(at)]);
+        field_frame(&ctx, text, vec![button(true)]);
+        field_frame(&ctx, text, vec![button(false)]);
+        let (state, ..) = field_frame(&ctx, text, Vec::new());
+        (state.cursor, state.anchor)
+    };
+    assert_eq!(click(&mut text, 21.0), (4, 4));
+    assert_eq!(click(&mut text, 25.0 + right + 3.0), (0, 0));
+    // Delete takes the letter after the cursor as the text is stored: the first one.
+    field_frame(&ctx, &mut text, vec![key(Key::Delete, none)]);
+    assert_eq!(text, "\u{5dc}\u{5d5}\u{5dd}");
+
+    // What is pasted is one line, brings no mark that turns text round, and is no longer
+    // than the field takes.
+    field_frame(
+        &ctx,
+        &mut text,
+        vec![key(Key::A, Modifiers::COMMAND), Event::Paste(format!("one\r\ntwo\t\u{202e}three\u{0}{}", "x".repeat(10_000)))],
+    );
+    assert!(text.starts_with("one twothree") || text.starts_with("one two three"), "{text}");
+    assert_eq!(text.chars().count(), 40);
+    assert!(!text.chars().any(|c| c.is_control() || c == '\u{202e}'));
+    // What an input method puts together is shown and is not in the text until it is done.
+    field_frame(&ctx, &mut text, vec![key(Key::A, Modifiers::COMMAND), key(Key::Backspace, none)]);
+    let held = egui::Event::Ime(egui::ImeEvent::Preedit { text: "ni".to_string(), active_range_chars: None });
+    field_frame(&ctx, &mut text, vec![held]);
+    assert_eq!(text, "");
+    let (state, ..) = field_frame(&ctx, &mut text, vec![egui::Event::Ime(egui::ImeEvent::Commit("\u{4f60}".to_string()))]);
+    assert_eq!((text.as_str(), state.cursor), ("\u{4f60}", 1));
+    // Enter is the end of typing: the field lets go of the keyboard and keeps its text.
+    let (_, _, lost) = field_frame(&ctx, &mut text, vec![key(Key::Enter, none)]);
+    assert!(lost && text == "\u{4f60}");
+}

@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 13 · 2026-10-12 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 14 · 2026-10-12 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -123,6 +123,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 14 · 2026-10-12 — fields of one line are our own: right-to-left text reads right, and the cursor follows it, while it is typed (M3b.8); not compared with Outlook.
 - 13 · 2026-10-12 — one-line text with Hebrew or Arabic in it is drawn in the order it is read (M3b.4); not compared with Outlook.
 - 12 · 2026-10-12 — the folder pane and the list are sized by dragging their edges, and their sizes are kept (M3b.3).
 - 11 · 2026-10-11 — printing added; its output is not yet compared with Outlook's.

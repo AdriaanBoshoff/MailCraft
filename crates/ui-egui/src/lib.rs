@@ -9,6 +9,7 @@
 mod body;
 mod faces;
 pub mod icons;
+mod line_edit;
 mod panes;
 mod pictures;
 mod preview;
@@ -926,10 +927,9 @@ impl MailUi {
         let edit_rect =
             Rect::from_min_max(pos2(search.left() + 26.0, search.center().y - 10.0), pos2(search.right() - 6.0, search.center().y + 10.0));
         let before = self.search.clone();
-        let edit = egui::TextEdit::singleline(&mut self.search)
-            .id(egui::Id::new("openmailclient-search"))
-            .frame(egui::Frame::NONE)
-            .hint_text(egui::RichText::new("Search").color(t.title_text.gamma_multiply(0.75)))
+        let edit = line_edit::LineEdit::new(&mut self.search, egui::Id::new("openmailclient-search"))
+            .bare()
+            .hint("Search", Some(t.title_text.gamma_multiply(0.75)))
             .text_color(t.title_text)
             .font(font(12.5))
             .desired_width(edit_rect.width());

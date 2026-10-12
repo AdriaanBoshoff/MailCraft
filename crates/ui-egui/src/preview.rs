@@ -138,7 +138,10 @@ impl MailUi {
                         ui.add(dim(label));
                         for (part, hint) in parts.iter().zip(["left", "center", "right"]) {
                             let mut text = part.clone();
-                            let field = egui::TextEdit::singleline(&mut text).hint_text(hint).desired_width(226.0).font(font(12.5));
+                            let field = crate::line_edit::LineEdit::new(&mut text, egui::Id::new(("page-setup", key, hint)))
+                                .hint(hint, None)
+                                .desired_width(226.0)
+                                .font(font(12.5));
                             if ui.add(field).changed() {
                                 changes.push(json!({ key: { hint: text } }));
                             }
@@ -194,7 +197,7 @@ impl MailUi {
                             }
                         }
                         Some(Err(why)) => {
-                            let words = egui::Label::new(egui::RichText::new(why.as_str()).font(font(13.0)).color(t.text)).wrap();
+                            let words = egui::Label::new(crate::seen_line(why, font(13.0), t.text)).wrap();
                             ui.put(room.shrink(40.0), words);
                         }
                         None => {}

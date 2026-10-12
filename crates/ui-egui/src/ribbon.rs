@@ -372,14 +372,15 @@ impl MailUi {
         let title = if ask.mailbox { "Write to this mailbox?" } else { "Open this link?" };
         egui::Window::new(title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
             ui.set_max_width(460.0);
-            let words = |text: &str, size: f32, color: Color32| egui::Label::new(egui::RichText::new(text).font(font(size)).color(color)).wrap();
+            // What a message says of itself is put in the order it is read, like every line taken from one.
+            let words = |text: &str, size: f32, color: Color32| egui::Label::new(crate::seen_line(text, font(size), color)).wrap();
             if !ask.text.is_empty() {
                 ui.add(words(&format!("The text says: {}", ask.text), 12.5, t.text_dim));
                 ui.add_space(4.0);
             }
             if let Some(goes) = &ask.goes {
                 ui.add(words(if ask.mailbox { "It writes to a mailbox at" } else { "It goes to" }, 12.5, t.text_dim));
-                ui.add(egui::Label::new(egui::RichText::new(goes).font(bold(17.0)).color(t.text)).wrap());
+                ui.add(egui::Label::new(crate::seen_line(goes, bold(17.0), t.text)).wrap());
                 ui.add_space(4.0);
             }
             if let Some(concern) = &ask.concern {
@@ -432,7 +433,8 @@ impl MailUi {
         let Some(prompt) = self.prompt.as_mut() else { return };
         let mut done: Option<bool> = None;
         egui::Window::new(prompt.title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-            let edit = ui.add(egui::TextEdit::singleline(&mut prompt.value).desired_width(280.0).char_limit(255));
+            let edit = ui
+                .add(crate::line_edit::LineEdit::new(&mut prompt.value, egui::Id::new("openmailclient-prompt")).desired_width(280.0).char_limit(255));
             if prompt.focus {
                 edit.request_focus();
                 prompt.focus = false;
