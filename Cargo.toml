@@ -18,6 +18,7 @@ mailcraft-pst = { path = "crates/pst" }
 mailcraft-formats = { path = "crates/formats" }
 mailcraft-pdf = { path = "crates/pdf" }
 mailcraft-layout = { path = "crates/layout" }
+mailcraft-render = { path = "crates/render" }
 mailcraft-engine = { path = "crates/engine" }
 mailcraft-ui-egui = { path = "crates/ui-egui" }
 

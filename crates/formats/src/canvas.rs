@@ -3,17 +3,19 @@
 
 /// The longest side of a page, in pixels.
 pub(crate) const MAX_SIDE: usize = 800;
+/// The longest side of any page.
+pub const LARGEST: usize = 4096;
 /// Rows a pixel is cut into when its cover is counted.
 const SUB: usize = 4;
 /// Steps one page may take (an edge met by a row, a pixel covered); a drawing that asks for
 /// more is not drawn.
 const MAX_WORK: u64 = 200_000_000;
 
-pub(crate) type Point = (f32, f32);
-pub(crate) type Rgb = [u8; 3];
+pub type Point = (f32, f32);
+pub type Rgb = [u8; 3];
 
 /// A white page. `clip` is the part of it that can be drawn on: left, top, right, bottom.
-pub(crate) struct Canvas {
+pub struct Canvas {
     pub w: usize,
     pub h: usize,
     px: Vec<u8>,
@@ -26,7 +28,70 @@ impl Canvas {
         if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
             return None;
         }
+        Self::sized(w, h, MAX_SIDE)
+    }
+
+    /// A white page whose sides may be as long as `most`, and no longer than [`LARGEST`].
+    pub fn sized(w: usize, h: usize, most: usize) -> Option<Self> {
+        if w == 0 || h == 0 || w > most.min(LARGEST) || h > most.min(LARGEST) {
+            return None;
+        }
         Some(Self { w, h, px: vec![255; w.checked_mul(h)?.checked_mul(3)?], clip: (0.0, 0.0, w as f32, h as f32), work: 0 })
+    }
+
+    /// The page: red, green and blue for each pixel, row after row from the top.
+    pub fn into_rgb(self) -> Vec<u8> {
+        self.px
+    }
+
+    /// Lay a picture of `w` by `h` pixels (red, green, blue and cover for each, row after row
+    /// from the top) over the box `to` (left, top, right, bottom), made as large as the box.
+    /// `None` when the page's work is used up.
+    pub fn image(&mut self, rgba: &[u8], (w, h): (usize, usize), to: (f32, f32, f32, f32)) -> Option<()> {
+        let (l, t, r, b) = to;
+        if w == 0 || h == 0 || ![l, t, r, b].iter().all(|v| v.is_finite()) || r - l < 0.01 || b - t < 0.01 {
+            return Some(());
+        }
+        if rgba.len() < w.checked_mul(h)?.checked_mul(4)? {
+            return Some(());
+        }
+        let (first_x, last_x) = (l.max(self.clip.0).max(0.0).floor() as usize, (r.min(self.clip.2).ceil().max(0.0) as usize).min(self.w));
+        let (first_y, last_y) = (t.max(self.clip.1).max(0.0).floor() as usize, (b.min(self.clip.3).ceil().max(0.0) as usize).min(self.h));
+        // Picture pixels to one of the page, each way; up to four of them are looked at.
+        let (step_x, step_y) = (w as f32 / (r - l), h as f32 / (b - t));
+        let (nx, ny) = ((step_x.ceil() as usize).clamp(1, 4), (step_y.ceil() as usize).clamp(1, 4));
+        for y in first_y..last_y {
+            self.work = self.work.saturating_add((last_x.saturating_sub(first_x) * nx * ny) as u64 + 1);
+            if self.work > MAX_WORK {
+                return None;
+            }
+            for x in first_x..last_x {
+                let (mut sum, mut cover) = ([0f32; 3], 0f32);
+                for j in 0..ny {
+                    for i in 0..nx {
+                        let sx = (x as f32 + (i as f32 + 0.5) / nx as f32 - l) * step_x;
+                        let sy = (y as f32 + (j as f32 + 0.5) / ny as f32 - t) * step_y;
+                        if sx < 0.0 || sy < 0.0 || sx >= w as f32 || sy >= h as f32 {
+                            continue;
+                        }
+                        let at = (sy as usize * w + sx as usize) * 4;
+                        if let Some(&[red, green, blue, a]) = rgba.get(at..at + 4) {
+                            let a = f32::from(a) / 255.0;
+                            sum = [sum[0] + f32::from(red) * a, sum[1] + f32::from(green) * a, sum[2] + f32::from(blue) * a];
+                            cover += a;
+                        }
+                    }
+                }
+                let part = cover / (nx * ny) as f32;
+                let Some(pixel) = y.checked_mul(self.w).and_then(|row| self.px.get_mut((row + x) * 3..(row + x) * 3 + 3)) else { continue };
+                if part > 0.0 {
+                    for (was, now) in pixel.iter_mut().zip(sum) {
+                        *was = (f32::from(*was) * (1.0 - part) + now / (nx * ny) as f32).round().clamp(0.0, 255.0) as u8;
+                    }
+                }
+            }
+        }
+        Some(())
     }
 
     /// Fill what `rings` enclose, each ring closed back to its first point. `winding` fills

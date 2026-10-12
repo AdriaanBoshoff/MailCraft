@@ -474,7 +474,7 @@ impl MailUi {
             (Icon::Save, "Save Message As…", "ui.saveAsDialog", Value::Null),
             (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
             (Icon::Clip, "Save All Attachments…", "ui.saveAllAttachmentsDialog", Value::Null),
-            (Icon::Print, "Print…", "ui.printDialog", Value::Null),
+            (Icon::Print, "Print…", "ui.printPreview", Value::Null),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
             (Icon::Junk, "Exit", "ui.quit", Value::Null),
         ];
@@ -485,7 +485,7 @@ impl MailUi {
                 "ui.saveAttachmentDialog" | "ui.saveAllAttachmentsDialog" => {
                     self.session.is_enabled("file.saveAttachment") && self.session.open.as_ref().is_some_and(|it| !it.attachments.is_empty())
                 }
-                "ui.printDialog" => self.session.is_enabled("file.print"),
+                "ui.printPreview" => self.session.is_enabled("file.print"),
                 c if c.starts_with("ui.") => true,
                 c => self.session.is_enabled(c),
             };

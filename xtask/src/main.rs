@@ -22,12 +22,16 @@ const LAYERS: &[(&str, &str, u8)] = &[
     ("mailcraft-formats", "crates/formats", 2),
     ("mailcraft-pdf", "crates/pdf", 2),
     ("mailcraft-layout", "crates/layout", 3),
+    ("mailcraft-render", "crates/render", 3),
     ("mailcraft-engine", "crates/engine", 4),
     ("mailcraft-ui-egui", "crates/ui-egui", 6),
     ("mailcraft", "apps/mailcraft", 7),
     ("mailcraft-cli", "apps/mailcraft-cli", 7),
 ];
 
+/// The only dependencies allowed inside one layer, each named: the rasteriser draws the pages
+/// the layout made, and both are L3 in the architecture.
+const WITHIN_LAYER: &[(&str, &str)] = &[("mailcraft-render", "mailcraft-layout")];
 /// Crates that must never appear below the UI layer.
 const GUI_CRATES: &[&str] = &["egui", "eframe", "winit", "rfd", "egui_kittest", "wgpu"];
 /// Everything the web build needs must compile for wasm32.
@@ -40,6 +44,7 @@ const WASM_CRATES: &[&str] = &[
     "mailcraft-formats",
     "mailcraft-pdf",
     "mailcraft-layout",
+    "mailcraft-render",
     "mailcraft-engine",
 ];
 const ASSET_EXTENSIONS: &[&str] = &[
@@ -152,6 +157,7 @@ fn layers() -> Result<(), String> {
         for dep in dependencies(&manifest) {
             if let Some((_, _, dep_layer)) = LAYERS.iter().find(|(n, _, _)| *n == dep)
                 && dep_layer >= layer
+                && !(dep_layer == layer && WITHIN_LAYER.contains(&(*name, dep.as_str())))
             {
                 problems.push(format!("{name} (L{layer}) depends on {dep} (L{dep_layer})"));
             }

@@ -103,7 +103,9 @@ Not compared against Outlook's print output yet: printing from Outlook would use
 or its print dialog, and neither is driven on the shared machine. MailCraft's Memo Style page (the
 owner's name over a line, field names in bold beside their values, the body, a page number at the
 foot) is laid out from general knowledge of the style, and its measures are our own. File > Print
-and Ctrl+P ask for a PDF file to write; there is no print dialog and no preview.
+and Ctrl+P open a print window: the page as it will be printed beside the paper, direction, margins,
+header and footer; its button asks for a PDF file to write. The window's arrangement is our own;
+Outlook's print pane was not observed.
 
 ## Behaviour seen
 

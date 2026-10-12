@@ -210,6 +210,12 @@ pub struct Job<'a> {
     pub links: Links,
 }
 
+/// A print of the session's open message: from its owner's mailbox, now.
+pub fn job<'a>(s: &'a crate::Session, setup: &'a Setup, links: Links) -> Job<'a> {
+    let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
+    Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup, links }
+}
+
 /// The widest margin that may be asked for, and the most characters of one part of a header
 /// or footer.
 const MAX_MARGIN_MM: f64 = 150.0;
@@ -455,6 +461,30 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
         }
     }
     writer.finish(title).map_err(|e| EngineError::Format(e.to_string()))
+}
+
+/// Lay `item` out for `job` in the installed fonts, to look at or to write.
+pub fn laid(item: &Item, job: &Job) -> Result<Laid, EngineError> {
+    layout(item, job, library())
+}
+
+/// Page `page` (the first is 0) of what was laid out, as pixels, `scale` of them to the point.
+/// It is drawn from what the PDF file is written from. `None` when there is no such page.
+pub fn raster(laid: &Laid, page: usize, scale: f32) -> Option<mailcraft_render::Image> {
+    let pictures =
+        |picture: &Picture| laid.pictures.get(picture).map(|p| mailcraft_render::Bitmap { width: p.width, height: p.height, rgba: &p.rgba });
+    mailcraft_render::page(&laid.printed, page, scale, &pictures)
+}
+
+/// A drawn page as a PNG file.
+pub fn png(image: &mailcraft_render::Image) -> Result<Vec<u8>, EngineError> {
+    use image::ImageEncoder;
+    let (width, height) = (u32::try_from(image.width).unwrap_or(0), u32::try_from(image.height).unwrap_or(0));
+    let mut file = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut file)
+        .write_image(&image.rgb, width, height, image::ExtendedColorType::Rgb8)
+        .map_err(|e| EngineError::Format(e.to_string()))?;
+    Ok(file)
 }
 
 /// Print `item` to a PDF file's bytes, in the installed fonts.

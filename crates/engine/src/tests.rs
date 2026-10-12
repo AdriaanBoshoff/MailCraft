@@ -66,6 +66,8 @@ fn hostile_params_never_panic() {
         json!({"path": "Z:\\no\\such\\dir\\file.msg", "folder": "/", "name": "\u{7}", "field": "to", "value": "<<<>>>;;;,,,\"", "index": 99999}),
         json!({"show": "yes", "on": 3, "descending": "no", "clear": "true"}),
         json!({"address": 7, "confirm": 7}),
+        json!({"page": 0, "dpi": 1e9, "path": "Z:/no/such/dir/x.png"}),
+        json!({"page": 1e300, "dpi": "x", "path": "Z:/no/such/dir/con.png", "margins": 149}),
         json!({"margins": 1e308, "orientation": 7, "reset": "x", "header": {"left": "[".repeat(70_000)}, "footer": []}),
         json!({"margins": {"top": null, "left": -1e300}, "header": 7, "footer": {"center": "[Page".repeat(20_000)}}),
         json!({"margins": 0, "paper": "tabloid", "orientation": "landscape", "header": "[Subject][Date][Time][User]", "reset": true}),
@@ -1801,5 +1803,92 @@ fn page_setup_is_kept_and_printed_with() {
     }
     assert!(matches!(s.run("file.print", &json!({"path": dir.join("p.pdf"), "margins": -3})), Err(EngineError::BadParams(_))));
     assert!(!dir.join("p.pdf").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_page_can_be_looked_at_before_it_is_printed() {
+    let mut s = session();
+    assert!(!s.is_enabled("file.printPreview"));
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let dir = std::env::temp_dir().join(format!("mailcraft-preview-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("page.png");
+
+    // What is no page, no picture file or no density is refused before anything is laid out.
+    for bad in [
+        json!({"path": dir.join("page.jpg")}),
+        json!({"path": dir.join("page")}),
+        json!({"page": 0}),
+        json!({"page": -1}),
+        json!({"page": "one"}),
+        json!({"dpi": 10}),
+        json!({"dpi": 601}),
+        json!({"dpi": "fine"}),
+        json!({"links": "some"}),
+        json!({"margins": -1}),
+    ] {
+        assert!(matches!(s.run("file.printPreview", &bad), Err(EngineError::BadParams(_))), "{bad}");
+    }
+    assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
+
+    // The page that is drawn is the page that is printed: with the test font both are known.
+    let item = s.open.clone().unwrap();
+    let library = mailcraft_fonts::Library::empty();
+    let laid = {
+        let mut fonts = mailcraft_layout::Fonts::new(&library);
+        let chars: String = (' '..='~').chain(['\u{e1}', '\u{2022}']).collect();
+        fonts.give("Arial", false, false, mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font(&chars), index: 0 });
+        let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
+        let memo = mailcraft_layout::Memo { owner: "Alex Morgan", fields: &[], body: &body, plain: false, sizes: &|_| None };
+        let printed = mailcraft_layout::memo(&memo, mailcraft_layout::Paper::A4, &mut fonts).unwrap();
+        crate::print::Laid { links: 0, printed, pictures: crate::print::Pictures::default() }
+    };
+    let image = crate::print::raster(&laid, 0, 2.0).unwrap();
+    assert_eq!((image.width, image.height), (1191, 1684));
+    // Ink where the owner's name stands (its first box), and where each piece of text does.
+    let seen = |x: f32, y: f32| {
+        let at = ((y * 2.0) as usize * image.width + (x * 2.0) as usize) * 3;
+        [image.rgb[at], image.rgb[at + 1], image.rgb[at + 2]]
+    };
+    let texts = &laid.printed.pages[0].texts;
+    assert!(texts.len() > 20);
+    for text in texts.iter().filter(|t| t.glyphs.first().is_some_and(|g| g.1 != ' ')) {
+        assert_eq!(seen(text.x + text.size * 0.25, text.y - text.size * 0.3), text.color, "{text:?}");
+    }
+    assert!(seen(10.0, 10.0) == [255; 3] && seen(300.0, 830.0) == [255; 3]);
+    assert!(crate::print::raster(&laid, 1, 2.0).is_none());
+    let file = crate::print::png(&image).unwrap();
+    assert!(file.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let back = image::load_from_memory(&file).unwrap().to_rgb8();
+    assert_eq!((back.width(), back.height()), (1191, 1684));
+    assert_eq!(back.into_raw(), image.rgb);
+
+    // Through the command, in the installed fonts: how many pages, and a picture of one when
+    // asked for; or the word that no font is installed. Nothing is kept of the setup.
+    let kept = s.page_setup.clone();
+    match s.run("file.printPreview", &json!({})) {
+        Ok(result) => {
+            assert_eq!(result["pages"], 1);
+            assert_eq!(result["page"], 1);
+            assert_eq!(result["setup"]["paper"], "a4");
+            assert!(result.get("path").is_none());
+            let result = run(&mut s, "file.printPreview", json!({"path": path, "dpi": 48, "paper": "a5", "orientation": "landscape"}));
+            assert_eq!((result["width"].as_u64(), result["height"].as_u64()), (Some(397), Some(280)));
+            assert_eq!(result["setup"]["orientation"], "landscape");
+            let seen = image::load_from_memory(&std::fs::read(&path).unwrap()).unwrap().to_rgb8();
+            assert_eq!((seen.width(), seen.height()), (397, 280));
+            // A page with text on it is neither blank nor black.
+            let dark = seen.pixels().filter(|p| p.0[0] < 128).count();
+            assert!(dark > 200 && dark < 397 * 280 / 4, "{dark}");
+            let pages = result["pages"].as_u64().unwrap();
+            assert!(matches!(
+                s.run("file.printPreview", &json!({"page": pages + 1, "paper": "a5", "orientation": "landscape"})),
+                Err(EngineError::BadParams(_))
+            ));
+        }
+        Err(e) => assert!(matches!(e, EngineError::Format(_)), "{e}"),
+    }
+    assert_eq!(s.page_setup, kept);
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -74,6 +74,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: print,
         },
         CommandSpec {
+            id: "file.printPreview",
+            label: "Print Preview",
+            tab: "File",
+            group: "Print",
+            shortcut: "",
+            params: r#"{"page": which page, from 1 (default 1), "path": where to write that page as a picture, ending in .png (left out: nothing is written), "dpi": pixels to the inch of the picture, 24 to 600 (default 96), "links" as file.print; and, for this look only, anything file.pageSetup takes}; the page is drawn from what file.print writes; returns {"pages", "page", "truncated", "links", "setup"} and with a path {"path", "width", "height"} in pixels"#,
+            enabled: has_selection,
+            run: print_preview,
+        },
+        CommandSpec {
             id: "file.pageSetup",
             label: "Page Setup",
             tab: "File",
@@ -223,6 +233,60 @@ fn save_all_attachments(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"count": paths.len(), "untrusted_content": {"paths": paths}}))
 }
 
+/// Which links a print lists, as the parameters ask.
+fn print_links(p: &Value) -> Result<crate::print::Links, EngineError> {
+    match p_str(p, "links") {
+        Some(name) => {
+            crate::print::Links::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown links {name:?}: none, concerns or all")))
+        }
+        None => Ok(crate::print::Links::default()),
+    }
+}
+
+/// Lay the open message out as it would be printed and say how many pages it takes; with a
+/// path, write one page as a picture.
+fn print_preview(s: &mut Session, p: &Value) -> CmdResult {
+    let path = match p_str(p, "path") {
+        Some(path) if Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) => Some(Path::new(path)),
+        Some(_) => return Err(EngineError::BadParams("a page is written as a PNG picture: the path must end in .png".into())),
+        None => None,
+    };
+    let page = match p.get("page") {
+        None => 1,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| *n >= 1)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| EngineError::BadParams("\"page\" is a page's number, from 1".into()))?,
+    };
+    let dpi = match p.get("dpi") {
+        None => 96.0,
+        Some(v) => {
+            v.as_f64().filter(|d| (24.0..=600.0).contains(d)).ok_or_else(|| EngineError::BadParams("\"dpi\" is a number from 24 to 600".into()))?
+        }
+    };
+    let setup = crate::print::setup_with(&s.page_setup, p)?;
+    let links = print_links(p)?;
+    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
+    let laid = crate::print::laid(item, &crate::print::job(s, &setup, links))?;
+    let pages = laid.printed.pages.len();
+    if page > pages {
+        return Err(EngineError::BadParams(format!("there is no page {page}: the message takes {pages}")));
+    }
+    let mut out =
+        json!({"pages": pages, "page": page, "truncated": laid.printed.truncated, "links": laid.links, "setup": crate::print::setup_json(&setup)});
+    if let Some(path) = path {
+        let image =
+            crate::print::raster(&laid, page - 1, dpi as f32 / 72.0).ok_or_else(|| EngineError::Format("the page could not be drawn".into()))?;
+        io::write_atomic(path, &crate::print::png(&image)?)?;
+        out["path"] = json!(path.display().to_string());
+        out["width"] = json!(image.width);
+        out["height"] = json!(image.height);
+        s.status = format!("Page {page} of {pages} written to {}", path.display());
+    }
+    Ok(out)
+}
+
 /// Print the open message, in Memo Style, to a PDF file.
 fn print(s: &mut Session, p: &Value) -> CmdResult {
     let path = Path::new(need_str(p, "path")?);
@@ -230,15 +294,9 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::BadParams("printing writes a PDF file: the path must end in .pdf".into()));
     }
     let setup = crate::print::setup_with(&s.page_setup, p)?;
-    let links = match p_str(p, "links") {
-        Some(name) => {
-            crate::print::Links::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown links {name:?}: none, concerns or all")))?
-        }
-        None => crate::print::Links::default(),
-    };
+    let links = print_links(p)?;
     let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
-    let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
-    let printed = crate::print::pdf(item, &crate::print::Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup: &setup, links })?;
+    let printed = crate::print::pdf(item, &crate::print::job(s, &setup, links))?;
     io::write_atomic(path, &printed.file)?;
     s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
     Ok(json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated, "links": printed.links}))

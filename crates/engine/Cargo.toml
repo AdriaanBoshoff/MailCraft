@@ -16,6 +16,7 @@ mailcraft-pst = { workspace = true }
 mailcraft-formats = { workspace = true }
 mailcraft-fonts = { workspace = true }
 mailcraft-layout = { workspace = true }
+mailcraft-render = { workspace = true }
 mailcraft-pdf = { workspace = true }
 # Decodes the pictures a message body shows.
 image = { workspace = true, features = ["jpeg", "gif", "bmp"] }

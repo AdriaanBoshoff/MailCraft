@@ -11,6 +11,7 @@ mod faces;
 pub mod icons;
 mod panes;
 mod pictures;
+mod preview;
 mod ribbon;
 pub mod theme;
 
@@ -84,7 +85,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.ribbonTab", label: "Show Ribbon Tab", params: r#"{"tab": "file" | "home" | "sendreceive" | "folder" | "view" | "help"}"# },
     UiCommand { id: "ui.openDialog", label: "Open…", params: "" },
     UiCommand { id: "ui.saveAsDialog", label: "Save As…", params: "" },
-    UiCommand { id: "ui.printDialog", label: "Print…", params: "" },
+    UiCommand { id: "ui.printDialog", label: "Print to PDF…", params: "" },
+    UiCommand {
+        id: "ui.printPreview",
+        label: "Print…",
+        params: r#"{"page": which page to show, from 1 (default 1), "close": true to close the window}; shows the pages as they will be printed, with the page setup"#,
+    },
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
     UiCommand { id: "ui.saveAllAttachmentsDialog", label: "Save All Attachments…", params: "" },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
@@ -163,6 +169,7 @@ pub struct MailUi {
     pub(crate) menu_fresh: bool,
     pub(crate) prompt: Option<Prompt>,
     pub(crate) link_ask: Option<LinkAsk>,
+    pub(crate) preview: Option<preview::Preview>,
     pub(crate) scroll_to_selected: bool,
     fonts_ready: bool,
 }
@@ -269,6 +276,7 @@ impl MailUi {
             menu_fresh: false,
             prompt: None,
             link_ask: None,
+            preview: None,
             scroll_to_selected: false,
             fonts_ready: false,
         }
@@ -315,6 +323,20 @@ impl MailUi {
             "ui.openDialog" => self.requests.push(UiRequest::OpenFile),
             "ui.saveAsDialog" => self.requests.push(UiRequest::SaveAs),
             "ui.printDialog" => self.requests.push(UiRequest::Print),
+            "ui.printPreview" => {
+                if params.get("close").and_then(Value::as_bool) == Some(true) {
+                    self.preview = None;
+                } else if !self.session.is_enabled("file.print") {
+                    return Err("No message is open".to_string());
+                } else {
+                    self.menu = None;
+                    let page = number("page").and_then(|n| usize::try_from(n).ok()).unwrap_or(1).saturating_sub(1);
+                    match self.preview.as_mut() {
+                        Some(preview) => preview.page = page,
+                        None => self.preview = Some(preview::Preview::at(page)),
+                    }
+                }
+            }
             "ui.saveAttachmentDialog" => {
                 self.requests.push(UiRequest::SaveAttachment(number("index").and_then(|n| usize::try_from(n).ok()).unwrap_or(0)))
             }
@@ -506,6 +528,7 @@ impl MailUi {
         self.menu_popup(&ctx);
         self.prompt_window(&ctx);
         self.link_window(&ctx);
+        self.preview_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
             if let Err(e) = self.execute(&id, &params) {
@@ -515,7 +538,7 @@ impl MailUi {
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
-        if self.prompt.is_some() || self.link_ask.is_some() {
+        if self.prompt.is_some() || self.link_ask.is_some() || self.preview.is_some() {
             return;
         }
         let typing = ui.ctx().memory(|m| m.focused().is_some());
@@ -554,7 +577,7 @@ impl MailUi {
             run.push(("ui.saveAsDialog", Value::Null));
         }
         if hit(ctrl, Key::P) && self.session.is_enabled("file.print") {
-            run.push(("ui.printDialog", Value::Null));
+            run.push(("ui.printPreview", Value::Null));
         }
         if !typing && hit(ctrl, Key::Z) {
             run.push(("edit.undo", Value::Null));

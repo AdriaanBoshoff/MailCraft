@@ -74,7 +74,8 @@ impl Loaded {
         (self.ascent * scale, self.descent * scale, self.gap * scale)
     }
 
-    pub(crate) fn advance(&self, glyph: u16, size: f32) -> f32 {
+    /// How far `glyph` moves the line on at `size`.
+    pub fn advance(&self, glyph: u16, size: f32) -> f32 {
         f32::from(self.advances.get(usize::from(glyph)).copied().unwrap_or(0)) * size / self.units
     }
 }

@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 40 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 41 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 186, all passing |
+| Tests | 190, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -75,8 +75,9 @@
 25. Done: opening a link, after being asked.
 26. Done: text beside pictures, and kerning, in print.
 27. Done: page setup for print.
-28. Next: what is left of M2, in this order: a print preview (with the page setup in it),
-    Table Style; metafiles with a bitmap beside the drawing.
+28. Done: a print preview with the page setup in it.
+29. Next: what is left of M2, in this order: Table Style; metafiles with a bitmap beside
+    the drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -475,3 +476,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   with the print preview, next), the setup kept between runs, a font or size of one's own
   for header and footer. Not compared with Outlook's page setup; nothing here is claimed
   to go beyond it.
+- **2026-10-12** - M2.38: print preview. A new crate, `render` (L3), draws a laid-out page as
+  pixels: fills, rules (dashed and dotted as in the PDF), pictures and the outlines of the
+  glyphs, from the same pages the PDF file is written from, so what is seen is what is
+  printed. `file.printPreview` says how many pages a message takes and, with a path,
+  writes one page as a PNG picture (24 to 600 pixels to the inch); it takes the page setup
+  for that look only and keeps nothing. In the window, File > Print and Ctrl+P now open
+  a print window (`ui.printPreview`): the page beside the paper, the direction, the four
+  margins, and the header and footer parts, each of which runs `file.pageSetup` and is
+  seen at once; Previous and Next, and Page Up, Page Down, Home and End, turn the pages;
+  "Print to PDF" asks for the file as before. Sides of a drawn page are held to 4096
+  pixels. `xtask layers` now names the one dependency allowed inside a layer (render on
+  layout). The hostile-parameters test no longer leaves two files in the crate's folder.
+  Not yet: the setup kept between runs, a zoom, several pages side by side. Outlook's
+  print pane was not observed, so nothing is compared with it and nothing here is claimed
+  to go beyond it; for agents, a page as a picture from the command line is our own.

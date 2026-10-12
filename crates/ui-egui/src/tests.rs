@@ -598,3 +598,79 @@ fn a_click_on_a_link_asks_and_only_the_answer_opens_it() {
     ui.execute("ui.linkDialog", &json!({"index": 3})).unwrap();
     assert!(ui.link_ask.as_ref().is_some_and(|a| a.mailbox && a.goes.as_deref() == Some("mailbox-notice.example.net")));
 }
+
+#[test]
+fn the_print_window_shows_the_pages_and_follows_the_setup() {
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.printPreview", &Value::Null).is_err(), "no message is open");
+    assert!(ui.preview.is_none());
+    ui.execute("mail.select", &json!({"folder": "Inbox", "index": 4})).unwrap();
+    ui.execute("ui.printPreview", &Value::Null).unwrap();
+    assert!(ui.preview.as_ref().is_some_and(|p| p.page == 0 && p.laid.is_none()));
+
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let frame = |ui: &mut MailUi, events: Vec<egui::Event>| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |u| ui.ui(u));
+        output.textures_delta.clear();
+    };
+    let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    for dark in [false, true] {
+        ui.execute("ui.theme", &json!({"theme": if dark { "dark" } else { "light" }})).unwrap();
+        for _ in 0..3 {
+            frame(&mut ui, Vec::new());
+        }
+    }
+    // The pages are laid out in the installed fonts; where none is installed the window says so.
+    let pages = ui.preview.as_ref().unwrap().pages();
+    let laid = ui.preview.as_ref().unwrap().laid.as_ref().unwrap().is_ok();
+    assert_eq!(laid, pages > 0);
+    // Looking at the pages prints nothing and changes nothing.
+    assert!(ui.requests.is_empty());
+    assert_eq!(ui.session.page_setup, mailcraft_layout::Setup::default());
+
+    // A change of the setup, from the window or from outside, is laid out again.
+    ui.execute("file.pageSetup", &json!({"paper": "a5", "orientation": "landscape", "margins": 30})).unwrap();
+    frame(&mut ui, Vec::new());
+    let now = ui.preview.as_ref().unwrap().pages();
+    if laid {
+        assert!(now > pages, "{now} pages on the small sheet, {pages} on the large");
+        // Keys turn the pages, and stop at the first and the last.
+        frame(&mut ui, vec![key(egui::Key::End, egui::Modifiers::NONE)]);
+        assert_eq!(ui.preview.as_ref().unwrap().page, now - 1);
+        frame(&mut ui, vec![key(egui::Key::PageDown, egui::Modifiers::NONE)]);
+        assert_eq!(ui.preview.as_ref().unwrap().page, now - 1);
+        frame(&mut ui, vec![key(egui::Key::PageUp, egui::Modifiers::NONE)]);
+        assert_eq!(ui.preview.as_ref().unwrap().page, now - 2);
+        frame(&mut ui, vec![key(egui::Key::Home, egui::Modifiers::NONE)]);
+        assert_eq!(ui.preview.as_ref().unwrap().page, 0);
+    }
+    // A page there is none of is the last one.
+    ui.execute("ui.printPreview", &json!({"page": 9_999})).unwrap();
+    frame(&mut ui, Vec::new());
+    assert_eq!(ui.preview.as_ref().unwrap().page, now.saturating_sub(1));
+    // Another message is laid out in its place.
+    ui.execute("mail.select", &json!({"folder": "Inbox", "index": 0})).unwrap();
+    frame(&mut ui, Vec::new());
+    assert!(ui.preview.as_ref().unwrap().laid.is_some());
+
+    // Escape closes it, Ctrl+P opens it, and the command can close it; nothing was printed.
+    frame(&mut ui, vec![key(egui::Key::Escape, egui::Modifiers::NONE)]);
+    assert!(ui.preview.is_none());
+    frame(&mut ui, vec![key(egui::Key::P, egui::Modifiers::COMMAND)]);
+    frame(&mut ui, Vec::new());
+    assert!(ui.preview.is_some());
+    ui.execute("ui.printPreview", &json!({"close": true})).unwrap();
+    assert!(ui.preview.is_none());
+    assert!(ui.requests.is_empty());
+    // With no message open the window has nothing to show and goes away.
+    ui.execute("ui.printPreview", &Value::Null).unwrap();
+    ui.session.open = None;
+    frame(&mut ui, Vec::new());
+    assert!(ui.preview.is_none());
+}

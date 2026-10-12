@@ -11,12 +11,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
-use skrifa::{FontRef, MetadataProvider};
+use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 use crate::{Face, Library, wanted};
 
 /// Letters in one line.
 const MAX_LETTERS: usize = 1024;
+/// Glyphs whose outlines are read at once.
+const MAX_SHAPES: usize = 4096;
 /// Points round one letter.
 const MAX_POINTS: usize = 20_000;
 /// Straight pieces a curve of a letter is cut into.
@@ -172,6 +174,27 @@ pub fn letters(data: &[u8], index: u32, slant: bool, text: &str) -> Option<Lette
     }
     let (ascent, descent) = (whole.ascent / by, -whole.descent / by);
     (ascent.is_finite() && descent.is_finite() && ascent + descent > 0.0).then_some(Letters { each, ascent, descent })
+}
+
+/// The outlines of `glyphs` of the font at `index` of the file `data`, in ems from each
+/// glyph's start on its baseline, rows running downwards; leaning when `slant`. A glyph that
+/// draws nothing, or is not in the font, has no rings. For text that was laid out as glyphs.
+pub fn shapes(data: &[u8], index: u32, slant: bool, glyphs: &[u16]) -> Option<Vec<Vec<Ring>>> {
+    let font = FontRef::from_index(data, index).ok()?;
+    let units = font.metrics(Size::unscaled(), LocationRef::default()).units_per_em;
+    if units == 0 {
+        return None;
+    }
+    let outlines = font.outline_glyphs();
+    let mut each = Vec::new();
+    for glyph in glyphs.iter().take(MAX_SHAPES) {
+        let mut tracer = Tracer { rings: Vec::new(), by: f32::from(units), slant: if slant { SLANT } else { 0.0 }, at: (0.0, 0.0), points: 0 };
+        let drawn = outlines
+            .get(GlyphId::new(u32::from(*glyph)))
+            .is_some_and(|outline| outline.draw(DrawSettings::unhinted(Size::unscaled(), LocationRef::default()), &mut tracer).is_ok());
+        each.push(if drawn && tracer.points <= MAX_POINTS { tracer.rings } else { Vec::new() });
+    }
+    Some(each)
 }
 
 /// One face, whatever font is asked for: for where the font is known beforehand.

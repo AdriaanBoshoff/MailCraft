@@ -1830,6 +1830,7 @@ dependencies = [
  "mailcraft-msg",
  "mailcraft-pdf",
  "mailcraft-pst",
+ "mailcraft-render",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1909,6 +1910,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mailcraft-render"
+version = "0.1.0"
+dependencies = [
+ "mailcraft-fonts",
+ "mailcraft-formats",
+ "mailcraft-layout",
+]
+
+[[package]]
 name = "mailcraft-ui-egui"
 version = "0.1.0"
 dependencies = [
@@ -1920,6 +1930,7 @@ dependencies = [
  "mailcraft-engine",
  "mailcraft-fonts",
  "mailcraft-formats",
+ "mailcraft-layout",
  "mailcraft-model",
  "serde_json",
 ]
