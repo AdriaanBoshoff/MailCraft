@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 6 · 2026-10-12 · the node database of a `.pst` is written (M3.1), not yet anything Outlook can open
+**Status:** revision 7 · 2026-10-12 · the node database and the property lists and tables of a `.pst` are written (M3.1, M3.2), not yet anything Outlook can open
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -47,7 +47,7 @@ Outlook window (only the automation interface was used).
 
 Read: ANSI, Unicode and 4K-page files. See [gaps.md](gaps.md) items 2, 7 and 8.
 
-Written so far (M3.1), Unicode with 512-byte pages only:
+Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 
 | Part ([MS-PST]) | Written | Checked by |
 |---|---|---|
@@ -58,7 +58,10 @@ Written so far (M3.1), Unicode with 512-byte pages only:
 | Data trees, one and two levels (2.2.2.8.3.2) | yes | read back, 33 MB item |
 | Subnode trees with an index block (2.2.2.8.3.3) | yes | read back, 800 subnodes |
 | Block and node B-trees (2.2.2.7.7) | yes | read back, 1,000 nodes |
-| Heaps, property lists, tables (2.3) | no | M3.2 |
+| Heaps over many blocks, with fill levels (2.3.1) | yes; which half of a byte holds the earlier block's level is our reading | read back, more than eight blocks |
+| Index in a heap, any depth (2.3.2) | yes | read back, 3,000 records |
+| Property list; large values in subnodes (2.3.3) | yes | read back, every value type of the model |
+| Table; rows in the heap or in a subnode (2.3.4) | yes | read back, 6,000 rows |
 | Folders, messages, the nodes every file must have (2.4, 2.7) | no | M3.3 |
 
 No file from this writer has been opened in Outlook: there is nothing above the node layer to

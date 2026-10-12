@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress · revision 48 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress · revision 49 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 224, all passing |
+| Tests | 229, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -18,7 +18,7 @@
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
-| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: the node database is written (M3.1) |
+| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: the node database (M3.1) and property lists and tables (M3.2) are written |
 | M3b | The do-later batch from M2 (see "Do later (from M2)") | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -83,7 +83,8 @@
 32. Done: right-to-left text is drawn and printed in the order it is read, and Arabic letters are joined (M2.41).
 33. Done: print shapes text from each font's own tables, and a PDF says what its glyphs stand for (M2.42).
 34. Done: the node database of a `.pst` is written, and a data file's structure can be checked (M3.1).
-35. Next: M3.2 (writing the heaps, property lists and tables that sit on nodes), then M3.3 (folders and messages, save as `.pst`).
+35. Done: property lists and tables of a `.pst` are written (M3.2).
+36. Next: M3.3 (folders and messages, the nodes every data file must have, save as `.pst`).
 
 ## Do later (from M2)
 
@@ -102,6 +103,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Keeping the page setup between runs | M3, with the first settings that are saved |
 | A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile) | M3.3, when there is a mailbox to open |
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
+| The structure check reaching into heaps, property lists and tables (it stops at blocks and nodes) | M3b |
+| 32-bit floats, currency and error values keeping their type when an item is written from the model | M3.4, with the copy of unchanged items |
+| A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
 | Writing ANSI and 4K-page data files (a re-saved file keeps its kind) | M3b |
 | The selected rows only, the view's own columns and group headings in Table Style | M3b, the batch after M3 |
@@ -637,3 +641,20 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   worked out from the coverage the specification gives, not compared with a file Outlook wrote.
   The bit order of the allocation maps was seen in the structure of a local data file; our
   files fill them in whole bytes, so they do not depend on it.
+- **2026-10-12** - M3.2: the middle layer of a `.pst` is written. `crates/pst/src/ltp_write.rs` builds a
+  heap over as many blocks as it needs (with the block headers and fill levels of each kind),
+  the index kept in a heap with as many levels as it needs, and on them a property list and a
+  table: values of up to four bytes in the record (eight in a table row), up to 3,580 bytes in
+  the heap, larger ones in a subnode of their own; a table's rows in the heap or, when they
+  are many, in a subnode whose blocks each hold whole rows. Values go in and come out as the
+  bytes the file stores, so a property this code does not understand is written as it was
+  read. Still nothing a user can reach writes a `.pst`: folders and messages are M3.3. Checked
+  by 5 tests, all through our own reader and the structure check: every kind of value the
+  model has, 3,000 properties in one list (more than eight heap blocks, an index of two levels), 6,000 rows
+  in one table, rows with cells missing, and refusals for a property or a row id given twice
+  and for more than 255 columns. Not checked: nothing here has been opened in Outlook, and
+  which half of a byte holds the earlier block's fill level is not said by the specification
+  and was not seen in a file (no local data file has a heap of several blocks). Noted for
+  M3.4: the model keeps a 32-bit float as a 64-bit one and a currency or error value as an
+  integer, so those types change when an item is written from the model; items that were not
+  changed will be copied as stored.

@@ -13,6 +13,9 @@ mod check;
 mod crypt;
 mod crypt_table;
 mod ltp;
+// As `write`: used by the tests until the messaging layer is written (M3.3).
+#[cfg_attr(not(test), allow(dead_code))]
+mod ltp_write;
 mod ndb;
 // The writer's first caller outside the tests is the messaging layer (M3.3).
 #[cfg_attr(not(test), allow(dead_code))]
