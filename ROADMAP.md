@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress · revision 49 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress: a mailbox is saved as a new `.pst` · revision 50 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 229, all passing |
+| Tests | 237, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -18,7 +18,7 @@
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
-| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: the node database (M3.1) and property lists and tables (M3.2) are written |
+| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: a mailbox is saved as a new `.pst` (M3.1 to M3.3); changing an open one is M3.4 |
 | M3b | The do-later batch from M2 (see "Do later (from M2)") | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -84,7 +84,8 @@
 33. Done: print shapes text from each font's own tables, and a PDF says what its glyphs stand for (M2.42).
 34. Done: the node database of a `.pst` is written, and a data file's structure can be checked (M3.1).
 35. Done: property lists and tables of a `.pst` are written (M3.2).
-36. Next: M3.3 (folders and messages, the nodes every data file must have, save as `.pst`).
+36. Done: a mailbox is saved as a new `.pst`: folders, messages, attachments, the nodes every data file must have (M3.3).
+37. Next: M3.4 (changes to an open `.pst` kept: rewrite to a temporary file and swap, unchanged items copied as they are).
 
 ## Do later (from M2)
 
@@ -101,7 +102,11 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | Keeping the page setup between runs | M3, with the first settings that are saved |
-| A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile) | M3.3, when there is a mailbox to open |
+| A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile); with it, where a message attached to a message is kept and the bucket of a named property, both written from the specification alone | when the owner says so |
+| Hidden (associated) items and a folder's own properties beyond name, class and counts carried into a saved `.pst` | M3.4, with the copy of unchanged items |
+| The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts | M3.4 |
+| Export off the UI thread, with progress and a way to stop | M3b |
+| Table cells whose type differs from the column's kept in a saved `.pst`'s tables (the item keeps them; the list does not show them) | M3b |
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
 | The structure check reaching into heaps, property lists and tables (it stops at blocks and nodes) | M3b |
 | 32-bit floats, currency and error values keeping their type when an item is written from the model | M3.4, with the copy of unchanged items |
@@ -658,3 +663,26 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   M3.4: the model keeps a 32-bit float as a 64-bit one and a currency or error value as an
   integer, so those types change when an item is written from the model; items that were not
   changed will be copied as stored.
+- **2026-10-12** - M3.3: a whole mailbox is saved as a `.pst`. `crates/pst/src/store_write.rs` writes the
+  messaging layer over M3.1 and M3.2: the message store, the name-to-id map, the root folder,
+  the search folders and tables every data file must have ([MS-PST] 2.7.1), then each folder
+  with its hierarchy, contents and associated-contents tables, each message with its
+  recipients and attachments, and messages attached to messages (to 32 deep). The command is
+  `file.export` (File > Export to a Data File); `openmailclient-cli run --save out.pst` and
+  `openmailclient-cli convert in.pst|in.ost out.pst` reach it too. Checked through our own
+  reader only: the sample mailbox and a mailbox of 1,500 messages come back the same, a
+  saved file saved again gives the same mailbox, and the structure check finds nothing; three
+  local `.ost` copies went through with every item counted on the other side. **Not opened in
+  Outlook** (that adds a data file to the owner's profile and waits for their say), so two
+  readings of the specification stand unproved: where a message attached to a message is kept,
+  and the bucket a named property falls in. Made better on the way: the new file is written
+  beside the target, synced, held against the structure check and only then put in the
+  target's place, so a failed export leaves what was there byte for byte and an unsound file
+  never lands; a source that cannot give an item or a folder's list loses only that, and the
+  result says how many (a damaged file can be salvaged into a sound one); the contents tables
+  carry the sender's name and the flag, so a list shows them without opening each message; a
+  data file's folders are now listed parent-then-children, as the folder pane shows them
+  (`inspect` indented them wrongly before). Left for later, each with a slot: hidden
+  (associated) items and folder properties beyond name, class and counts; the ids that tell
+  Outlook which folder is the Calendar or Contacts; export off the UI thread with progress;
+  table cells whose type differs from the column's.

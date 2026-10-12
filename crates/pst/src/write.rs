@@ -406,6 +406,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
     }
 
     /// A node's data from one run of bytes, cut where blocks end.
+    #[cfg(test)]
     pub(crate) fn stream(&mut self, bytes: &[u8]) -> Result<u64, PstError> {
         self.data(bytes.chunks(MAX_DATA))
     }

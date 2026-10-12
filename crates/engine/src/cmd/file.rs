@@ -44,6 +44,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: save_as,
         },
         CommandSpec {
+            id: "file.export",
+            label: "Export to a Data File",
+            tab: "File",
+            group: "Open & Export",
+            shortcut: "",
+            params: r#"{"path": target ending in .pst, "store": index (default: the current one)}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place; returns {"folders", "items", "unreadable", "bytes", "untrusted_content": {"path"}}"#,
+            enabled: has_store,
+            run: export,
+        },
+        CommandSpec {
             id: "file.saveAttachment",
             label: "Save Attachment",
             tab: "File",
@@ -177,6 +187,42 @@ fn save_as(s: &mut Session, p: &Value) -> CmdResult {
     io::save_item(item, &target)?;
     s.status = format!("Saved {}", target.display());
     Ok(json!({"untrusted_content": {"path": target.display().to_string()}}))
+}
+
+/// Save a whole data file as a new `.pst`.
+fn export(s: &mut Session, p: &Value) -> CmdResult {
+    let path = Path::new(need_str(p, "path")?);
+    let idx = match p_u64(p, "store") {
+        Some(i) => usize::try_from(i).unwrap_or(usize::MAX),
+        None => s.current.map(|(i, _)| i).unwrap_or(0),
+    };
+    // A data file that is open here is not written over: its reader holds it.
+    if let Ok(real) = std::fs::canonicalize(path)
+        && s.stores.iter().any(|st| st.path().and_then(|p| std::fs::canonicalize(p).ok()).is_some_and(|p| p == real))
+    {
+        return Err(EngineError::BadParams("that data file is open here; close it first or choose another name".into()));
+    }
+    let id = io::new_store_id(s.now);
+    let store = s.stores.get_mut(idx).ok_or_else(|| EngineError::BadParams(format!("there is no data file {idx}")))?;
+    let saved = io::save_store(store.as_mut(), path, id)?;
+    s.status = if saved.unreadable == 0 {
+        format!("Exported {} items in {} folders to {}", saved.items, saved.folders, path.display())
+    } else {
+        format!(
+            "Exported {} items in {} folders to {}; {} could not be read and are not in the file",
+            saved.items,
+            saved.folders,
+            path.display(),
+            saved.unreadable
+        )
+    };
+    Ok(json!({
+        "folders": saved.folders,
+        "items": saved.items,
+        "unreadable": saved.unreadable,
+        "bytes": saved.bytes,
+        "untrusted_content": {"path": path.display().to_string()},
+    }))
 }
 
 fn save_attachment(s: &mut Session, p: &Value) -> CmdResult {

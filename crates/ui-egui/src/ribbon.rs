@@ -467,7 +467,7 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 9] = [
+        let entries: [(Icon, &str, &str, Value); 10] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
@@ -475,6 +475,7 @@ impl MailUi {
             (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
             (Icon::Clip, "Save All Attachments…", "ui.saveAllAttachmentsDialog", Value::Null),
             (Icon::Print, "Print…", "ui.printPreview", Value::Null),
+            (Icon::Save, "Export to a Data File…", "ui.exportDialog", Value::Null),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
             (Icon::Junk, "Exit", "ui.quit", Value::Null),
         ];
@@ -486,6 +487,7 @@ impl MailUi {
                     self.session.is_enabled("file.saveAttachment") && self.session.open.as_ref().is_some_and(|it| !it.attachments.is_empty())
                 }
                 "ui.printPreview" => self.session.is_enabled("file.print"),
+                "ui.exportDialog" => self.session.is_enabled("file.export"),
                 c if c.starts_with("ui.") => true,
                 c => self.session.is_enabled(c),
             };
@@ -531,7 +533,7 @@ impl MailUi {
         }
         y += 12.0;
         for line in [
-            "Data files open read-only: OpenMailClient never writes to a .pst or .ost file.",
+            "Data files open read-only. Export writes a new .pst and never changes the file it reads.",
             "Messages can be saved as .msg, .oft or .eml. Sending and accounts are not built yet.",
         ] {
             clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);

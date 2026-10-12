@@ -25,9 +25,10 @@ const USAGE: &str = "usage:
   openmailclient-cli inspect <file> [--check]      folders of a .pst/.ost, or the header of a .msg/.eml;
                                               --check also loads every item and counts failures,
                                               and holds the file's structure against the format
-  openmailclient-cli convert <in> <out>            .msg/.oft/.eml to .msg/.oft/.eml
+  openmailclient-cli convert <in> <out>            .msg/.oft/.eml to .msg/.oft/.eml, or a .pst/.ost to a new .pst
   openmailclient-cli run [--template sample] [--open <file>]... [--cmd id[=json]]... [--save <out>]
-                                              run commands in order; --save writes the open item";
+                                              run commands in order; --save writes the open item,
+                                              or the whole data file when <out> ends in .pst";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -165,7 +166,15 @@ fn check_folder(store: &mut dyn Store, folder: FolderId, listed: &mut u64) -> (u
 fn convert(input: &Path, output: &Path) -> Result<(), String> {
     match io::open_path(input).map_err(|e| e.to_string())? {
         Opened::Item(item) => io::save_item(&item, output).map_err(|e| e.to_string()),
-        Opened::Store(_) => Err("convert works on single messages; open the data file and save the message you want".to_string()),
+        Opened::Store(mut store) => {
+            let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let saved = io::save_store(store.as_mut(), output, io::new_store_id(i64::try_from(unix).unwrap_or(0))).map_err(|e| e.to_string())?;
+            println!("{} items in {} folders, {} bytes", saved.items, saved.folders, saved.bytes);
+            match saved.unreadable {
+                0 => Ok(()),
+                n => Err(format!("{n} items or folders could not be read and are not in {}", output.display())),
+            }
+        }
     }
 }
 
@@ -199,7 +208,11 @@ fn run_commands(args: &[String]) -> Result<(), String> {
         }
     }
     if let Some(path) = save {
-        session.run("file.saveAs", &json!({ "path": path })).map_err(|e| e.to_string())?;
+        let whole = Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("pst"));
+        let result = session.run(if whole { "file.export" } else { "file.saveAs" }, &json!({ "path": path })).map_err(|e| e.to_string())?;
+        if whole {
+            println!("{}", json!({ "command": "file.export", "result": result }));
+        }
     }
     Ok(())
 }

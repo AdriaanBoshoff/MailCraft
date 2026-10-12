@@ -178,7 +178,13 @@ impl Subs {
         Self { next: first, list: Vec::new() }
     }
 
-    fn value<W: Read + Write + Seek>(&mut self, w: &mut NdbWriter<W>, blocks: &[Vec<u8>]) -> Result<u32, PstError> {
+    /// A subnode of this node holding `blocks`, each at most 8,176 bytes; its id.
+    pub(crate) fn value<W, I, B>(&mut self, w: &mut NdbWriter<W>, blocks: I) -> Result<u32, PstError>
+    where
+        W: Read + Write + Seek,
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
         let nid = self.next.checked_shl(5).filter(|n| n >> 5 == self.next).ok_or_else(|| cannot("too many large values in one item"))? | NID_TYPE_LTP;
         self.next += 1;
         let data = w.data(blocks)?;
@@ -278,8 +284,10 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
 
     let mut heap = Heap::new(0x7C);
     let info_size = 22 + 8 * tags.len();
-    let info_hid = heap.alloc(&vec![0; info_size])?;
+    // The header of the row index comes first and the table's own second, as in the files
+    // Outlook writes.
     let index_hid = heap.alloc(&[0; 8])?;
+    let info_hid = heap.alloc(&vec![0; info_size])?;
 
     let mut matrix: Vec<u8> = Vec::new();
     let mut index: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(rows.len());

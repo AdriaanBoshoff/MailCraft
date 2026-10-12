@@ -38,6 +38,19 @@ impl App {
                         self.run("file.open", json!({ "path": path }));
                     }
                 }
+                UiRequest::Export => {
+                    let session = &self.ui.session;
+                    let name =
+                        session.current.and_then(|(i, _)| session.stores.get(i)).map(|s| safe_file_name(&s.display_name())).unwrap_or_default();
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Export to a data file")
+                        .set_file_name(format!("{name}.pst"))
+                        .add_filter("Outlook data file", &["pst"])
+                        .save_file();
+                    if let Some(path) = picked {
+                        self.run("file.export", json!({ "path": path }));
+                    }
+                }
                 UiRequest::SaveAs => {
                     let name = self.ui.session.open.as_ref().map(|it| safe_file_name(&it.subject())).unwrap_or_default();
                     let picked = rfd::FileDialog::new()

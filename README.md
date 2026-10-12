@@ -1,8 +1,8 @@
 # OpenMailClient
 
-![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M2%20closed%20%C2%B7%20M3%20next-orange)
+![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M2%20closed%20%C2%B7%20M3%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-229%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-237%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -51,7 +51,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 | | Read | Written |
 |---|---|---|
-| `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | not yet (M3) |
+| `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | a whole mailbox as a new Unicode `.pst` (not yet opened in Outlook); changing an open file is M3.4 |
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
@@ -106,6 +106,7 @@ cargo run --release -p openmailclient-cli -- inspect path/to/archive.pst --check
 
 ```bash
 cargo run --release -p openmailclient-cli -- convert message.msg message.eml
+cargo run --release -p openmailclient-cli -- convert mailbox.ost copy.pst
 ```
 
 A screenshot of the real UI without opening a window:

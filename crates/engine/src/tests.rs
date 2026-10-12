@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 42, "parity fell to {done} of {total}");
+    assert!(done >= 43, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -1979,5 +1979,72 @@ fn a_folders_list_is_printed_as_a_table() {
     assert_eq!(crate::print::Style::named(" TABLE style "), Some(crate::print::Style::Table));
     assert_eq!(crate::print::Style::named("memostyle"), Some(crate::print::Style::Memo));
     assert_eq!(crate::print::Style::named("style"), None);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_mailbox_is_exported_to_a_pst_and_opens_again() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-export-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session();
+    let path = dir.join("sample.pst");
+    let done = run(&mut s, "file.export", json!({"path": path}));
+    assert_eq!(done["unreadable"], 0);
+    assert!(done["items"].as_u64().unwrap() > 5 && done["folders"].as_u64().unwrap() >= 7);
+    assert_eq!(done["bytes"].as_u64().unwrap(), std::fs::metadata(&path).unwrap().len());
+    assert!(s.status.starts_with("Exported "));
+    // Nothing is left beside it.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    // The file passes the structure check, and holds what the mailbox held.
+    let found = crate::io::check_structure(&path).unwrap().unwrap();
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
+
+    let mut other = Session::new();
+    run(&mut other, "file.open", json!({"path": path}));
+    assert_eq!(other.stores[0].display_name(), s.stores[0].display_name());
+    let names = |s: &mut Session| {
+        let mut all: Vec<(String, u32, u32)> = s.stores[0].folders().unwrap().into_iter().map(|f| (f.name, f.total, f.unread)).collect();
+        all.sort();
+        all
+    };
+    assert_eq!(names(&mut other), names(&mut s));
+    assert_eq!(other.folders[0].iter().find(|f| f.kind == FolderKind::Inbox).map(|f| f.name.as_str()), Some("Inbox"));
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut other, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let (a, b) = (s.open.clone().unwrap(), other.open.clone().unwrap());
+    assert_eq!(
+        (b.subject(), b.sender_name(), b.body_text(), b.categories.clone()),
+        (a.subject(), a.sender_name(), a.body_text(), a.categories.clone())
+    );
+    assert_eq!(
+        b.attachments.iter().map(|x| (x.name(), x.data.clone())).collect::<Vec<_>>(),
+        a.attachments.iter().map(|x| (x.name(), x.data.clone())).collect::<Vec<_>>()
+    );
+    assert_eq!(b.recipients.len(), a.recipients.len());
+
+    // A data file read from disk goes out again, and over a file that was there.
+    let again = dir.join("again.pst");
+    std::fs::write(&again, b"what was here before").unwrap();
+    let second = run(&mut other, "file.export", json!({"path": again, "store": 0}));
+    assert_eq!((&second["items"], &second["folders"]), (&done["items"], &done["folders"]));
+    assert!(crate::io::check_structure(&again).unwrap().unwrap().problems.is_empty());
+
+    // Refused: over itself, over a data file that is open here, a name that is not .pst, a
+    // data file that is not there. Each leaves what was on disk as it was.
+    let before = std::fs::read(&path).unwrap();
+    assert!(other.run("file.export", &json!({"path": path})).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert!(s.run("file.export", &json!({"path": dir.join("mail.ost")})).is_err());
+    assert!(s.run("file.export", &json!({"path": dir.join("mail.zip")})).is_err());
+    assert!(s.run("file.export", &json!({"path": dir.join("other.pst"), "store": 7})).is_err());
+    assert!(s.run("file.saveAs", &json!({"path": dir.join("one.pst")})).is_err());
+    assert!(!dir.join("other.pst").exists() && !dir.join("one.pst").exists());
+    // A target that cannot be replaced: the export fails, and its temporary file is gone.
+    let blocked = dir.join("folder.pst");
+    std::fs::create_dir_all(blocked.join("inside")).unwrap();
+    assert!(s.run("file.export", &json!({"path": blocked})).is_err());
+    assert!(blocked.join("inside").is_dir());
+    drop(other);
+    assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
     std::fs::remove_dir_all(&dir).unwrap();
 }

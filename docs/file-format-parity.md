@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 7 · 2026-10-12 · the node database and the property lists and tables of a `.pst` are written (M3.1, M3.2), not yet anything Outlook can open
+**Status:** revision 8 · 2026-10-12 · a whole mailbox is saved as a new Unicode `.pst` (M3.3), read back by our reader, not yet opened in Outlook
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -62,10 +62,18 @@ Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 | Index in a heap, any depth (2.3.2) | yes | read back, 3,000 records |
 | Property list; large values in subnodes (2.3.3) | yes | read back, every value type of the model |
 | Table; rows in the heap or in a subnode (2.3.4) | yes | read back, 6,000 rows |
-| Folders, messages, the nodes every file must have (2.4, 2.7) | no | M3.3 |
+| The nodes every file must have: message store, name-to-id map, root, search folders, table templates (2.7.1) | yes | read back; structure check clean |
+| Folders with their hierarchy, contents and associated-contents tables (2.4.4) | name, class, counts; the associated table is written empty | read back, 1,500 messages in a folder |
+| Messages with recipients and attachments (2.4.5, 2.4.6) | yes; properties we do not understand go out as they were read | read back, sample mailbox and three local files (counts only) |
+| A message attached to a message (2.4.6.2.3) | yes, to 32 deep; where it is kept is our reading | read back |
+| Named properties (2.4.7) | yes; the bucket of a name is our reading | read back, 600 names |
+| Hidden (associated) items; folder properties beyond name, class and counts | no | M3.4 |
+| Which folder is the Calendar, Contacts, Tasks (ids on the root and the Inbox) | no | M3.4 |
+| Changing a file that is open | no | M3.4 |
 
-No file from this writer has been opened in Outlook: there is nothing above the node layer to
-open yet. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
+No file from this writer has been opened in Outlook: that adds a data file to the owner's
+profile and waits for their say. `file.export` writes the new file beside the target, holds it
+against the structure check and only then puts it in the target's place. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
 the format (ANSI and 4K-page files are not checked yet).
 
 ## `.eml` (RFC 5322, MIME)

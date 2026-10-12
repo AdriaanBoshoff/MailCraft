@@ -64,6 +64,7 @@ impl Tab {
 pub enum UiRequest {
     OpenFile,
     SaveAs,
+    Export,
     Print,
     SaveAttachment(usize),
     SaveAllAttachments,
@@ -85,6 +86,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.ribbonTab", label: "Show Ribbon Tab", params: r#"{"tab": "file" | "home" | "sendreceive" | "folder" | "view" | "help"}"# },
     UiCommand { id: "ui.openDialog", label: "Open…", params: "" },
     UiCommand { id: "ui.saveAsDialog", label: "Save As…", params: "" },
+    UiCommand { id: "ui.exportDialog", label: "Export to a Data File…", params: "" },
     UiCommand { id: "ui.printDialog", label: "Print to PDF…", params: "" },
     UiCommand {
         id: "ui.printPreview",
@@ -322,6 +324,7 @@ impl MailUi {
             }
             "ui.openDialog" => self.requests.push(UiRequest::OpenFile),
             "ui.saveAsDialog" => self.requests.push(UiRequest::SaveAs),
+            "ui.exportDialog" => self.requests.push(UiRequest::Export),
             "ui.printDialog" => self.requests.push(UiRequest::Print),
             "ui.printPreview" => {
                 if params.get("close").and_then(Value::as_bool) == Some(true) {

@@ -466,11 +466,11 @@ fn check(wide: bool, crypt: u8) {
     assert!(!store.writable());
     let folders = store.folders().unwrap();
     let names: Vec<&str> = folders.iter().map(|f| f.name.as_str()).collect();
-    assert_eq!(names, ["Inbox", "Recycle", "Projects"]);
+    assert_eq!(names, ["Inbox", "Projects", "Recycle"]);
     let inbox = &folders[0];
     assert_eq!((inbox.kind, inbox.total, inbox.unread, inbox.has_children, inbox.parent), (FolderKind::Inbox, 2, 1, true, None));
-    assert_eq!(folders[1].kind, FolderKind::Deleted, "the store names its Deleted Items folder, whatever it is called");
-    assert_eq!(folders[2].parent, Some(inbox.id));
+    assert_eq!(folders[2].kind, FolderKind::Deleted, "the store names its Deleted Items folder, whatever it is called");
+    assert_eq!(folders[1].parent, Some(inbox.id));
 
     let list = store.list(inbox.id).unwrap();
     assert_eq!(list.len(), 2);
@@ -497,7 +497,7 @@ fn check(wide: bool, crypt: u8) {
     assert_eq!(big.body_text(), big_body());
 
     // No contents table: the node index still finds the message.
-    let loose = store.list(folders[2].id).unwrap();
+    let loose = store.list(folders[1].id).unwrap();
     assert_eq!(loose.iter().map(|s| s.subject.as_str()).collect::<Vec<_>>(), ["Loose"]);
     assert!(matches!(store.list(FolderId(0xDEAD_BEEF)), Err(StoreError::NoFolder)));
     assert!(matches!(store.load(inbox.id, ItemId(0x7777)), Err(StoreError::NoItem)));

@@ -2,8 +2,8 @@
 
 use crate::EngineError;
 use openmailclient_model::{Item, Store};
-use std::io::Read;
-use std::path::Path;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 /// Loose message files larger than this are refused rather than loaded into memory.
 const MAX_ITEM_FILE: u64 = 512 * 1024 * 1024;
@@ -93,7 +93,9 @@ pub fn encode_item(item: &Item, path: &Path) -> Result<Vec<u8>, EngineError> {
             openmailclient_msg::write_as(item, openmailclient_msg::Kind::Template).map_err(|e| EngineError::Format(e.to_string()))
         }
         Some(Kind::Eml) => Ok(openmailclient_mime::write(item)),
-        Some(Kind::Pst) => Err(EngineError::Format("writing .pst data files is not supported yet; save as .msg or .eml".into())),
+        Some(Kind::Pst) => {
+            Err(EngineError::BadParams("one message is saved as .msg, .oft or .eml; a .pst takes a whole data file (file.export)".into()))
+        }
         None => Err(EngineError::BadParams("the file name must end in .msg, .oft or .eml".into())),
     }
 }
@@ -101,16 +103,88 @@ pub fn encode_item(item: &Item, path: &Path) -> Result<Vec<u8>, EngineError> {
 /// Write `data` to `path` so that a failure leaves whatever was there before intact: the bytes go
 /// to a temporary file beside the target, which then replaces it in one step.
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), EngineError> {
-    let name = path.file_name().ok_or_else(|| EngineError::BadParams("the path has no file name".into()))?;
-    let mut tmp_name = std::ffi::OsString::from(".");
-    tmp_name.push(name);
-    tmp_name.push(format!(".{}.tmp", std::process::id()));
-    let tmp = path.with_file_name(tmp_name);
+    let tmp = tmp_beside(path)?;
     let written = std::fs::write(&tmp, data).and_then(|()| std::fs::rename(&tmp, path));
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     Ok(written?)
+}
+
+/// The temporary file a write to `path` goes through: beside it, so the swap is one step.
+fn tmp_beside(path: &Path) -> Result<PathBuf, EngineError> {
+    let name = path.file_name().ok_or_else(|| EngineError::BadParams("the path has no file name".into()))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    Ok(path.with_file_name(tmp_name))
+}
+
+/// What `save_store` wrote.
+pub struct Saved {
+    pub folders: u64,
+    pub items: u64,
+    /// Items and folder lists the source could not give; they are not in the new file.
+    pub unreadable: u64,
+    pub bytes: u64,
+}
+
+/// An id for a new data file. Not a secret: only unlikely to be another file's.
+pub fn new_store_id(now: i64) -> [u8; 16] {
+    use std::hash::{BuildHasher, Hasher};
+    let mut id = [0u8; 16];
+    for (n, half) in id.chunks_mut(8).enumerate() {
+        // Each `RandomState` is keyed from the system's random source.
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_i64(now);
+        h.write_usize(n);
+        for (to, from) in half.iter_mut().zip(h.finish().to_le_bytes()) {
+            *to = from;
+        }
+    }
+    id
+}
+
+fn pst_error(e: openmailclient_pst::PstError) -> EngineError {
+    match e {
+        openmailclient_pst::PstError::Io(e) => EngineError::Io(e),
+        e => EngineError::Format(e.to_string()),
+    }
+}
+
+/// Save everything a store holds as a new `.pst`. The store is only read. The new file is
+/// written beside the target, held against the structure check, and only then put in the
+/// target's place in one step: whatever goes wrong, a file that was there stays as it was.
+pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Saved, EngineError> {
+    if !path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pst")) {
+        return Err(EngineError::BadParams("a data file is saved under a name ending in .pst".into()));
+    }
+    // The file being read cannot be the file being replaced.
+    if let Some(from) = store.path().and_then(|p| std::fs::canonicalize(p).ok())
+        && std::fs::canonicalize(path).is_ok_and(|to| to == from)
+    {
+        return Err(EngineError::BadParams("a data file cannot be saved over itself; choose another name".into()));
+    }
+    let tmp = tmp_beside(path)?;
+    let saved = write_checked(store, &tmp, id).and_then(|saved| Ok(std::fs::rename(&tmp, path).map(|()| saved)?));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    saved
+}
+
+fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Saved, EngineError> {
+    let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
+    let (mut file, done) = openmailclient_pst::write_store(file, store, id).map_err(pst_error)?;
+    file.sync_all()?;
+    let bytes = file.seek(SeekFrom::End(0))?;
+    file.seek(SeekFrom::Start(0))?;
+    let found = openmailclient_pst::check(&mut std::io::BufReader::new(&mut file)).map_err(pst_error)?;
+    if !found.sound() {
+        let first = found.problems.first().map(String::as_str).unwrap_or("no detail");
+        return Err(EngineError::Format(format!("the data file that was written did not pass its own check ({first}); nothing was replaced")));
+    }
+    Ok(Saved { folders: done.folders, items: done.items, unreadable: done.unreadable, bytes })
 }
 
 pub fn save_item(item: &Item, path: &Path) -> Result<(), EngineError> {

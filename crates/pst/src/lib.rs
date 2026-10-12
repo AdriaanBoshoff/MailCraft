@@ -4,24 +4,22 @@
 //! them), lists/tables/properties on top of nodes (`ltp`), and the messaging layer here, which
 //! says which node is a folder, a message, a recipient table or an attachment ([MS-PST] 2.4).
 //!
-//! Opening is read-only and leaves the file untouched. Writing (`write`) always makes a whole
-//! new file, never a change inside an existing one; so far it reaches the node database, the
-//! lowest of the three layers. `check` holds a file's structure against the specification.
+//! Opening is read-only and leaves the file untouched. Writing (`write_store`) always makes a
+//! whole new file from a mailbox, never a change inside an existing one. `check` holds a file's
+//! structure against the specification.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod check;
 mod crypt;
 mod crypt_table;
 mod ltp;
-// As `write`: used by the tests until the messaging layer is written (M3.3).
-#[cfg_attr(not(test), allow(dead_code))]
 mod ltp_write;
 mod ndb;
-// The writer's first caller outside the tests is the messaging layer (M3.3).
-#[cfg_attr(not(test), allow(dead_code))]
+mod store_write;
 mod write;
 
 pub use check::{Check, check};
+pub use store_write::{Written, write_store};
 
 use ltp::Raw;
 use ndb::{Ndb, Subnodes, u32_at};
@@ -43,6 +41,8 @@ pub enum PstError {
     Damaged(String),
     #[error("the data file cannot be written: {0}")]
     Write(String),
+    #[error("the mailbox being saved could not be read: {0}")]
+    Source(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -278,28 +278,32 @@ impl Store for PstStore {
     fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
         let mut out: Vec<FolderInfo> = Vec::new();
         let mut seen: HashSet<u32> = HashSet::from([self.root]);
-        let mut queue = std::collections::VecDeque::from([(self.root, None)]);
-        while let Some((nid, parent)) = queue.pop_front() {
-            for (child, bag) in self.children(nid) {
-                if !seen.insert(child) || out.len() >= MAX_FOLDERS {
-                    continue;
-                }
-                let name = bag.str(pid::DISPLAY_NAME).unwrap_or("").to_string();
-                let class = bag.str(pid::CONTAINER_CLASS).unwrap_or("").to_string();
-                let count = |id: u16| u32::try_from(bag.i32(id).unwrap_or(0)).unwrap_or(0);
-                let id = FolderId(u64::from(child));
-                out.push(FolderInfo {
-                    id,
-                    parent,
-                    kind: self.special.get(&child).copied().unwrap_or_else(|| FolderKind::guess(&name, &class)),
-                    name,
-                    container_class: class,
-                    total: count(pid::CONTENT_COUNT),
-                    unread: count(pid::CONTENT_UNREAD_COUNT),
-                    has_children: bag.bool(pid::SUBFOLDERS).unwrap_or(false),
-                });
-                queue.push_back((child, Some(id)));
+        // Each folder is followed by everything inside it, as a folder pane shows them.
+        let mut open = vec![(self.children(self.root).into_iter(), None)];
+        while let Some((level, parent)) = open.last_mut() {
+            let parent = *parent;
+            let Some((child, bag)) = level.next() else {
+                open.pop();
+                continue;
+            };
+            if !seen.insert(child) || out.len() >= MAX_FOLDERS {
+                continue;
             }
+            let name = bag.str(pid::DISPLAY_NAME).unwrap_or("").to_string();
+            let class = bag.str(pid::CONTAINER_CLASS).unwrap_or("").to_string();
+            let count = |id: u16| u32::try_from(bag.i32(id).unwrap_or(0)).unwrap_or(0);
+            let id = FolderId(u64::from(child));
+            out.push(FolderInfo {
+                id,
+                parent,
+                kind: self.special.get(&child).copied().unwrap_or_else(|| FolderKind::guess(&name, &class)),
+                name,
+                container_class: class,
+                total: count(pid::CONTENT_COUNT),
+                unread: count(pid::CONTENT_UNREAD_COUNT),
+                has_children: bag.bool(pid::SUBFOLDERS).unwrap_or(false),
+            });
+            open.push((self.children(child).into_iter(), Some(id)));
         }
         Ok(out)
     }
@@ -335,5 +339,7 @@ impl Store for PstStore {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_store;
 #[cfg(test)]
 mod tests_write;
