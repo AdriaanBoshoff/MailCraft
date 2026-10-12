@@ -2027,6 +2027,9 @@ fn a_mailbox_is_exported_to_a_pst_and_opens_again() {
     std::fs::write(&again, b"what was here before").unwrap();
     let second = run(&mut other, "file.export", json!({"path": again, "store": 0}));
     assert_eq!((&second["items"], &second["folders"]), (&done["items"], &done["folders"]));
+    // The sample mailbox goes through the model; a data file is copied as it is stored.
+    assert_eq!((&done["copied"], &second["copied"]), (&json!(false), &json!(true)));
+    assert!(other.status.ends_with("as it is stored"), "{}", other.status);
     assert!(crate::io::check_structure(&again).unwrap().unwrap().problems.is_empty());
 
     // Refused: over itself, over a data file that is open here, a name that is not .pst, a
@@ -2293,5 +2296,44 @@ fn unsaved_changes_come_back_when_the_data_file_is_opened_again() {
     assert_eq!(run(&mut last, "file.open", json!({"path": path}))["recovered"], 0);
     assert_eq!(names(&last), want);
     drop(last);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_damaged_data_file_is_exported_as_far_as_it_reads() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-export-damage-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("good.pst");
+    run(&mut session(), "file.export", json!({"path": good}));
+    let bytes = std::fs::read(&good).unwrap();
+    // Damage in one place after another: the file opens or it does not, and when it opens
+    // the export is a copy as stored or, failing that, what the model could read.
+    let (bad, out) = (dir.join("bad.pst"), dir.join("out.pst"));
+    let (mut copied, mut read) = (0, 0);
+    for at in (0x4400..bytes.len().saturating_sub(64)).step_by(4096) {
+        let mut hurt = bytes.clone();
+        for b in &mut hurt[at..at + 64] {
+            *b = !*b;
+        }
+        std::fs::write(&bad, &hurt).unwrap();
+        let mut s = Session::new();
+        if s.run("file.open", &json!({"path": bad, "recover": false})).is_err() {
+            continue;
+        }
+        let _ = std::fs::remove_file(&out);
+        match s.run("file.export", &json!({"path": out})) {
+            Ok(done) if done["copied"] == true => copied += 1,
+            Ok(done) => {
+                read += 1;
+                assert!(s.status.contains("could not be copied as it is stored"), "{}", s.status);
+                assert!(done["folders"].as_u64().unwrap() >= 1);
+                assert!(crate::io::check_structure(&out).unwrap().unwrap().problems.is_empty());
+            }
+            Err(_) => assert!(!out.exists()),
+        }
+        assert_eq!(std::fs::read(&bad).unwrap(), hurt, "the source is only read");
+    }
+    assert!(read > 0, "no damage made the copy fall back ({copied} copied)");
     std::fs::remove_dir_all(&dir).unwrap();
 }

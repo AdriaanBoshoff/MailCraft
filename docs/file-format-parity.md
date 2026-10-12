@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 10 · 2026-10-12 · unsaved changes to a Unicode `.pst` are journalled beside it and come back after a crash (M3b.1); nothing our writer made has been opened in Outlook yet
+**Status:** revision 11 · 2026-10-12 · `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -67,8 +67,8 @@ Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 | Messages with recipients and attachments (2.4.5, 2.4.6) | yes; properties we do not understand go out as they were read | read back, sample mailbox and three local files (counts only) |
 | A message attached to a message (2.4.6.2.3) | yes, to 32 deep; where it is kept is our reading | read back |
 | Named properties (2.4.7) | yes; the bucket of a name is our reading | read back, 600 names |
-| Hidden (associated) items; folder properties beyond name, class and counts | kept by `file.save` (copied as stored); not carried by `file.export` | a hidden message and a folder property our writer never makes survive a save |
-| Which folder is the Calendar, Contacts, Tasks (ids on the root and the Inbox) | kept by `file.save`; not written by `file.export` | M3b |
+| Hidden (associated) items; folder properties beyond name, class and counts | kept by `file.save` and by `file.export` of a Unicode `.pst` (copied as stored); not carried by `file.export` from other sources | a hidden message and a folder property our writer never makes survive a save and a copy |
+| Which folder is the Calendar, Contacts, Tasks (ids on the root and the Inbox) | kept by `file.save` and by `file.export` of a Unicode `.pst`; not written by `file.export` from other sources | M3b |
 | Changing a Unicode `.pst` that is open (`file.save`) | yes: nodes not touched are copied block for block; a changed message keeps every stored property that was not changed, also those under ids no name stands for | read back: messages changed, moved, deleted and added, folders made, renamed, moved and deleted; damaged files; three local copies (counts only) |
 | Changing an ANSI `.pst`, a 4K-page file, an `.ost` | no: read-only | M3b (an `.ost` never) |
 

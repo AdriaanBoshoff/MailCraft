@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 43 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 44 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,9 +9,10 @@
 2. **Changes to a data file are kept only for a Unicode `.pst`, and none of it is proved in Outlook.** `file.save`
    (M3.4) rewrites the whole file beside itself and swaps it in; nothing we write has been opened in
    Outlook. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
-   after a run that ended without saving; a power cut may cost the last few of them. An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` (M3.3) goes
-   through the model: hidden (associated) items and folder properties beyond name, class and counts
-   are not carried, and the new file does not say which folder is the Calendar or Contacts. Changes
+   after a run that ended without saving; a power cut may cost the last few of them. An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` copies a
+   Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
+   (associated) items and folder properties beyond name, class and counts are not carried then, and
+   the new file does not say which folder is the Calendar or Contacts. Changes
    made in the sample mailbox live in memory and are lost on exit unless exported.
 3. **Formatted bodies are partly drawn.** Every "not yet" below has a slot in
    [ROADMAP.md](../ROADMAP.md#do-later-from-m2). HTML bodies show text styles, colours, headings, lists,
@@ -76,6 +77,7 @@
 
 ## Revision history
 
+- 44 · 2026-10-12 — M3b.2: `file.export` copies a Unicode `.pst` as it is stored (hidden items, folder properties, unknown properties).
 - 43 · 2026-10-12 — M3b.1: unsaved changes to a Unicode `.pst` are journalled beside the file and come back after a crash.
 - 42 · 2026-10-12 — M3.5: settings (page setup, panes, theme, open data files) are kept between runs; M3 closed.
 - 41 · 2026-10-12 — M3.4: changes to an open Unicode `.pst` are kept by `file.save`; `.ost`, ANSI and 4K-page files stay read-only.

@@ -127,6 +127,12 @@ pub struct Saved {
     /// Items and folder lists the source could not give; they are not in the new file.
     pub unreadable: u64,
     pub bytes: u64,
+    /// True when the source was a data file copied node for node: hidden items, a folder's
+    /// own properties and properties unknown here went with it.
+    pub copied: bool,
+    /// Why the source could not be copied so, when it was tried and the new file holds
+    /// what the model gives instead.
+    pub not_copied: Option<String>,
 }
 
 /// An id for a new data file. Not a secret: only unlikely to be another file's.
@@ -174,6 +180,14 @@ pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Sa
 }
 
 fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Saved, EngineError> {
+    // A data file is copied node for node when it can be. When that fails, or what comes of
+    // it does not pass the check (the source has damage), the model's way is taken: it
+    // leaves out what cannot be read and says how much.
+    let not_copied = match copy_checked(store, tmp, id) {
+        Ok(Some(saved)) => return Ok(saved),
+        Ok(None) => None,
+        Err(e) => Some(e.to_string()),
+    };
     let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
     let (mut file, done) = openmailclient_pst::write_store(file, store, id).map_err(pst_error)?;
     file.sync_all()?;
@@ -184,7 +198,20 @@ fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Save
         let first = found.problems.first().map(String::as_str).unwrap_or("no detail");
         return Err(EngineError::Format(format!("the data file that was written did not pass its own check ({first}); nothing was replaced")));
     }
-    Ok(Saved { folders: done.folders, items: done.items, unreadable: done.unreadable, bytes })
+    Ok(Saved { folders: done.folders, items: done.items, unreadable: done.unreadable, bytes, copied: false, not_copied })
+}
+
+fn copy_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Option<Saved>, EngineError> {
+    let Some(done) = store.copy_to(tmp, id)? else { return Ok(None) };
+    let mut file = std::fs::File::open(tmp)?;
+    let bytes = file.seek(SeekFrom::End(0))?;
+    file.seek(SeekFrom::Start(0))?;
+    let found = openmailclient_pst::check(&mut std::io::BufReader::new(&mut file)).map_err(pst_error)?;
+    if !found.sound() {
+        let first = found.problems.first().map(String::as_str).unwrap_or("no detail");
+        return Err(EngineError::Format(format!("the copy did not pass its own check ({first})")));
+    }
+    Ok(Some(Saved { folders: done.folders, items: done.items, unreadable: 0, bytes, copied: true, not_copied: None }))
 }
 
 pub fn save_item(item: &Item, path: &Path) -> Result<(), EngineError> {

@@ -170,6 +170,11 @@ fn convert(input: &Path, output: &Path) -> Result<(), String> {
             let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             let saved = io::save_store(store.as_mut(), output, io::new_store_id(i64::try_from(unix).unwrap_or(0))).map_err(|e| e.to_string())?;
             println!("{} items in {} folders, {} bytes", saved.items, saved.folders, saved.bytes);
+            if saved.copied {
+                println!("copied as it is stored: hidden items and unknown properties are in it");
+            } else if let Some(why) = &saved.not_copied {
+                println!("not copied as it is stored ({why}): hidden items and unknown properties are not in it");
+            }
             match saved.unreadable {
                 0 => Ok(()),
                 n => Err(format!("{n} items or folders could not be read and are not in {}", output.display())),

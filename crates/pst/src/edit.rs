@@ -1007,6 +1007,21 @@ fn folder_cells(f: &EFolder) -> Vec<Raw> {
 }
 
 impl PstStore {
+    /// The data file as it stands, unsaved changes with it, written node for node to a new
+    /// file: what is stored and the model does not hold goes with it. The new file keeps the
+    /// id of the one it was copied from, as a copy made of the file itself would.
+    pub(crate) fn e_copy_to(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::Copied>, StoreError> {
+        if !self.can_edit() {
+            return Ok(None);
+        }
+        let listed = self.e_folders()?;
+        let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(to).map_err(PstError::Io)?;
+        let (file, _) = self.save_to(file, seed)?;
+        file.sync_all().map_err(PstError::Io)?;
+        let items = listed.iter().fold(0u64, |n, f| n.saturating_add(u64::from(f.total)));
+        Ok(Some(openmailclient_model::Copied { folders: listed.len() as u64, items }))
+    }
+
     pub(crate) fn e_save(&mut self, seed: [u8; 16]) -> Result<(), StoreError> {
         self.save(seed).map(|_| ()).map_err(StoreError::from)
     }

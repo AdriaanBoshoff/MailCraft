@@ -364,3 +364,63 @@ fn a_damaged_file_is_changed_and_saved_or_refused_never_a_panic() {
     }
     assert!(opened > 20);
 }
+
+#[test]
+fn a_copy_of_a_data_file_has_what_this_program_does_not_understand() {
+    // The source has a hidden message, an unknown property and a folder property of its own.
+    let mut plain = open();
+    let inbox = folder(&mut plain, "Inbox");
+    let (inbox_nid, msg) = (inbox.id.0 as u32, plain.list(inbox.id).unwrap()[1].id as u32);
+    let hidden = (0x7000 << 5) | 0x08;
+    let text = |id: u16, s: &str| Raw { id, ty: ptype::STRING, data: s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+    let entry = *plain.ndb.nbt.get(&msg).unwrap();
+    let mut props: Vec<Raw> = plain.open_pc(entry).unwrap().0.into_values().collect();
+    props.push(Raw { id: 0x9F00, ty: ptype::INT32, data: vec![7, 0, 0, 0] });
+    let folder_entry = *plain.ndb.nbt.get(&inbox_nid).unwrap();
+    let mut folder_props: Vec<Raw> = plain.open_pc(folder_entry).unwrap().0.into_values().collect();
+    folder_props.push(Raw { id: 0x36DA, ty: ptype::BINARY, data: vec![9; 300] });
+    let put = vec![
+        (hidden, inbox_nid, vec![text(pid::MESSAGE_CLASS, "IPM.Configuration.Thing"), text(pid::SUBJECT, "hidden")]),
+        (msg, inbox_nid, props),
+        (inbox_nid, folder_entry.parent, folder_props),
+    ];
+    let (out, _) = plain.save_with(Cursor::new(Vec::new()), UID, put).unwrap();
+    let dir = scratch("copy");
+    let (from, to) = (dir.join("from.pst"), dir.join("to.pst"));
+    std::fs::write(&from, out.into_inner()).unwrap();
+
+    // Changes that are not saved go into the copy; the source stays as it is, unsaved still.
+    let mut store = PstStore::open(&from).unwrap();
+    store.add(inbox.id, mail("Not saved yet", false)).unwrap();
+    store.create_folder(inbox.id, "Under the Inbox").unwrap();
+    let want = whole(&mut store);
+    let done = store.copy_to(&to, UID).unwrap().unwrap();
+    assert_eq!(done.folders, want.len() as u64);
+    assert_eq!(done.items, want.iter().map(|f| f.2.len() as u64).sum::<u64>());
+    assert!(store.unsaved());
+    let first = std::fs::read(&from).unwrap();
+    drop(store);
+    assert_eq!(std::fs::read(&from).unwrap(), first);
+
+    let found = check(&mut Cursor::new(std::fs::read(&to).unwrap())).unwrap();
+    assert!(found.sound(), "{:?}", found.problems);
+    let mut back = PstStore::open(&to).unwrap();
+    assert!(!back.unsaved());
+    same_mailbox(&want, &whole(&mut back));
+    let raw = |store: &mut PstStore, nid: u32| {
+        let e = *store.ndb.nbt.get(&nid).unwrap();
+        (e.parent, store.open_pc(e).unwrap().0)
+    };
+    let (parent, props) = raw(&mut back, hidden);
+    assert_eq!((parent, props.len()), (inbox_nid, 2));
+    assert_eq!(raw(&mut back, msg).1.get(&0x9F00).map(|r| r.data.clone()), Some(vec![7, 0, 0, 0]));
+    assert_eq!(raw(&mut back, inbox_nid).1.get(&0x36DA).map(|r| r.data.len()), Some(300));
+    drop(back);
+
+    // A data file that is only ever read is not copied this way: the caller takes the model's.
+    let ost = dir.join("from.ost");
+    std::fs::copy(&from, &ost).unwrap();
+    assert_eq!(PstStore::open(&ost).unwrap().copy_to(&dir.join("no.pst"), UID).unwrap(), None);
+    assert!(!dir.join("no.pst").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

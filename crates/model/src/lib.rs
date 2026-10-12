@@ -518,6 +518,13 @@ pub struct Recovery {
 }
 
 /// A mail store: an Outlook data file, a sample mailbox, later a server account's cache.
+/// What `Store::copy_to` put in the new file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Copied {
+    pub folders: u64,
+    pub items: u64,
+}
+
 pub trait Store {
     fn display_name(&self) -> String;
     /// Where the file lives, when it is a file.
@@ -531,8 +538,6 @@ pub trait Store {
     fn unsaved(&self) -> bool {
         false
     }
-    /// Put the changes made so far where the store is kept. `seed` is 16 unpredictable bytes
-    /// for the ids of what is new. A store that keeps nothing anywhere has nothing to do.
     /// Bring back the changes a run that ended without saving left in a journal. They are
     /// unsaved again, as they were; the data file is not written.
     fn recover(&mut self) -> Result<Recovery, StoreError> {
@@ -547,8 +552,18 @@ pub trait Store {
         None
     }
 
+    /// Put the changes made so far where the store is kept. `seed` is 16 unpredictable bytes
+    /// for the ids of what is new. A store that keeps nothing anywhere has nothing to do.
     fn save(&mut self, _seed: [u8; 16]) -> Result<(), StoreError> {
         Ok(())
+    }
+
+    /// Write the store as it stands, unsaved changes with it, to a new file at `to`, with
+    /// all that is stored and the model does not hold: hidden items, a folder's own
+    /// properties, properties this program does not know. The store itself is only read.
+    /// `None` when this store cannot (the caller then writes what the model gives).
+    fn copy_to(&mut self, _to: &std::path::Path, _seed: [u8; 16]) -> Result<Option<Copied>, StoreError> {
+        Ok(None)
     }
     /// Every folder under the visible root (the "IPM subtree"), parents before children.
     fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError>;

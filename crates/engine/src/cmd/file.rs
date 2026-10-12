@@ -59,7 +59,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "",
-            params: r#"{"path": target ending in .pst, "store": index (default: the current one)}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place; returns {"folders", "items", "unreadable", "bytes", "untrusted_content": {"path"}}"#,
+            params: r#"{"path": target ending in .pst, "store": index (default: the current one)}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
             enabled: has_store,
             run: export,
         },
@@ -287,7 +287,15 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
             saved.unreadable
         )
     };
+    if saved.copied {
+        s.status.push_str(", as it is stored");
+    } else if let Some(why) = &saved.not_copied {
+        s.status.push_str(&format!(
+            "; it could not be copied as it is stored ({why}), so hidden items and what this program does not know of are not in it"
+        ));
+    }
     Ok(json!({
+        "copied": saved.copied,
         "folders": saved.folders,
         "items": saved.items,
         "unreadable": saved.unreadable,
