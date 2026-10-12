@@ -1,15 +1,15 @@
 [package]
-name = "mailcraft-pdf"
+name = "openmailclient-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MailCraft PDF: writes pages of text, fills and lines to a PDF file, with the fonts they use"
+description = "OpenMailClient PDF: writes pages of text, fills and lines to a PDF file, with the fonts they use"
 
 [lints]
 workspace = true
 
 [dependencies]
-mailcraft-fonts = { workspace = true }
+openmailclient-fonts = { workspace = true }
 # Finds a font's tables in its file; the tables themselves are read here.
 skrifa = { workspace = true }
 # Compresses the streams of the file (zlib, as PDF's FlateDecode asks).

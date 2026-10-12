@@ -1,4 +1,4 @@
-//! Typed properties ([MS-OXCDATA] 2.11.1) and the property ids MailCraft reads by name ([MS-OXPROPS]).
+//! Typed properties ([MS-OXCDATA] 2.11.1) and the property ids OpenMailClient reads by name ([MS-OXPROPS]).
 
 use std::collections::BTreeMap;
 

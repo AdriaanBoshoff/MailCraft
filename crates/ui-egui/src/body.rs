@@ -20,7 +20,7 @@ use crate::{bold, clip_text, font, text_width};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
-use mailcraft_formats::rich::{
+use openmailclient_formats::rich::{
     self, Block, Doc, Edge, Edges, Filed, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
 };
 use std::cell::{Cell, RefCell};
@@ -398,7 +398,7 @@ fn card_words(filed: &Filed) -> String {
         words = format!("{words} ({kind})");
     }
     if filed.bytes > 0 {
-        words = format!("{words}  ({})", mailcraft_engine::attachments::size_words(filed.bytes));
+        words = format!("{words}  ({})", openmailclient_engine::attachments::size_words(filed.bytes));
     }
     words
 }
@@ -735,7 +735,7 @@ fn job_and_leaders<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wr
             None => {
                 let (text, mut format) = section(run, look);
                 // A link that is not what its text says is marked before anyone points at it.
-                if run.picture.is_none() && mailcraft_formats::links::concern_at(runs, at).is_some() {
+                if run.picture.is_none() && openmailclient_formats::links::concern_at(runs, at).is_some() {
                     format.underline = Stroke::new(2.0, look.t.danger);
                 }
                 told(&mut format);
@@ -954,7 +954,8 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
     if let Some(pointer) = response.hover_pos() {
         if let Some((p, _)) = placed.iter().zip(&spots).find(|(_, at)| at.contains(pointer)) {
             let mut tip = tip(p.run, p.stand);
-            if let Some(concern) = runs.iter().position(|r| std::ptr::eq(r, p.run)).and_then(|at| mailcraft_formats::links::concern_at(runs, at)) {
+            if let Some(concern) = runs.iter().position(|r| std::ptr::eq(r, p.run)).and_then(|at| openmailclient_formats::links::concern_at(runs, at))
+            {
                 tip = format!("{}\n{tip}", concern.words());
             }
             if !tip.is_empty() {
@@ -975,7 +976,7 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
                 if let Some(link) = at.and_then(|i| runs.get(i)).and_then(|r| r.style.link.as_ref()) {
                     let shown: String = link.chars().filter(|c| !c.is_control()).take(300).collect();
                     let concern =
-                        at.and_then(|i| mailcraft_formats::links::concern_at(runs, i)).map(|c| format!("{}\n", c.words())).unwrap_or_default();
+                        at.and_then(|i| openmailclient_formats::links::concern_at(runs, i)).map(|c| format!("{}\n", c.words())).unwrap_or_default();
                     response.clone().on_hover_text_at_pointer(format!("{concern}{shown}\n{LINK_HINT}"));
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     if response.clicked() {

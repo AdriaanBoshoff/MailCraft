@@ -2,7 +2,7 @@
 //! in hex, and each object's property tags. Values are not printed, so the output is safe to read
 //! next to a private file; it is a tool for comparing our writer's files with Outlook's.
 //!
-//! `cargo run -p mailcraft-msg --example msg_dump -- file.msg [--values]`
+//! `cargo run -p openmailclient-msg --example msg_dump -- file.msg [--values]`
 
 use std::io::Read;
 

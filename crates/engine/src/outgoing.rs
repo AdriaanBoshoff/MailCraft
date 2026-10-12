@@ -94,7 +94,7 @@ pub fn cautions(draft: &Draft) -> Vec<Caution> {
     let (mut seen, mut twice) = (HashSet::new(), HashSet::new());
     let mut told = 0;
     for line in [&draft.to, &draft.cc, &draft.bcc] {
-        for (name, address) in mailcraft_mime::parse_addresses(line) {
+        for (name, address) in openmailclient_mime::parse_addresses(line) {
             if told >= MAX_TOLD {
                 break;
             }

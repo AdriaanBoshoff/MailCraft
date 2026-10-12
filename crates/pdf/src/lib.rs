@@ -4,7 +4,7 @@
 //! page's top left corner; [`Writer::finish`] gives the file. Text is given as glyphs of a font
 //! that was laid out elsewhere: nothing is measured or wrapped here. Each font is carried in the
 //! file with only the glyphs that were used, when its maker allows that
-//! ([`mailcraft_fonts::embedding`]).
+//! ([`openmailclient_fonts::embedding`]).
 //!
 //! The file layout is from ISO 32000-1 (PDF 1.7): 7.5 (file structure), 7.7 (document
 //! structure), 8 (graphics), 8.9 (images), 9.4 (text objects), 9.7 (composite fonts), 9.8 (font descriptors),
@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mailcraft_fonts::Embedding;
+use openmailclient_fonts::Embedding;
 
 /// Red, green, blue.
 pub type Rgb = [u8; 3];
@@ -150,7 +150,7 @@ impl Writer {
         if self.fonts.len() >= MAX_FONTS {
             return Err(PdfError::TooManyFonts);
         }
-        let how = mailcraft_fonts::embedding(&data, index).ok_or(PdfError::Font)?;
+        let how = openmailclient_fonts::embedding(&data, index).ok_or(PdfError::Font)?;
         font::measures(&data, index).ok_or(PdfError::Font)?;
         self.fonts.push(Font { data, index, how, used: BTreeMap::new() });
         Ok(FontId(self.fonts.len() - 1))
@@ -327,7 +327,7 @@ impl Writer {
         for unit in title.chars().filter(|c| !c.is_control()).take(200).collect::<String>().encode_utf16() {
             let _ = write!(named, "{unit:04X}");
         }
-        file.object(info, &format!("<< /Title <{named}> /Producer (MailCraft) >>"))?;
+        file.object(info, &format!("<< /Title <{named}> /Producer (OpenMailClient) >>"))?;
         file.end(catalog, info)
     }
 }

@@ -13,7 +13,7 @@
 //! case ("zoe" finds "Zöe"), nothing needs an index, and a keyword that is not understood is
 //! looked for as the text it is, so a query never fails and never quietly finds everything.
 
-use mailcraft_model::{Flag, Summary, time};
+use openmailclient_model::{Flag, Summary, time};
 
 /// Clauses one query may have; what is typed past them is left out.
 const MAX_CLAUSES: usize = 32;

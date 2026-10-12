@@ -3,7 +3,7 @@
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
 use crate::{CmdResult, Draft, EngineError, Session, outgoing};
-use mailcraft_model::{
+use openmailclient_model::{
     Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
     recipient_label, time,
 };
@@ -364,7 +364,7 @@ fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     item.set_body_text(&draft.body);
     item.set_sender(&s.user_name, &s.user_email);
     for (kind, line) in [(RECIP_TO, &draft.to), (RECIP_CC, &draft.cc), (RECIP_BCC, &draft.bcc)] {
-        for (name, email) in mailcraft_mime::parse_addresses(line) {
+        for (name, email) in openmailclient_mime::parse_addresses(line) {
             item.add_recipient(kind, &name, &email);
         }
     }
@@ -398,7 +398,8 @@ fn check(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 fn send(s: &mut Session, p: &Value) -> CmdResult {
-    let has_recipient = s.compose.as_ref().is_some_and(|d| [&d.to, &d.cc, &d.bcc].iter().any(|l| !mailcraft_mime::parse_addresses(l).is_empty()));
+    let has_recipient =
+        s.compose.as_ref().is_some_and(|d| [&d.to, &d.cc, &d.bcc].iter().any(|l| !openmailclient_mime::parse_addresses(l).is_empty()));
     if !has_recipient {
         return Err(EngineError::Format("there must be at least one name or address in the To, Cc or Bcc box".into()));
     }

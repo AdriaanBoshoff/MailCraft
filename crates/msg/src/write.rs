@@ -4,7 +4,7 @@ use crate::{
     ATTACH_PREFIX, EMBEDDED_STORAGE, HEADER_CHILD, HEADER_EMBEDDED, HEADER_TOP, MsgError, NAMEID_STORAGE, PROPS_STREAM, RECIP_PREFIX, crc32,
     value_stream,
 };
-use mailcraft_model::{Item, MSGFLAG_HASATTACH, NameId, NamedKey, PropBag, PropValue, codepage, pid, pset, ptype};
+use openmailclient_model::{Item, MSGFLAG_HASATTACH, NameId, NamedKey, PropBag, PropValue, codepage, pid, pset, ptype};
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 

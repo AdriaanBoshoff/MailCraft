@@ -1,11 +1,11 @@
 //! Printing: the open message laid out in Memo Style and written as a PDF file.
 
-use mailcraft_fonts::Library;
-use mailcraft_formats::links::{self, Concern};
-use mailcraft_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style};
-use mailcraft_layout::{Fonts, LayoutError, Line, MM, Memo, Paper, Printed, Setup};
-use mailcraft_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, time};
-use mailcraft_pdf::{Piece, Stroke, Writer};
+use openmailclient_fonts::Library;
+use openmailclient_formats::links::{self, Concern};
+use openmailclient_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style};
+use openmailclient_layout::{Fonts, LayoutError, Line, MM, Memo, Paper, Printed, Setup};
+use openmailclient_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, time};
+use openmailclient_pdf::{Piece, Stroke, Writer};
 use serde_json::{Value, json};
 
 use crate::pictures::{self, Pixels};
@@ -347,13 +347,13 @@ fn mailbox(name: &str, email: &str) -> String {
 /// The message's formatted body, or its plain one as a document. True for a plain one.
 pub(crate) fn body(item: &Item) -> (Doc, bool) {
     if let Some(html) = item.body_html() {
-        let doc = mailcraft_formats::html::parse(&html);
+        let doc = openmailclient_formats::html::parse(&html);
         if !doc.is_empty() {
             return (doc, false);
         }
     }
     if let Some(rtf) = item.body_rtf() {
-        let mut doc = mailcraft_formats::rtf::parse_with(&rtf, Some(pictures::lettering()));
+        let mut doc = openmailclient_formats::rtf::parse_with(&rtf, Some(pictures::lettering()));
         pictures::settle(&mut doc, item);
         if !doc.is_empty() {
             return (doc, false);
@@ -398,7 +398,7 @@ pub fn layout(item: &Item, job: &Job, library: &Library) -> Result<Laid, EngineE
     let sizes = |picture: &Picture| pictures.get(picture).map(|pixels| pixels.natural);
     let mut fonts = Fonts::new(library);
     let printed =
-        mailcraft_layout::memo(&Memo { owner, fields: &fields, body: &doc, plain, sizes: &sizes }, setup, &mut fonts).map_err(|e| match e {
+        openmailclient_layout::memo(&Memo { owner, fields: &fields, body: &doc, plain, sizes: &sizes }, setup, &mut fonts).map_err(|e| match e {
             LayoutError::NoFont => EngineError::Format(e.to_string()),
         })?;
     Ok(Laid { links, printed, pictures })
@@ -409,7 +409,7 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
     let mut writer = Writer::new();
     // Each picture goes into the file once, when a page first shows it; one the file cannot
     // carry is left out.
-    let mut images: Vec<Option<Option<mailcraft_pdf::ImageId>>> = vec![None; pictures.found.len()];
+    let mut images: Vec<Option<Option<openmailclient_pdf::ImageId>>> = vec![None; pictures.found.len()];
     // A face the file cannot carry leaves its text out; the layout picks none such.
     let fonts: Vec<_> = printed.faces.iter().map(|face| writer.font(face.data.clone(), face.index).ok()).collect();
     for page in &printed.pages {
@@ -470,14 +470,14 @@ pub fn laid(item: &Item, job: &Job) -> Result<Laid, EngineError> {
 
 /// Page `page` (the first is 0) of what was laid out, as pixels, `scale` of them to the point.
 /// It is drawn from what the PDF file is written from. `None` when there is no such page.
-pub fn raster(laid: &Laid, page: usize, scale: f32) -> Option<mailcraft_render::Image> {
+pub fn raster(laid: &Laid, page: usize, scale: f32) -> Option<openmailclient_render::Image> {
     let pictures =
-        |picture: &Picture| laid.pictures.get(picture).map(|p| mailcraft_render::Bitmap { width: p.width, height: p.height, rgba: &p.rgba });
-    mailcraft_render::page(&laid.printed, page, scale, &pictures)
+        |picture: &Picture| laid.pictures.get(picture).map(|p| openmailclient_render::Bitmap { width: p.width, height: p.height, rgba: &p.rgba });
+    openmailclient_render::page(&laid.printed, page, scale, &pictures)
 }
 
 /// A drawn page as a PNG file.
-pub fn png(image: &mailcraft_render::Image) -> Result<Vec<u8>, EngineError> {
+pub fn png(image: &openmailclient_render::Image) -> Result<Vec<u8>, EngineError> {
     use image::ImageEncoder;
     let (width, height) = (u32::try_from(image.width).unwrap_or(0), u32::try_from(image.height).unwrap_or(0));
     let mut file = Vec::new();

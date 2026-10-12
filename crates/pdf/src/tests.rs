@@ -1,5 +1,5 @@
 use super::*;
-use mailcraft_fonts::boxes;
+use openmailclient_fonts::boxes;
 use std::collections::BTreeSet;
 
 fn boxed(chars: &str) -> Arc<[u8]> {
@@ -91,7 +91,7 @@ fn only_the_glyphs_used_are_carried() {
 
     for (file, kept) in [(&none, vec![]), (&one, vec![5usize]), (&composed, vec![1, 27]), (&whole, (1..=27).collect())] {
         // Each is a font again, with every glyph number where it was.
-        assert_eq!(mailcraft_fonts::embedding(file, 0), Some(Embedding::Subset));
+        assert_eq!(openmailclient_fonts::embedding(file, 0), Some(Embedding::Subset));
         let m = font::measures(file, 0).unwrap();
         assert_eq!((m.units, m.advances.len(), m.advances[5]), (1000.0, 28, 500));
         let font = skrifa::FontRef::new(file).unwrap();

@@ -3,7 +3,7 @@
 use crate::{
     ATTACH_PREFIX, EMBEDDED_STORAGE, HEADER_CHILD, HEADER_EMBEDDED, HEADER_TOP, MsgError, NAMEID_STORAGE, PROPS_STREAM, RECIP_PREFIX, value_stream,
 };
-use mailcraft_model::{Attachment, Item, NamedKey, PropBag, PropValue, codepage, pid, ptype};
+use openmailclient_model::{Attachment, Item, NamedKey, PropBag, PropValue, codepage, pid, ptype};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
@@ -55,7 +55,7 @@ fn read_names(cf: &mut Cf) -> Vec<Option<NamedKey>> {
     let guids = read_stream(cf, &base.join(value_stream(0x0002, ptype::BINARY))).unwrap_or_default();
     let entries = read_stream(cf, &base.join(value_stream(0x0003, ptype::BINARY))).unwrap_or_default();
     let strings = read_stream(cf, &base.join(value_stream(0x0004, ptype::BINARY))).unwrap_or_default();
-    mailcraft_model::props::parse_name_map(&guids, &entries, &strings)
+    openmailclient_model::props::parse_name_map(&guids, &entries, &strings)
 }
 
 struct Object {

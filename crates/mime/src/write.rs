@@ -1,7 +1,7 @@
 //! Writing an item as an RFC 5322 / MIME message.
 
 use base64::Engine as _;
-use mailcraft_model::{Attachment, Item, PropBag, RECIP_BCC, RECIP_CC, RECIP_TO, pid, recipient_email, recipient_label, time};
+use openmailclient_model::{Attachment, Item, PropBag, RECIP_BCC, RECIP_CC, RECIP_TO, pid, recipient_email, recipient_label, time};
 
 /// Write one message. Text is quoted-printable UTF-8, attachments are base64 ([RFC 2045] 6).
 pub fn write(item: &Item) -> Vec<u8> {
@@ -134,7 +134,7 @@ fn multipart(kind: &str, seed: u64, parts: &[String]) -> String {
     // The boundary must not occur in a part; bump it until it does not.
     let mut n = seed;
     let boundary = loop {
-        let b = format!("----=_MailCraft_{n:016x}");
+        let b = format!("----=_OpenMailClient_{n:016x}");
         if !parts.iter().any(|p| p.contains(&b)) {
             break b;
         }

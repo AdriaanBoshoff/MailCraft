@@ -1,6 +1,6 @@
 //! Header fields: unfolding, encoded words, parameters, address lists, dates.
 
-use mailcraft_model::time;
+use openmailclient_model::time;
 
 /// Header lines beyond this many are ignored.
 const MAX_HEADERS: usize = 2_000;

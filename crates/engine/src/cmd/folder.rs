@@ -2,7 +2,7 @@
 
 use super::{CommandSpec, has_folder, has_folder_writable, need_str, ok, p_bool, p_str, p_u64};
 use crate::{CmdResult, EngineError, Session};
-use mailcraft_model::{FolderId, FolderKind, ItemId, StoreError};
+use openmailclient_model::{FolderId, FolderKind, ItemId, StoreError};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 

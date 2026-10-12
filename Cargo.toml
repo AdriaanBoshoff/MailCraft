@@ -10,17 +10,17 @@ rust-version = "1.90"
 
 [workspace.dependencies]
 # internal
-mailcraft-model = { path = "crates/model" }
-mailcraft-fonts = { path = "crates/fonts" }
-mailcraft-mime = { path = "crates/mime" }
-mailcraft-msg = { path = "crates/msg" }
-mailcraft-pst = { path = "crates/pst" }
-mailcraft-formats = { path = "crates/formats" }
-mailcraft-pdf = { path = "crates/pdf" }
-mailcraft-layout = { path = "crates/layout" }
-mailcraft-render = { path = "crates/render" }
-mailcraft-engine = { path = "crates/engine" }
-mailcraft-ui-egui = { path = "crates/ui-egui" }
+openmailclient-model = { path = "crates/model" }
+openmailclient-fonts = { path = "crates/fonts" }
+openmailclient-mime = { path = "crates/mime" }
+openmailclient-msg = { path = "crates/msg" }
+openmailclient-pst = { path = "crates/pst" }
+openmailclient-formats = { path = "crates/formats" }
+openmailclient-pdf = { path = "crates/pdf" }
+openmailclient-layout = { path = "crates/layout" }
+openmailclient-render = { path = "crates/render" }
+openmailclient-engine = { path = "crates/engine" }
+openmailclient-ui-egui = { path = "crates/ui-egui" }
 
 # foundation
 thiserror = "2"

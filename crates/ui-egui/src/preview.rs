@@ -4,8 +4,8 @@
 //! holds. Every control runs `file.pageSetup`; printing itself is asked of the host.
 
 use egui::{Align2, Color32, ColorImage, Key, Rect, Sense, TextureHandle, TextureOptions, pos2, vec2};
-use mailcraft_engine::print::{self, Laid, Links};
-use mailcraft_layout::{MM, Paper, Setup};
+use openmailclient_engine::print::{self, Laid, Links};
+use openmailclient_layout::{MM, Paper, Setup};
 use serde_json::{Value, json};
 
 use crate::{MailUi, UiRequest, bold, font};

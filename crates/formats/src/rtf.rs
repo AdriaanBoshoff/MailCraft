@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use mailcraft_fonts::Lettering;
-use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
+use openmailclient_fonts::Lettering;
+use openmailclient_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
 
 use crate::html;
 use crate::rich::{

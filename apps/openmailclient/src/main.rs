@@ -1,13 +1,13 @@
-//! The MailCraft desktop app.
+//! The OpenMailClient desktop app.
 //!
 //! ```text
-//! mailcraft [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...
+//! openmailclient [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...
 //! ```
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use mailcraft_engine::Session;
-use mailcraft_ui_egui::{MailUi, UiRequest};
+use openmailclient_engine::Session;
+use openmailclient_ui_egui::{MailUi, UiRequest};
 use serde_json::{Value, json};
 use std::process::ExitCode;
 
@@ -69,7 +69,7 @@ impl App {
                         .open
                         .as_ref()
                         .and_then(|it| it.attachments.get(index))
-                        .map(mailcraft_engine::attachments::file_name)
+                        .map(openmailclient_engine::attachments::file_name)
                         .unwrap_or_default();
                     if let Some(path) = rfd::FileDialog::new().set_title("Save attachment").set_file_name(name).save_file() {
                         self.run("file.saveAttachment", json!({ "index": index, "path": path }));
@@ -102,7 +102,7 @@ impl App {
 /// because this is where it leaves the program, and it is passed as one argument, never through
 /// a shell.
 fn open_in_browser(address: &str) -> std::io::Result<()> {
-    use mailcraft_formats::links::{Target, target};
+    use openmailclient_formats::links::{Target, target};
     let refused = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, why.to_string());
     let address = match target(address) {
         Ok(Target::Page(address)) => address,
@@ -144,7 +144,7 @@ impl eframe::App for App {
 
 fn main() -> ExitCode {
     let mut session = Session::new();
-    session.tz_offset_min = mailcraft_ui_egui::local_offset_minutes();
+    session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
     let mut app = App { ui: MailUi::new(session) };
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
@@ -152,24 +152,24 @@ fn main() -> ExitCode {
             "--dark" => app.run("ui.theme", json!({ "theme": "dark" })),
             "--classic-ribbon" => app.run("ui.ribbonMode", json!({ "mode": "classic" })),
             "--help" | "-h" => {
-                println!("mailcraft [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...");
+                println!("openmailclient [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...");
                 return ExitCode::SUCCESS;
             }
             flag if flag.starts_with("--") => {
-                eprintln!("mailcraft: unknown option {flag}");
+                eprintln!("openmailclient: unknown option {flag}");
                 return ExitCode::FAILURE;
             }
             path => app.run("file.open", json!({ "path": path })),
         }
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("MailCraft").with_inner_size([1280.0, 800.0]).with_min_inner_size([760.0, 480.0]),
+        viewport: egui::ViewportBuilder::default().with_title("OpenMailClient").with_inner_size([1280.0, 800.0]).with_min_inner_size([760.0, 480.0]),
         ..Default::default()
     };
-    match eframe::run_native("MailCraft", options, Box::new(move |_cc| Ok(Box::new(app)))) {
+    match eframe::run_native("OpenMailClient", options, Box::new(move |_cc| Ok(Box::new(app)))) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("mailcraft: {e}");
+            eprintln!("openmailclient: {e}");
             ExitCode::FAILURE
         }
     }

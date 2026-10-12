@@ -32,13 +32,13 @@
    2.3.4 and 2.3.6, any other as a card with its name and size that a click saves),
    paragraph borders and the room paragraphs ask for above and below,
    and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
-   (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. MailCraft never writes compressed RTF
+   (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
    complex-script shaping and right-to-left text, Table Style and other print styles, keeping the page setup between runs, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
-5. **MCP server and control channel** (`mailcraft-cli mcp`, `--control`) are not built.
+5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
 6. **Web build.** The engine and everything under it compiles for wasm32; there is no web app.
 
 ## Built but unproven

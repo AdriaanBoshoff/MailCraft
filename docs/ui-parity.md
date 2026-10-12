@@ -2,7 +2,7 @@
 
 **Status:** revision 11 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
-How MailCraft's window compares with Outlook Classic's, from window captures of both at the same size.
+How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
 only layout and measurements. Numbers are logical pixels at 96 dpi, from a 1440 × 753 window.
 
@@ -11,16 +11,16 @@ only layout and measurements. Numbers are logical pixels at 96 dpi, from a 1440 
 Outlook Classic 16.0, Mail module, as configured on the dev machine: **simplified (single-line) ribbon**
 and a **dark grey theme**. Both are user settings; the classic ribbon and the light themes are equally
 Outlook Classic. The classic ribbon was captured once by switching the layout for one capture and
-switching it back; the theme was left alone, so the light themes are still unobserved. MailCraft has
+switching it back; the theme was left alone, so the light themes are still unobserved. OpenMailClient has
 both ribbon layouts (`ui.ribbonMode`) and a light and a dark colour set (`ui.theme`); it starts with the
 simplified ribbon in the light set. The colours are our own in both sets, not Outlook's.
 
 The two ribbon layouts share one window shell: title bar, module strip, tab row and panes are the same,
-and only the ribbon panel's height and contents change. MailCraft follows that.
+and only the ribbon panel's height and contents change. OpenMailClient follows that.
 
 ## Measurements
 
-| Part | Outlook Classic (observed) | MailCraft | State |
+| Part | Outlook Classic (observed) | OpenMailClient | State |
 |---|---|---|---|
 | Title bar | about 58 high; search box 304 × 32, left edge on the message list's left edge | 48 high; search box up to 304 × 30 on the list's left edge | close |
 | Tab row | about 24 high: File, Home, Send / Receive, View, Help, then a "tell me" box; the classic layout adds a Folder tab after Send / Receive | 28 high: File, Home, Send / Receive, Folder, View, Help in both layouts | differs (Folder tab always shown; no tell-me box) |
@@ -36,12 +36,12 @@ and only the ribbon panel's height and contents change. MailCraft follows that.
 
 ## Message bodies
 
-Two messages from MailCraft's own sample mailbox and six probe messages (all synthetic, written by
+Two messages from OpenMailClient's own sample mailbox and six probe messages (all synthetic, written by
 us) were saved as `.msg` and opened in an Outlook Classic message window, one at a time, then closed
-without saving. The window was compared with MailCraft's reading pane showing the same message.
+without saving. The window was compared with OpenMailClient's reading pane showing the same message.
 Nothing from the owner's mailbox was involved.
 
-| What | Outlook Classic (observed) | MailCraft | State |
+| What | Outlook Classic (observed) | OpenMailClient | State |
 |---|---|---|---|
 | Unstyled HTML text | 12 pt | 12 pt (16 px); relative sizes and headings start from it | same |
 | `<table width=600 align=center>` | a column 600 wide, centred in the window | the same; also `max-width`, `width` in a style, and `margin: auto` for centring | same |
@@ -67,11 +67,11 @@ Nothing from the owner's mailbox was involved.
 | `border` wider than 1 on a table | a line that wide round the table, lines 1 px wide round the cells | the same, in one colour instead of a raised edge | close |
 | `rowspan` | the cell covers the rows; cells under it move aside; its fill covers it all and its text stands in the middle | the same | same |
 | `float` in a style on a picture | not followed: the picture stays in the line of text | the same | same |
-| Picture written into the body (`data:` in base64) | shown, sized or at its own size | the same, for the picture kinds MailCraft decodes | same |
+| Picture written into the body (`data:` in base64) | shown, sized or at its own size | the same, for the picture kinds OpenMailClient decodes | same |
 | Font named by `<font face>` or `font-family` | drawn in that font when it is installed, with its own bold | the same; an open font of the same measures stands in for a missing proprietary one | same |
 | Italic text in a named font | the font's italic face | the same; the upright face slanted when the font has no italic face installed | same |
 | A font that is not installed | the next in the list; `sans-serif` and `serif` are followed; with nothing left, a serif | the same | same |
-| Text that names no font | a sans-serif of Outlook's own choosing | MailCraft's interface font | differs |
+| Text that names no font | a sans-serif of Outlook's own choosing | OpenMailClient's interface font | differs |
 | Picture on a server, not loaded, without a size | a small box with a mark only | a line of text with the alternative text | differs (ours says what the picture is) |
 | Table, cell padding and spacing | 1 and 2 where the table sets none; `cellpadding` and `cellspacing` followed; with spacing the table's own border is seen round the cells' | the same | same |
 | `border-collapse: collapse` | no room between cells | the same | same |
@@ -100,7 +100,7 @@ neighbouring cells (`border-collapse`). They are in [gaps.md](gaps.md), item 3.
 ## Printing
 
 Not compared against Outlook's print output yet: printing from Outlook would use a real printer
-or its print dialog, and neither is driven on the shared machine. MailCraft's Memo Style page (the
+or its print dialog, and neither is driven on the shared machine. OpenMailClient's Memo Style page (the
 owner's name over a line, field names in bold beside their values, the body, a page number at the
 foot) is laid out from general knowledge of the style, and its measures are our own. File > Print
 and Ctrl+P open a print window: the page as it will be printed beside the paper, direction, margins,
@@ -110,7 +110,7 @@ Outlook's print pane was not observed.
 ## Behaviour seen
 
 - Opening a folder selects the first row but **does not open it** in the reading pane; the pane shows the
-  empty state until the user picks a message. MailCraft selects nothing when a folder opens. To check
+  empty state until the user picks a message. OpenMailClient selects nothing when a folder opens. To check
   further before changing: this may depend on Outlook's reading-pane options.
 
 ## Next
@@ -129,7 +129,7 @@ Outlook's print pane was not observed.
 - 7 · 2026-10-11 — three probe messages compared: picture frames, cell padding and spacing, row fills, vertical places, percentage widths, style sheets, link colour.
 - 6 · 2026-10-11 — two message bodies compared with Outlook's display of the same `.msg`; Message bodies section added.
 - 5 · 2026-10-11 — attached pictures drawn in the body; row updated.
-- 4 · 2026-10-11 — classic ribbon observed; MailCraft's classic layout rebuilt on the shared shell.
+- 4 · 2026-10-11 — classic ribbon observed; OpenMailClient's classic layout rebuilt on the shared shell.
 - 3 · 2026-10-11 — formatted bodies drawn; row added.
 - 2 · 2026-10-11 — simplified ribbon, full-height module strip and dark colour set built; table updated.
 - 1 · 2026-10-11 — first comparison.

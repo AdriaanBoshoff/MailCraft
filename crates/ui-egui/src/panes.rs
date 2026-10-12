@@ -4,8 +4,8 @@
 use crate::icons::{self, Icon};
 use crate::{MailUi, body, bold, clip_text, font, one_line, text_width, theme};
 use egui::{Align2, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
-use mailcraft_engine::{Module, ReadingPane, SortKey};
-use mailcraft_model::{Flag, FolderId, FolderInfo, FolderKind, RECIP_CC, RECIP_TO, Summary, time};
+use openmailclient_engine::{Module, ReadingPane, SortKey};
+use openmailclient_model::{Flag, FolderId, FolderInfo, FolderKind, RECIP_CC, RECIP_TO, Summary, time};
 use serde_json::{Value, json};
 
 const ROW_H: f32 = 64.0;
@@ -44,7 +44,7 @@ fn initials(name: &str) -> String {
 }
 
 fn human_size(bytes: usize) -> String {
-    mailcraft_engine::attachments::size_words(bytes)
+    openmailclient_engine::attachments::size_words(bytes)
 }
 
 impl MailUi {
@@ -482,8 +482,10 @@ impl MailUi {
 
         // Attachments: a click only asks where to save. Nothing is opened or run.
         // The name is shown as it would be saved, so nothing in it is hidden or reversed.
-        let files: Vec<(usize, String, usize, Option<String>)> = mailcraft_engine::attachments::files(item)
-            .map(|(i, a)| (i, mailcraft_engine::attachments::file_name(a), a.size(), mailcraft_engine::attachments::caution_of(a).map(|c| c.words())))
+        let files: Vec<(usize, String, usize, Option<String>)> = openmailclient_engine::attachments::files(item)
+            .map(|(i, a)| {
+                (i, openmailclient_engine::attachments::file_name(a), a.size(), openmailclient_engine::attachments::caution_of(a).map(|c| c.words()))
+            })
             .take(32)
             .collect();
         let mut save: Option<usize> = None;
@@ -618,7 +620,7 @@ impl MailUi {
         let attachments: Vec<(String, usize)> = draft.attachments.iter().map(|a| (a.name(), a.size())).collect();
         let show_bcc = draft.show_bcc;
         // What the writer should know is on show while the message can still be changed.
-        let cautions: Vec<String> = mailcraft_engine::outgoing::cautions(draft).iter().map(|c| c.words()).collect();
+        let cautions: Vec<String> = openmailclient_engine::outgoing::cautions(draft).iter().map(|c| c.words()).collect();
         let mut acts: Vec<(&str, Value)> = Vec::new();
         ui.scope_builder(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 10.0))), |ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);

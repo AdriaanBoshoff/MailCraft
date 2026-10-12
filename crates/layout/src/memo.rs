@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use mailcraft_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Picture, Run, Style, Table, TableWidth};
+use openmailclient_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Picture, Run, Style, Table, TableWidth};
 
 use crate::flow::{Base, FOOT, Flow, HEAD};
 use crate::fonts::Fonts;

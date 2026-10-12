@@ -3,7 +3,7 @@
 
 use crate::PstError;
 use crate::ndb::{Ndb, Subnodes, Ver, u16_at, u32_at};
-use mailcraft_model::{PropValue, codepage, ptype};
+use openmailclient_model::{PropValue, codepage, ptype};
 
 /// Records of one BTree-on-heap, rows of one table, values of one multi-valued property.
 const MAX_BTH_RECORDS: usize = 1 << 20;

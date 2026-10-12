@@ -2,7 +2,7 @@
 //! writes PNGs.
 //!
 //! ```text
-//! cargo run --release -p mailcraft-ui-egui --example ui_shot -- script.jsonl
+//! cargo run --release -p openmailclient-ui-egui --example ui_shot -- script.jsonl
 //! ```
 //!
 //! The script is JSON lines, run in order:
@@ -17,8 +17,8 @@
 //! Without a script it opens the sample mailbox and writes `plan/shots/ui_shot.png`.
 
 use egui_kittest::Harness;
-use mailcraft_engine::Session;
-use mailcraft_ui_egui::MailUi;
+use openmailclient_engine::Session;
+use openmailclient_ui_egui::MailUi;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::ExitCode;

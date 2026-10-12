@@ -1,4 +1,4 @@
-//! MailCraft engine: session, stores, command registry, Outlook feature catalog, sample mailbox.
+//! OpenMailClient engine: session, stores, command registry, Outlook feature catalog, sample mailbox.
 //!
 //! Everything a person can do is a command with an id (`cmd::registry`). The ribbon, shortcuts,
 //! the CLI and agents all go through [`Session::run`]; nothing here opens a dialog or a socket.
@@ -19,7 +19,7 @@ pub mod search;
 mod tests;
 pub mod undo;
 
-use mailcraft_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
+use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
 use serde_json::{Value, json};
 
 pub use cmd::{CommandSpec, registry};
@@ -170,7 +170,7 @@ pub struct Session {
     /// last: `compose.restore` brings one back.
     pub set_aside: Vec<Draft>,
     /// How pages are set up for printing: `file.pageSetup` changes it.
-    pub page_setup: mailcraft_layout::Setup,
+    pub page_setup: openmailclient_layout::Setup,
 }
 
 impl Default for Session {
@@ -199,12 +199,12 @@ impl Session {
             compose: None,
             status: String::new(),
             tz_offset_min: 0,
-            now: mailcraft_model::time::from_unix(i64::try_from(unix).unwrap_or(0)),
+            now: openmailclient_model::time::from_unix(i64::try_from(unix).unwrap_or(0)),
             user_name: "Alex Morgan".to_string(),
             user_email: "alex.morgan@example.org".to_string(),
             undo: Vec::new(),
             set_aside: Vec::new(),
-            page_setup: mailcraft_layout::Setup::default(),
+            page_setup: openmailclient_layout::Setup::default(),
         }
     }
 
@@ -513,7 +513,7 @@ impl Session {
                 })).collect::<Vec<_>>(),
                 "untrusted_content": {
                     "subject": it.subject(), "from": it.sender_name(), "from_email": it.sender_email(),
-                    "to": it.display_recipients(mailcraft_model::RECIP_TO), "cc": it.display_recipients(mailcraft_model::RECIP_CC),
+                    "to": it.display_recipients(openmailclient_model::RECIP_TO), "cc": it.display_recipients(openmailclient_model::RECIP_CC),
                     "body": it.body_text().chars().take(20_000).collect::<String>(),
                 },
             })

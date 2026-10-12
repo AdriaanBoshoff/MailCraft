@@ -4,7 +4,7 @@
 //! file, undecoded. A metafile that is a drawing of lines, filled shapes and text is drawn (`wmf`,
 //! `emf`); one that draws anything else is not read: half a picture is worse than its place.
 
-use mailcraft_fonts::Lettering;
+use openmailclient_fonts::Lettering;
 
 /// Records one metafile is searched through.
 const MAX_RECORDS: usize = 4096;

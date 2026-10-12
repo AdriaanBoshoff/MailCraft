@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use mailcraft_fonts::{Face, Library, boxes};
-use mailcraft_formats::rich::{Align, Block, Cell, Doc, Edge, Frame, Para, ParaKind, Picture, Run, Script, Style, Table, TableWidth, VAlign};
+use openmailclient_fonts::{Face, Library, boxes};
+use openmailclient_formats::rich::{Align, Block, Cell, Doc, Edge, Frame, Para, ParaKind, Picture, Run, Script, Style, Table, TableWidth, VAlign};
 
 use super::*;
 
@@ -374,7 +374,7 @@ fn pictures_stand_in_the_line_at_the_size_asked_for() {
 
 #[test]
 fn text_after_a_tab_stands_at_its_stop() {
-    use mailcraft_formats::rich::{Tab, TabKind};
+    use openmailclient_formats::rich::{Tab, TabKind};
     let stop = |at, kind| Tab { at, kind, lead: Default::default() };
     // Stops are in pixels, four to three points: 30, 90 and 120 points from the start.
     let tabs = vec![stop(40, TabKind::Left), stop(120, TabKind::Right), stop(160, TabKind::Decimal)];
@@ -416,7 +416,7 @@ fn text_after_a_tab_stands_at_its_stop() {
 
 #[test]
 fn lines_are_as_tall_as_their_paragraph_says() {
-    use mailcraft_formats::rich::Leading;
+    use openmailclient_formats::rich::Leading;
     let two = |leading| Block::Para(Para { leading, ..para("aa\nbb") });
     // Four paragraphs of two lines: the step from the first line to the second.
     let body = doc(vec![two(Leading::Own), two(Leading::Times(200)), two(Leading::Exactly(40)), two(Leading::AtLeast(4)), two(Leading::Exactly(4))]);
@@ -445,7 +445,7 @@ fn lines_are_as_tall_as_their_paragraph_says() {
 
 #[test]
 fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
-    use mailcraft_formats::rich::{Leader, Line, Tab, TabKind};
+    use openmailclient_formats::rich::{Leader, Line, Tab, TabKind};
     let stop = |at, lead| Tab { at, kind: TabKind::Right, lead };
     let edge = Edge { width: 1, color: None, line: Line::Solid };
     let between = Edge { width: 2, color: Some([200, 0, 0]), line: Line::Solid };
@@ -611,7 +611,7 @@ fn hostile_kerning_tables_move_nothing_far() {
 
 #[test]
 fn text_stands_beside_a_picture_at_one_side() {
-    use mailcraft_formats::rich::Float;
+    use openmailclient_formats::rich::Float;
     let side = |id: &str, float: Float| Run { picture: Some(Picture::Attached(id.into())), float, ..Run::default() };
     let sizes = |picture: &Picture| match picture {
         // 80 by 40 pixels are 60 by 30 points; with its gap a picture takes 66 of the width.

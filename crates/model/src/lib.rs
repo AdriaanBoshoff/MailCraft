@@ -1,7 +1,7 @@
-//! MailCraft item model: MAPI-style property bags, folders, stores.
+//! OpenMailClient item model: MAPI-style property bags, folders, stores.
 //!
 //! Outlook keeps every item (message, appointment, contact, task) as a bag of typed properties
-//! ([MS-OXPROPS], [MS-OXCDATA] 2.11). MailCraft keeps the same shape so a data file round-trips
+//! ([MS-OXPROPS], [MS-OXCDATA] 2.11). OpenMailClient keeps the same shape so a data file round-trips
 //! without loss: a property this code does not understand is carried, not dropped.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

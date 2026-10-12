@@ -1,5 +1,5 @@
 use super::*;
-use mailcraft_model::{Attachment, Item, NameId, NamedKey, PropValue, RECIP_CC, RECIP_TO, pid, pset, time};
+use openmailclient_model::{Attachment, Item, NameId, NamedKey, PropValue, RECIP_CC, RECIP_TO, pid, pset, time};
 
 fn sample() -> Item {
     let mut it = Item::new_mail();

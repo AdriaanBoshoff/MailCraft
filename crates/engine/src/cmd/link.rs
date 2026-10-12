@@ -4,8 +4,8 @@
 use super::{CommandSpec, has_selection, p_bool, p_str, p_u64};
 use crate::links::{self, Found};
 use crate::{CmdResult, EngineError, Session};
-use mailcraft_formats::links::{Target, target};
-use mailcraft_model::StoreError;
+use openmailclient_formats::links::{Target, target};
+use openmailclient_model::StoreError;
 use serde_json::{Value, json};
 
 pub(super) fn commands() -> Vec<CommandSpec> {

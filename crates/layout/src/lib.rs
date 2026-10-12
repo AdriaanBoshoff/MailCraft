@@ -2,10 +2,10 @@
 //!
 //! What comes out is pages of placed glyphs, fills and lines, in points from each page's top
 //! left corner ([`Printed`]); writing them to a file or a printer is someone else's work. The
-//! body is the formatted document the reading pane draws ([`mailcraft_formats::rich::Doc`]),
+//! body is the formatted document the reading pane draws ([`openmailclient_formats::rich::Doc`]),
 //! with the same rules for paragraphs, borders and tables, so a message prints as it reads.
 //!
-//! Fonts are the installed ones, found by name ([`mailcraft_fonts`]); a face that may not be
+//! Fonts are the installed ones, found by name ([`openmailclient_fonts`]); a face that may not be
 //! put into a document is passed over for the next name. Text is set one character to one
 //! glyph, left to right, with the pairs a face kerns standing as close as it says: there is
 //! no shaping and no right-to-left setting yet.
@@ -22,8 +22,8 @@ mod fonts;
 mod memo;
 
 pub use fonts::{Fonts, Loaded};
-pub use mailcraft_formats::rich::{Line, Picture, Rgb};
 pub use memo::{Memo, memo};
+pub use openmailclient_formats::rich::{Line, Picture, Rgb};
 
 /// Points in a millimetre.
 pub const MM: f32 = 72.0 / 25.4;

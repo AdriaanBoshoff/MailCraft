@@ -9,7 +9,7 @@ writes for these checks stay local and are never committed.
 
 ## `.msg` and `.oft` ([MS-OXMSG])
 
-| What | MailCraft → Outlook | Outlook → MailCraft | Outlook → MailCraft → Outlook |
+| What | OpenMailClient → Outlook | Outlook → OpenMailClient | Outlook → OpenMailClient → Outlook |
 |---|---|---|---|
 | Message class, subject | read back the same | read | same |
 | Sender name, address, address type | read back the same | not checked (control items have no sender) | not checked |
@@ -24,7 +24,7 @@ writes for these checks stay local and are never committed.
 | Inline picture (attachment with a content id, `cid:` in the HTML) | drawn in the body at the size asked for | not checked | not checked |
 | Attached message | not checked in Outlook | not checked | not checked |
 | Attached object of another program (attach method 6, a storage: [MS-OXMSG] 2.2.2.2) | written as the storage it was; not checked in Outlook | read whole, every stream and storage with classes and state (our own round trip is pinned by a test) | not checked |
-| Properties MailCraft does not interpret | n/a | kept | preserved (8 named properties survive) |
+| Properties OpenMailClient does not interpret | n/a | kept | preserved (8 named properties survive) |
 | Template (`.oft`) opened as a new item | subject, body, recipients, attachment, categories arrive | read | not checked |
 
 Pinned by `crates/msg/src/tests.rs` (round trip through our own reader, layout, hostile input, and the
@@ -34,7 +34,7 @@ named-property lookup checksum).
 
 - **Named property lookup checksum.** Outlook locates a named property through the lookup stream chosen
   by a checksum of its name ([MS-OXMSG] 2.2.3.2.1). That checksum is the one in [MS-OXRTFCP] 3.1.3.2,
-  which starts from zero and is not inverted at the end. MailCraft used the common CRC-32, so Outlook
+  which starts from zero and is not inverted at the end. OpenMailClient used the common CRC-32, so Outlook
   opened the file but showed no categories. Fixed; `named_property_lookup_uses_the_zero_seeded_checksum`.
 
 ### Not yet checked

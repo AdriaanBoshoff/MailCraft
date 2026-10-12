@@ -1,5 +1,5 @@
 //! The Outlook Classic feature catalog: what its ribbon and menus offer, module by module, and
-//! which MailCraft command covers each one. Parity is the share of entries whose command exists.
+//! which OpenMailClient command covers each one. Parity is the share of entries whose command exists.
 //!
 //! Entries are feature names as a person sees them in the product; nothing else is taken from it.
 

@@ -1,7 +1,7 @@
 //! The sample mailbox: invented people at example.org writing invented mail. Every word here is
 //! ours; nothing comes from a real mailbox.
 
-use mailcraft_model::{Attachment, Flag, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, MemStore, PropValue, RECIP_CC, RECIP_TO, pid, rtf};
+use openmailclient_model::{Attachment, Flag, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, MemStore, PropValue, RECIP_CC, RECIP_TO, pid, rtf};
 
 const MINUTE: i64 = 60 * 10_000_000;
 const HOUR: i64 = 60 * MINUTE;
@@ -146,7 +146,7 @@ pub fn sample_store(now: i64) -> MemStore {
     card.props.set(pid::RENDERING_POSITION, PropValue::Int32(0));
     permit.attachments.push(card);
     // And an object another program would have made: here a picture of the card, drawn below.
-    if let Ok(object) = mailcraft_msg::ole::picture_object("Permit card", &card_bitmap()) {
+    if let Ok(object) = openmailclient_msg::ole::picture_object("Permit card", &card_bitmap()) {
         let mut picture = Attachment::file("Permit card", "", object);
         picture.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
         picture.props.set(pid::RENDERING_POSITION, PropValue::Int32(1));

@@ -7,7 +7,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use mailcraft_fonts::Lettering;
+use openmailclient_fonts::Lettering;
 
 use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
 use crate::metafile::{Drawn, size_at, u32_at};

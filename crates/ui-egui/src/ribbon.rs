@@ -3,7 +3,7 @@
 use crate::icons::{self, Icon};
 use crate::{MailUi, Menu, Tab, bold, clip_text, font, text_width, theme};
 use egui::{Align2, Color32, Rect, Sense, Ui, pos2, vec2};
-use mailcraft_model::{FolderId, FolderInfo, FolderKind};
+use openmailclient_model::{FolderId, FolderInfo, FolderKind};
 use serde_json::{Value, json};
 
 struct Btn {
@@ -90,7 +90,7 @@ const ICON_ONLY: &[&str] = &[
     "view.reverseSort",
 ];
 
-const HELP: &[Group] = &[("Help", &[big(Icon::Info, "About\nMailCraft", "ui.about")])];
+const HELP: &[Group] = &[("Help", &[big(Icon::Info, "About\nOpenMailClient", "ui.about")])];
 
 fn menu_of(cmd: &str) -> Option<&str> {
     cmd.strip_prefix("menu:")
@@ -324,7 +324,7 @@ impl MailUi {
         let t = self.tokens.clone();
         let items = self.menu_items(menu);
         let mut chosen: Option<usize> = None;
-        let area = egui::Area::new(egui::Id::new("mailcraft-menu")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        let area = egui::Area::new(egui::Id::new("openmailclient-menu")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
             let p = ui.painter().clone();
             let width = items.iter().map(|i| text_width(&p, &i.label, font(12.0))).fold(120.0, f32::max).min(360.0) + 52.0;
             let height = (items.len().max(1) as f32) * 24.0 + 8.0;
@@ -531,7 +531,7 @@ impl MailUi {
         }
         y += 12.0;
         for line in [
-            "Data files open read-only: MailCraft never writes to a .pst or .ost file.",
+            "Data files open read-only: OpenMailClient never writes to a .pst or .ost file.",
             "Messages can be saved as .msg, .oft or .eml. Sending and accounts are not built yet.",
         ] {
             clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);

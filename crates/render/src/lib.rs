@@ -7,9 +7,9 @@
 
 use std::collections::HashMap;
 
-use mailcraft_fonts::{Ring, shapes as glyph_shapes};
-use mailcraft_formats::canvas::Canvas;
-use mailcraft_layout::{Line, Page, Picture, Printed, Text};
+use openmailclient_fonts::{Ring, shapes as glyph_shapes};
+use openmailclient_formats::canvas::Canvas;
+use openmailclient_layout::{Line, Page, Picture, Printed, Text};
 
 /// The longest side of a page drawn, in pixels.
 pub const MAX_SIDE: usize = 4096;

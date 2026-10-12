@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use mailcraft_fonts::Embedding;
+use openmailclient_fonts::Embedding;
 use skrifa::raw::TableProvider;
 use skrifa::raw::types::Tag;
 use skrifa::string::StringId;

@@ -1,4 +1,4 @@
-# MailCraft roadmap
+# OpenMailClient roadmap
 
 **Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 41 · 2026-10-12
 
@@ -27,7 +27,7 @@
 
 1. Check the `.pst` reader against more real Outlook-written files, locally (results are never
    published). Done so far: a few small 4K-page `.ost` files.
-2. Have Outlook Classic open MailCraft-written `.msg` files and compare, property by property. Done
+2. Have Outlook Classic open OpenMailClient-written `.msg` files and compare, property by property. Done
    for plain mail with a file attachment ([docs/file-format-parity.md](docs/file-format-parity.md));
    attached messages and inline pictures remain.
 3. Side-by-side layout comparison with Outlook Classic and the interaction parity doc.
@@ -88,8 +88,8 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   headless screenshots, the desktop app, and `cargo xtask ci`.
 - **2026-10-11** — M1.3: `.ost` files are accepted (client magic "SO"); 4K-page reading confirmed
   against real offline stores, locally.
-- **2026-10-11** — M1.4: Outlook Classic opens MailCraft-written `.msg` and `.oft` files and reads the
-  same properties back; a file Outlook wrote survives a trip through MailCraft. Fixed the named-property
+- **2026-10-11** — M1.4: Outlook Classic opens OpenMailClient-written `.msg` and `.oft` files and reads the
+  same properties back; a file Outlook wrote survives a trip through OpenMailClient. Fixed the named-property
   lookup checksum, which had made Outlook drop categories. Added the `msg_dump` structure tool.
 - **2026-10-11** - M1.5/M1.6: first side-by-side with Outlook Classic ([docs/ui-parity.md](docs/ui-parity.md)).
   Added the simplified single-line ribbon with the full-height module strip, and a dark colour set;
@@ -199,7 +199,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   every feature, those already built too, be made better than the one it follows where it can be;
   the pass goes on with links, saving attachments and print.
 - **2026-10-11** - M2.14: links that are not what they say, the second of the pass. Outlook shows
-  a link's address when the pointer rests on it and leaves the comparing to the reader. MailCraft
+  a link's address when the pointer rests on it and leaves the comparing to the reader. OpenMailClient
   compares: a link whose text names one place and goes to another, one with a name before an `@`
   in its address, one that goes to a number, one written in letters that can pass for others, and
   one that is no web address at all (`javascript:`, `file:`) is underlined in the warning colour
@@ -208,7 +208,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   Nothing is opened, fetched or resolved to tell. The sample's Junk Email folder has a message
   with each kind.
 - **2026-10-11** - M2.15: saving attachments, the third of the pass. Outlook saves an attachment
-  under the name the message gave it and asks before replacing a file. MailCraft has Save All
+  under the name the message gave it and asks before replacing a file. OpenMailClient has Save All
   Attachments (`file.saveAllAttachments`, a folder; from the File menu and beside the
   attachments) and goes further: every name is made safe first (one name and never a path, no
   device names, no hidden or direction-reversing characters, runs of spaces closed up, a length
@@ -220,7 +220,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   a program under another name. A long name is cut in its middle, so its ending always shows.
   Nothing is opened or run to tell.
 - **2026-10-11** - M2.16: print, the fourth of the pass. On paper no pointer can rest on a link,
-  so a printed message from Outlook does not say where its links go. MailCraft's does: a link
+  so a printed message from Outlook does not say where its links go. OpenMailClient's does: a link
   that is not what its text says gets a number where it stands and a line after the body with
   where it goes and what is wrong with it; `"links": "all"` lists every link whose text is not
   its own address, and `"links": "none"` prints the body alone. Each page's foot says which page
@@ -237,7 +237,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   one). The groups are part of `session.inspect`.
 - **2026-10-11** - M2.18: answering and sending, the sixth of the pass. A message is looked
   over before it goes, where Outlook asks only about a missing subject and a forgotten
-  attachment, and only once Send is pressed: MailCraft says, while the message is still being
+  attachment, and only once Send is pressed: OpenMailClient says, while the message is still being
   written, that it has no subject, that its new text speaks of an attachment and none is
   attached (the quoted original is not read), that something in To, Cc or Bcc is not an address
   mail can be sent to, that an address is named more than once, and that a reply to all would
@@ -344,7 +344,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   words pass over them too. A picture with fewer bytes than it promised, with a byte split
   between hex digits and bytes, or with more than a body may keep, leaves its place and
   nothing is kept of it. Nothing here goes beyond Outlook: this is a case it reads and
-  MailCraft did not.
+  OpenMailClient did not.
 - **2026-10-12** - M2.27: an RTF body's tables may stand inside the cells of other tables
   (RTF 1.9.1, "Nested Tables": `\itapN`, `\nestcell`, and a row defined after its cells in
   `{\*\nesttableprops ... \nestrow}`), and cells merged across (`\clmgf`, `\clmrg`) are one
@@ -355,7 +355,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   cell holds its paragraphs and tables in the order they were written. Tables stand at most 8
   deep and a cell spans at most 64 columns; an inner table nothing closes ends with the cell
   it is in. The sample receipt has a row merged across and a table in a cell. Nothing here
-  goes beyond Outlook: these are cases it reads and MailCraft did not.
+  goes beyond Outlook: these are cases it reads and OpenMailClient did not.
 - **2026-10-12** - M2.28: a paragraph of an RTF body has its border (RTF 1.9.1, "Paragraph
   Borders": `\brdrt`, `\brdrr`, `\brdrb`, `\brdrl`, `\box`, with the line, width and colour
   words cells already had, and `\brsp` for the room inside) and the room it asks for above
@@ -491,3 +491,6 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   Not yet: the setup kept between runs, a zoom, several pages side by side. Outlook's
   print pane was not observed, so nothing is compared with it and nothing here is claimed
   to go beyond it; for agents, a page as a picture from the command line is our own.
+- **2026-10-12** - The project is renamed from MailCraft to OpenMailClient: crates, binaries
+  (`openmailclient`, `openmailclient-cli`), the settings folder and the documents. The repository
+  is public. Nothing else changes.

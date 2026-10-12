@@ -9,7 +9,7 @@ mod write;
 
 use base64::Engine as _;
 use header::{Headers, decode_charset, parse_params};
-use mailcraft_model::{Attachment, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, pid};
+use openmailclient_model::{Attachment, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, pid};
 
 pub use header::{parse_addresses, parse_date};
 pub use write::write;

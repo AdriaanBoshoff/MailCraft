@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use mailcraft_formats::rich::{Block, Doc, Filed, Picture};
-use mailcraft_model::{Attachment, Item, pid};
+use openmailclient_formats::rich::{Block, Doc, Filed, Picture};
+use openmailclient_model::{Attachment, Item, pid};
 
 /// Largest picture file that is decoded.
 const MAX_FILE: usize = 16 << 20;
@@ -133,17 +133,17 @@ pub fn settle(doc: &mut Doc, item: &Item) {
 /// The fonts installed on this machine, and the shapes of text in them for pictures that are
 /// kept as drawings. One for the whole program: the fonts are listed when first asked for,
 /// which takes a moment, and a face that was read is remembered.
-pub fn lettering() -> &'static mailcraft_fonts::Scribe {
-    static SCRIBE: mailcraft_fonts::Scribe = mailcraft_fonts::Scribe::system();
+pub fn lettering() -> &'static openmailclient_fonts::Scribe {
+    static SCRIBE: openmailclient_fonts::Scribe = openmailclient_fonts::Scribe::system();
     &SCRIBE
 }
 
 /// A picture file for an attached object, from the best source that can be read: the object's
 /// own data when that is a picture, the pictures it keeps of itself ([MS-OLEDS] 2.3.4), and last
 /// the small picture the message keeps of it ([MS-OXCMSG] 2.2.2.17).
-fn object_picture(attachment: &Attachment, object: Option<&mailcraft_msg::ole::Object>) -> Option<Vec<u8>> {
-    use mailcraft_formats::metafile;
-    use mailcraft_msg::ole::Shape;
+fn object_picture(attachment: &Attachment, object: Option<&openmailclient_msg::ole::Object>) -> Option<Vec<u8>> {
+    use openmailclient_formats::metafile;
+    use openmailclient_msg::ole::Shape;
     let own = object.into_iter().flat_map(|o| &o.pictures).find_map(|p| match p.shape {
         Shape::File => decode(&p.data).map(|_| p.data.clone()),
         Shape::Bitmap => metafile::dib_file(&p.data),
@@ -165,7 +165,7 @@ fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[(us
                     let Some(&(number, attachment)) = list.get(place) else { continue };
                     // Attach method 6: an object of another program, with its own picture.
                     let object =
-                        (attachment.props.i32(pid::ATTACH_METHOD) == Some(6)).then(|| mailcraft_msg::ole::object(&attachment.data)).flatten();
+                        (attachment.props.i32(pid::ATTACH_METHOD) == Some(6)).then(|| openmailclient_msg::ole::object(&attachment.data)).flatten();
                     let rendering = (attachment.props.i32(pid::ATTACH_METHOD) == Some(6) && written.len() < MAX_RENDERINGS)
                         .then(|| object_picture(attachment, object.as_ref()))
                         .flatten();

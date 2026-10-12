@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use mailcraft_model::{Flag, Summary, strip_reply_prefix, time};
+use openmailclient_model::{Flag, Summary, strip_reply_prefix, time};
 
 use crate::SortKey;
 use crate::search::fold;

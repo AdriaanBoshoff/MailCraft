@@ -3,7 +3,7 @@
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_str, p_u64};
 use crate::io::{self, Opened};
 use crate::{CmdResult, EngineError, Session, attachments};
-use mailcraft_model::{FolderId, MemStore, StoreError};
+use openmailclient_model::{FolderId, MemStore, StoreError};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::Path;
@@ -202,7 +202,7 @@ fn full(folder: &Path) -> EngineError {
     EngineError::BadParams(format!("{} has too many files of that name", folder.display()))
 }
 
-fn save_one(att: &mailcraft_model::Attachment, path: &Path) -> Result<(), EngineError> {
+fn save_one(att: &openmailclient_model::Attachment, path: &Path) -> Result<(), EngineError> {
     match &att.embedded {
         Some(inner) => io::save_item(inner, path),
         None => io::write_atomic(path, &att.data),
@@ -304,7 +304,7 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Change how pages are set up for printing, and say how they are.
 fn page_setup(s: &mut Session, p: &Value) -> CmdResult {
-    let from = if p_bool(p, "reset") == Some(true) { mailcraft_layout::Setup::default() } else { s.page_setup.clone() };
+    let from = if p_bool(p, "reset") == Some(true) { openmailclient_layout::Setup::default() } else { s.page_setup.clone() };
     let setup = crate::print::setup_with(&from, p)?;
     if setup != s.page_setup {
         s.page_setup = setup;

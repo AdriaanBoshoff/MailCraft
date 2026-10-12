@@ -7,7 +7,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use mailcraft_fonts::Lettering;
+use openmailclient_fonts::Lettering;
 
 use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
 use crate::metafile::{Drawn, size_at, u16_at, u32_at};
@@ -291,7 +291,7 @@ impl Page<'_> {
                     underline: byte(17)? != 0,
                     strike: byte(18)? != 0,
                     charset: byte(19)?,
-                    family: mailcraft_model::codepage::decode(1252, name),
+                    family: openmailclient_model::codepage::decode(1252, name),
                 };
                 self.make(Object::Font(Arc::new(font)))?;
             }

@@ -15,7 +15,7 @@ use crate::rich::{
     Align, Block, Cell, Doc, Edge, Edges, Float, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style,
     Table, TableWidth, VAlign, any_edge,
 };
-use mailcraft_model::html::entity;
+use openmailclient_model::html::entity;
 use std::collections::HashMap;
 use std::sync::Arc;
 

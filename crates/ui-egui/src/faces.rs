@@ -1,7 +1,7 @@
 //! Fonts a message asks for by name, drawn with the fonts installed on this machine.
 //!
 //! Nothing is bundled and nothing is fetched: a name is looked up among the installed fonts
-//! (`mailcraft-fonts`), with open fonts of the same measures standing in for proprietary ones
+//! (`openmailclient-fonts`), with open fonts of the same measures standing in for proprietary ones
 //! that are not installed. A name the message gives is hostile input and is only ever compared
 //! with installed names. Only the faces a message uses are loaded (bold and italic text have
 //! faces of their own), and how many fonts and how many bytes of them are loaded is capped; past
@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use egui::{Context, FontData, FontDefinitions, FontFamily};
-use mailcraft_fonts::Library;
-use mailcraft_formats::rich::{Block, Doc};
+use openmailclient_fonts::Library;
+use openmailclient_formats::rich::{Block, Doc};
 
 /// Font files and bytes of them loaded while the window is open.
 const MAX_FACES: usize = 32;
@@ -57,7 +57,7 @@ impl Faces {
         // The installed fonts are listed off the interface thread, once for the whole program;
         // where no thread can be had they are listed when first asked for.
         let _ = std::thread::Builder::new().name("fonts".to_string()).spawn(|| {
-            mailcraft_engine::pictures::lettering().library();
+            openmailclient_engine::pictures::lettering().library();
         });
         Self { defs, ..Self::default() }
     }
@@ -104,7 +104,7 @@ impl Faces {
 
     /// The installed fonts, listed by now or listed here.
     fn library(&self) -> &'static Library {
-        mailcraft_engine::pictures::lettering().library()
+        openmailclient_engine::pictures::lettering().library()
     }
 
     /// The installed family a list of names comes to.
@@ -116,7 +116,7 @@ impl Faces {
             return None;
         }
         let library = self.library();
-        let found = mailcraft_fonts::wanted(list).into_iter().find(|name| library.has(name)).map(|name| name.to_lowercase());
+        let found = openmailclient_fonts::wanted(list).into_iter().find(|name| library.has(name)).map(|name| name.to_lowercase());
         self.by_list.insert(list.clone(), found.clone());
         found
     }

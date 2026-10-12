@@ -1,4 +1,4 @@
-//! MailCraft's egui front end: an Outlook-Classic-style window (title bar with search, ribbon,
+//! OpenMailClient's egui front end: an Outlook-Classic-style window (title bar with search, ribbon,
 //! navigation strip, folder pane, message list, reading pane, status bar).
 //!
 //! The UI is thin. It reads [`Session`] state and changes it only by running commands, the same
@@ -18,9 +18,9 @@ pub mod theme;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
 use icons::Icon;
-use mailcraft_engine::{Module, Session};
-use mailcraft_formats::rich::Doc;
-use mailcraft_model::{PropValue, pid};
+use openmailclient_engine::{Module, Session};
+use openmailclient_formats::rich::Doc;
+use openmailclient_model::{PropValue, pid};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -109,7 +109,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.ribbonMode", label: "Simplified Ribbon", params: r#"{"mode": "classic" | "simplified"}; none switches"# },
     UiCommand { id: "ui.theme", label: "Dark Mode", params: r#"{"theme": "light" | "dark"}; none switches"# },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
-    UiCommand { id: "ui.about", label: "About MailCraft", params: "" },
+    UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
 
@@ -344,21 +344,21 @@ impl MailUi {
             "ui.attachDialog" => self.requests.push(UiRequest::Attach),
             "ui.linkDialog" => {
                 let item = self.session.open.as_ref().ok_or("No message is open")?;
-                let found = mailcraft_engine::links::of(item);
+                let found = openmailclient_engine::links::of(item);
                 let link = match (number("index"), text("address")) {
                     (Some(index), _) => usize::try_from(index).ok().and_then(|index| found.get(index)),
                     (None, Some(address)) => found.iter().find(|link| link.address == address),
                     (None, None) => return Err("\"index\" or \"address\" is missing".to_string()),
                 }
                 .ok_or("The message has no such link")?;
-                let target = mailcraft_formats::links::target(&link.address);
+                let target = openmailclient_formats::links::target(&link.address);
                 self.menu = None;
                 self.link_ask = Some(LinkAsk {
                     address: link.address.clone(),
                     text: link.text.clone(),
                     goes: link.goes.clone(),
                     concern: link.concern.as_ref().map(|c| c.words()),
-                    mailbox: matches!(target, Ok(mailcraft_formats::links::Target::Mailbox(_))),
+                    mailbox: matches!(target, Ok(openmailclient_formats::links::Target::Mailbox(_))),
                     refused: target.err().map(str::to_string),
                 });
             }
@@ -426,7 +426,7 @@ impl MailUi {
             }
             "ui.about" => {
                 self.session.status =
-                    format!("MailCraft {}: an independent open-source mail client. Not affiliated with Microsoft.", env!("CARGO_PKG_VERSION"));
+                    format!("OpenMailClient {}: an independent open-source mail client. Not affiliated with Microsoft.", env!("CARGO_PKG_VERSION"));
             }
             "ui.quit" => self.requests.push(UiRequest::Quit),
             _ => return Err(format!("unknown command {}", one_line(id))),
@@ -455,10 +455,10 @@ impl MailUi {
             Some((k, doc)) if *k == key => doc.clone(),
             _ => {
                 let doc = if html {
-                    mailcraft_formats::html::parse(&item.body_html()?)
+                    openmailclient_formats::html::parse(&item.body_html()?)
                 } else {
-                    let mut doc = mailcraft_formats::rtf::parse_with(&item.body_rtf()?, Some(mailcraft_engine::pictures::lettering()));
-                    mailcraft_engine::pictures::settle(&mut doc, item);
+                    let mut doc = openmailclient_formats::rtf::parse_with(&item.body_rtf()?, Some(openmailclient_engine::pictures::lettering()));
+                    openmailclient_engine::pictures::settle(&mut doc, item);
                     doc
                 };
                 let doc = Arc::new(doc);
@@ -619,7 +619,7 @@ impl MailUi {
         icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(16.0, 16.0)), Icon::Mail, t.title_text);
         let place = self.session.current_folder().map(|f| f.name.clone()).unwrap_or_else(|| "No data file".to_string());
         let store = self.session.current.and_then(|(s, _)| self.session.stores.get(s)).map(|s| s.display_name()).unwrap_or_default();
-        let caption = if store.is_empty() { format!("{place} - MailCraft") } else { format!("{place} - {store} - MailCraft") };
+        let caption = if store.is_empty() { format!("{place} - OpenMailClient") } else { format!("{place} - {store} - OpenMailClient") };
 
         // Lined up with the message list's left edge.
         let left = rect.left() + t.nav_w + if self.session.folder_pane { t.folder_w } else { 0.0 };
@@ -632,7 +632,7 @@ impl MailUi {
             Rect::from_min_max(pos2(search.left() + 26.0, search.center().y - 10.0), pos2(search.right() - 6.0, search.center().y + 10.0));
         let before = self.search.clone();
         let edit = egui::TextEdit::singleline(&mut self.search)
-            .id(egui::Id::new("mailcraft-search"))
+            .id(egui::Id::new("openmailclient-search"))
             .frame(egui::Frame::NONE)
             .hint_text(egui::RichText::new("Search").color(t.title_text.gamma_multiply(0.75)))
             .text_color(t.title_text)

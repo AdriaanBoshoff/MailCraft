@@ -6,4 +6,4 @@ no row. No asset is copied, traced or recreated from any Microsoft product.
 
 | File | Author | Source | Licence |
 |---|---|---|---|
-| `docs/images/mailcraft-reading-pane.png` | MailCraft contributors | Screenshot of MailCraft showing its own sample mailbox (`crates/engine/src/sample.rs`), made with `cargo run -p mailcraft-ui-egui --example ui_shot`; text is drawn in fonts installed on the machine, none are bundled | MIT OR Apache-2.0 |
+| `docs/images/openmailclient-reading-pane.png` | OpenMailClient contributors | Screenshot of OpenMailClient showing its own sample mailbox (`crates/engine/src/sample.rs`), made with `cargo run -p openmailclient-ui-egui --example ui_shot`; text is drawn in fonts installed on the machine, none are bundled | MIT OR Apache-2.0 |

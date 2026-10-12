@@ -14,38 +14,38 @@ use std::process::{Command, ExitCode};
 
 /// Crate directory → layer. A crate may only depend on crates in a lower layer.
 const LAYERS: &[(&str, &str, u8)] = &[
-    ("mailcraft-model", "crates/model", 1),
-    ("mailcraft-fonts", "crates/fonts", 1),
-    ("mailcraft-mime", "crates/mime", 2),
-    ("mailcraft-msg", "crates/msg", 2),
-    ("mailcraft-pst", "crates/pst", 2),
-    ("mailcraft-formats", "crates/formats", 2),
-    ("mailcraft-pdf", "crates/pdf", 2),
-    ("mailcraft-layout", "crates/layout", 3),
-    ("mailcraft-render", "crates/render", 3),
-    ("mailcraft-engine", "crates/engine", 4),
-    ("mailcraft-ui-egui", "crates/ui-egui", 6),
-    ("mailcraft", "apps/mailcraft", 7),
-    ("mailcraft-cli", "apps/mailcraft-cli", 7),
+    ("openmailclient-model", "crates/model", 1),
+    ("openmailclient-fonts", "crates/fonts", 1),
+    ("openmailclient-mime", "crates/mime", 2),
+    ("openmailclient-msg", "crates/msg", 2),
+    ("openmailclient-pst", "crates/pst", 2),
+    ("openmailclient-formats", "crates/formats", 2),
+    ("openmailclient-pdf", "crates/pdf", 2),
+    ("openmailclient-layout", "crates/layout", 3),
+    ("openmailclient-render", "crates/render", 3),
+    ("openmailclient-engine", "crates/engine", 4),
+    ("openmailclient-ui-egui", "crates/ui-egui", 6),
+    ("openmailclient", "apps/openmailclient", 7),
+    ("openmailclient-cli", "apps/openmailclient-cli", 7),
 ];
 
 /// The only dependencies allowed inside one layer, each named: the rasteriser draws the pages
 /// the layout made, and both are L3 in the architecture.
-const WITHIN_LAYER: &[(&str, &str)] = &[("mailcraft-render", "mailcraft-layout")];
+const WITHIN_LAYER: &[(&str, &str)] = &[("openmailclient-render", "openmailclient-layout")];
 /// Crates that must never appear below the UI layer.
 const GUI_CRATES: &[&str] = &["egui", "eframe", "winit", "rfd", "egui_kittest", "wgpu"];
 /// Everything the web build needs must compile for wasm32.
 const WASM_CRATES: &[&str] = &[
-    "mailcraft-model",
-    "mailcraft-fonts",
-    "mailcraft-mime",
-    "mailcraft-msg",
-    "mailcraft-pst",
-    "mailcraft-formats",
-    "mailcraft-pdf",
-    "mailcraft-layout",
-    "mailcraft-render",
-    "mailcraft-engine",
+    "openmailclient-model",
+    "openmailclient-fonts",
+    "openmailclient-mime",
+    "openmailclient-msg",
+    "openmailclient-pst",
+    "openmailclient-formats",
+    "openmailclient-pdf",
+    "openmailclient-layout",
+    "openmailclient-render",
+    "openmailclient-engine",
 ];
 const ASSET_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "icns", "svg", "ttf", "otf", "woff", "woff2", "wav", "mp3", "ogg", "flac", "cur", "ani",
@@ -179,8 +179,8 @@ fn parity() -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, mailcraft_engine::catalog::checklist()).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (done, total) = mailcraft_engine::catalog::summary();
+    std::fs::write(&path, openmailclient_engine::catalog::checklist()).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (done, total) = openmailclient_engine::catalog::summary();
     println!("parity: {done} of {total} catalogued features have a command; wrote docs/parity-checklist.md");
     Ok(())
 }

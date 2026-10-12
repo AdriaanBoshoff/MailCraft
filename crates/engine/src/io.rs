@@ -1,7 +1,7 @@
 //! File I/O dispatch: which reader or writer a path goes to.
 
 use crate::EngineError;
-use mailcraft_model::{Item, Store};
+use openmailclient_model::{Item, Store};
 use std::io::Read;
 use std::path::Path;
 
@@ -48,7 +48,7 @@ pub fn open_path(path: &Path) -> Result<Opened, EngineError> {
     });
     drop(file);
     if kind == Kind::Pst {
-        let store = mailcraft_pst::PstStore::open(path).map_err(|e| EngineError::Format(e.to_string()))?;
+        let store = openmailclient_pst::PstStore::open(path).map_err(|e| EngineError::Format(e.to_string()))?;
         return Ok(Opened::Store(Box::new(store)));
     }
     if std::fs::metadata(path)?.len() > MAX_ITEM_FILE {
@@ -56,8 +56,8 @@ pub fn open_path(path: &Path) -> Result<Opened, EngineError> {
     }
     let data = std::fs::read(path)?;
     let item = match kind {
-        Kind::Eml => mailcraft_mime::parse(&data).map_err(|e| EngineError::Format(e.to_string()))?,
-        _ => mailcraft_msg::read(&data).map_err(|e| EngineError::Format(e.to_string()))?,
+        Kind::Eml => openmailclient_mime::parse(&data).map_err(|e| EngineError::Format(e.to_string()))?,
+        _ => openmailclient_msg::read(&data).map_err(|e| EngineError::Format(e.to_string()))?,
     };
     Ok(Opened::Item(Box::new(item)))
 }
@@ -65,9 +65,11 @@ pub fn open_path(path: &Path) -> Result<Opened, EngineError> {
 /// The bytes of an item in the format the path's extension names.
 pub fn encode_item(item: &Item, path: &Path) -> Result<Vec<u8>, EngineError> {
     match kind_by_extension(path) {
-        Some(Kind::Msg) => mailcraft_msg::write(item).map_err(|e| EngineError::Format(e.to_string())),
-        Some(Kind::Template) => mailcraft_msg::write_as(item, mailcraft_msg::Kind::Template).map_err(|e| EngineError::Format(e.to_string())),
-        Some(Kind::Eml) => Ok(mailcraft_mime::write(item)),
+        Some(Kind::Msg) => openmailclient_msg::write(item).map_err(|e| EngineError::Format(e.to_string())),
+        Some(Kind::Template) => {
+            openmailclient_msg::write_as(item, openmailclient_msg::Kind::Template).map_err(|e| EngineError::Format(e.to_string()))
+        }
+        Some(Kind::Eml) => Ok(openmailclient_mime::write(item)),
         Some(Kind::Pst) => Err(EngineError::Format("writing .pst data files is not supported yet; save as .msg or .eml".into())),
         None => Err(EngineError::BadParams("the file name must end in .msg, .oft or .eml".into())),
     }

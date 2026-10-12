@@ -3,7 +3,7 @@
 use super::{CommandSpec, always, has_folder, has_selection, has_selection_writable, need_str, ok, p_str, p_u64};
 use crate::undo::Step;
 use crate::{CmdResult, EngineError, Session};
-use mailcraft_model::{Flag, FolderKind, StoreError};
+use openmailclient_model::{Flag, FolderKind, StoreError};
 use serde_json::{Value, json};
 
 pub(super) fn commands() -> Vec<CommandSpec> {
@@ -273,7 +273,7 @@ fn importance(s: &mut Session, p: &Value) -> CmdResult {
         "high" => 2,
         other => return Err(EngineError::BadParams(format!("\"{other}\" is not low, normal or high"))),
     };
-    s.edit_selected("Importance", |it| it.props.set(mailcraft_model::pid::IMPORTANCE, mailcraft_model::PropValue::Int32(level)))?;
+    s.edit_selected("Importance", |it| it.props.set(openmailclient_model::pid::IMPORTANCE, openmailclient_model::PropValue::Int32(level)))?;
     ok()
 }
 
@@ -294,7 +294,7 @@ fn delete(s: &mut Session, _: &Value) -> CmdResult {
         _ => {
             let id = s.selected.ok_or(StoreError::NoItem)?;
             let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
-            let item = Box::new(st.remove(folder, mailcraft_model::ItemId(id))?);
+            let item = Box::new(st.remove(folder, openmailclient_model::ItemId(id))?);
             // Gone from the data file, and kept by the session so that it can be taken back.
             s.did(Step::Removed { what: "Delete", store, folder, was: id, item });
             s.selected = None;
@@ -317,7 +317,7 @@ fn junk(s: &mut Session, _: &Value) -> CmdResult {
 fn move_to(s: &mut Session, p: &Value) -> CmdResult {
     let (store, _) = s.current.ok_or(StoreError::NoFolder)?;
     let target = match (p_u64(p, "folderId"), p_str(p, "folder")) {
-        (Some(id), _) => mailcraft_model::FolderId(id),
+        (Some(id), _) => openmailclient_model::FolderId(id),
         (None, Some(path)) => s.folder_by_path(store, path).ok_or_else(|| EngineError::BadParams(format!("there is no folder \"{path}\"")))?,
         _ => return Err(EngineError::BadParams("\"folder\" (path) or \"folderId\" is required".into())),
     };
@@ -346,8 +346,8 @@ fn properties(s: &mut Session, _: &Value) -> CmdResult {
         .iter()
         .map(|(id, v)| {
             let text: String = match v {
-                mailcraft_model::PropValue::String(t) => t.chars().take(120).collect(),
-                mailcraft_model::PropValue::Binary(b) => format!("{} bytes", b.len()),
+                openmailclient_model::PropValue::String(t) => t.chars().take(120).collect(),
+                openmailclient_model::PropValue::Binary(b) => format!("{} bytes", b.len()),
                 other => format!("{other:?}").chars().take(120).collect(),
             };
             json!({ "id": format!("0x{id:04X}"), "type": format!("0x{:04X}", v.ty()), "value": text })

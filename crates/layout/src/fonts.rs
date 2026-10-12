@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mailcraft_fonts::{Face, Library};
+use openmailclient_fonts::{Face, Library};
 use skrifa::raw::TableProvider;
 use skrifa::raw::tables::gpos::{PairPos, PositionSubtables};
 use skrifa::raw::tables::kern::SubtableKind;
@@ -200,7 +200,7 @@ fn pair(loaded: &Loaded, left: u16, right: u16) -> Option<i32> {
 }
 
 fn load(face: Face) -> Option<Loaded> {
-    mailcraft_fonts::embedding(&face.data, face.index)?;
+    openmailclient_fonts::embedding(&face.data, face.index)?;
     let font = FontRef::from_index(&face.data, face.index).ok()?;
     let table = |tag: &[u8; 4]| font.data_for_tag(Tag::new(tag)).map(|d| d.as_bytes());
     let (head, hhea, hmtx, maxp) = (table(b"head")?, table(b"hhea")?, table(b"hmtx")?, table(b"maxp")?);
@@ -303,7 +303,7 @@ impl<'a> Fonts<'a> {
     /// for none), fixed-width or not.
     pub(crate) fn chain(&self, list: &str, mono: bool, bold: bool, italic: bool) -> Chain {
         let mut names: Vec<String> = Vec::new();
-        let listed = if list.trim().is_empty() { Vec::new() } else { mailcraft_fonts::wanted(list) };
+        let listed = if list.trim().is_empty() { Vec::new() } else { openmailclient_fonts::wanted(list) };
         let own = listed.into_iter();
         let mono_names = MONO.iter().filter(|_| mono).map(|n| n.to_string());
         for name in own.chain(mono_names).chain(LAST.iter().map(|n| n.to_string())) {

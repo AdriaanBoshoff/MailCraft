@@ -1,5 +1,5 @@
 use super::*;
-use mailcraft_model::time;
+use openmailclient_model::time;
 
 const SIMPLE: &str = "From: \"Ana Costa\" <ana@example.org>\r\nTo: Bo Lind <bo@example.org>, cy@example.org\r\nCc: =?UTF-8?B?WsO2ZQ==?= <zoe@example.org>\r\nSubject: =?iso-8859-1?Q?Caf=E9?=\r\n =?iso-8859-1?Q?_menu?=\r\nDate: Mon, 5 Oct 2026 09:14:00 +0200\r\nMessage-ID: <1@example.org>\r\nImportance: high\r\n\r\nHello =\r\nthere\r\n";
 

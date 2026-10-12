@@ -1,13 +1,13 @@
 [package]
-name = "mailcraft-formats"
+name = "openmailclient-formats"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MailCraft body formats: HTML and RTF message bodies read into a formatted document"
+description = "OpenMailClient body formats: HTML and RTF message bodies read into a formatted document"
 
 [lints]
 workspace = true
 
 [dependencies]
-mailcraft-fonts = { workspace = true }
-mailcraft-model = { workspace = true }
+openmailclient-fonts = { workspace = true }
+openmailclient-model = { workspace = true }

@@ -3,7 +3,7 @@
 //! know about it before saving. Nothing here opens, runs or looks inside an attachment beyond
 //! its first bytes.
 
-use mailcraft_model::{Attachment, Item, pid};
+use openmailclient_model::{Attachment, Item, pid};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

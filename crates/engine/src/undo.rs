@@ -1,6 +1,6 @@
 //! Taking back what was done to a message: a change to it, a move, a deletion.
 
-use mailcraft_model::{FolderId, Item, ItemId, StoreError};
+use openmailclient_model::{FolderId, Item, ItemId, StoreError};
 
 use crate::{EngineError, Session};
 

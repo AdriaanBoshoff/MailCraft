@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use mailcraft_formats::rich::{
+use openmailclient_formats::rich::{
     Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign,
     tab_room, tab_stop,
 };

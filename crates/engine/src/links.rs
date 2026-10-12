@@ -1,9 +1,9 @@
 //! The links of a message, as a reader or an agent may ask for them: what each says, where it
 //! goes, and what is wrong with it. Nothing here follows a link.
 
-use mailcraft_formats::links::{self, Concern};
-use mailcraft_formats::rich::Block;
-use mailcraft_model::Item;
+use openmailclient_formats::links::{self, Concern};
+use openmailclient_formats::rich::Block;
+use openmailclient_model::Item;
 
 /// Links told of one message, and characters of a link's text and of its address.
 pub const MAX_LINKS: usize = 500;

@@ -13,12 +13,12 @@ mod ltp;
 mod ndb;
 
 use ltp::Raw;
-use mailcraft_model::props::parse_name_map;
-use mailcraft_model::{
+use ndb::{Ndb, Subnodes, u32_at};
+use openmailclient_model::props::parse_name_map;
+use openmailclient_model::{
     Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropBag, PropValue, Store, StoreError, Summary,
     clean_subject, pid, ptype,
 };
-use ndb::{Ndb, Subnodes, u32_at};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 

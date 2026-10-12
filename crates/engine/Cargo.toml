@@ -1,23 +1,23 @@
 [package]
-name = "mailcraft-engine"
+name = "openmailclient-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MailCraft engine: session, stores, command registry, Outlook feature catalog, sample mailbox"
+description = "OpenMailClient engine: session, stores, command registry, Outlook feature catalog, sample mailbox"
 
 [lints]
 workspace = true
 
 [dependencies]
-mailcraft-model = { workspace = true }
-mailcraft-mime = { workspace = true }
-mailcraft-msg = { workspace = true }
-mailcraft-pst = { workspace = true }
-mailcraft-formats = { workspace = true }
-mailcraft-fonts = { workspace = true }
-mailcraft-layout = { workspace = true }
-mailcraft-render = { workspace = true }
-mailcraft-pdf = { workspace = true }
+openmailclient-model = { workspace = true }
+openmailclient-mime = { workspace = true }
+openmailclient-msg = { workspace = true }
+openmailclient-pst = { workspace = true }
+openmailclient-formats = { workspace = true }
+openmailclient-fonts = { workspace = true }
+openmailclient-layout = { workspace = true }
+openmailclient-render = { workspace = true }
+openmailclient-pdf = { workspace = true }
 # Decodes the pictures a message body shows.
 image = { workspace = true, features = ["jpeg", "gif", "bmp"] }
 thiserror = { workspace = true }

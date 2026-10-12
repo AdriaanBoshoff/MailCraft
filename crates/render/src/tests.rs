@@ -1,6 +1,6 @@
-use mailcraft_fonts::{Face, Library, boxes};
-use mailcraft_formats::rich::{Block, Doc, Para, Run};
-use mailcraft_layout::{Fill, Fonts, Memo, Paper, Placed, Rule, memo};
+use openmailclient_fonts::{Face, Library, boxes};
+use openmailclient_formats::rich::{Block, Doc, Para, Run};
+use openmailclient_layout::{Fill, Fonts, Memo, Paper, Placed, Rule, memo};
 
 use super::*;
 

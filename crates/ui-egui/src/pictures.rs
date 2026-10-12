@@ -4,14 +4,14 @@
 //! Only what the body refers to is decoded, only as pictures, and only in this process:
 //! nothing is fetched, written to disk or handed to another program. A picture is hostile input
 //! like the rest of the message, so its file size, its dimensions and the memory it may take are
-//! capped before anything is decoded (`mailcraft_engine::pictures`); one that cannot be read
+//! capped before anything is decoded (`openmailclient_engine::pictures`); one that cannot be read
 //! stays a labelled placeholder.
 
 use std::collections::HashMap;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions, Vec2, vec2};
-use mailcraft_formats::rich::{Block, Doc, Picture};
-use mailcraft_model::Item;
+use openmailclient_formats::rich::{Block, Doc, Picture};
+use openmailclient_model::Item;
 
 /// Pictures and decoded bytes kept for one message.
 const MAX_PICTURES: usize = 64;
@@ -55,7 +55,7 @@ impl Pictures {
             if self.by_id.len() >= MAX_PICTURES || self.by_id.contains_key(id) {
                 continue;
             }
-            let attachment = mailcraft_engine::pictures::attached(item, id);
+            let attachment = openmailclient_engine::pictures::attached(item, id);
             let image = attachment.filter(|_| self.kept_bytes < MAX_KEPT_BYTES).and_then(|a| decode(&a.data));
             let shown = image.map(|(image, size)| {
                 self.kept_bytes = self.kept_bytes.saturating_add(image.pixels.len().saturating_mul(4));
@@ -95,7 +95,7 @@ fn content_ids<'a>(blocks: &'a [Block], out: &mut Vec<&'a str>, depth: usize) {
 /// A picture file → pixels and its size as written. `None` for anything that is not a picture
 /// this build reads (PNG, JPEG, GIF, BMP), is over the limits, or is damaged.
 pub(crate) fn decode(data: &[u8]) -> Option<(ColorImage, Vec2)> {
-    let pixels = mailcraft_engine::pictures::decode(data)?;
+    let pixels = openmailclient_engine::pictures::decode(data)?;
     let kept = [usize::try_from(pixels.width).ok()?, usize::try_from(pixels.height).ok()?];
     let size = vec2(f32::from(pixels.natural.0), f32::from(pixels.natural.1));
     Some((ColorImage::from_rgba_unmultiplied(kept, &pixels.rgba), size))

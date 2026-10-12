@@ -1437,8 +1437,8 @@ fn rtf_shows_an_enhanced_metafile_that_is_a_drawing() {
 
 /// A font of boxes, which stands for whatever font a drawing names: every letter is a box
 /// from 0.05 to 0.45 of the em across and 0.7 of it high, half an em from the next.
-fn boxes(chars: &str) -> mailcraft_fonts::Face {
-    mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font(chars), index: 0 }
+fn boxes(chars: &str) -> openmailclient_fonts::Face {
+    openmailclient_fonts::Face { data: openmailclient_fonts::boxes::font(chars), index: 0 }
 }
 
 const BLUE: [u8; 3] = [0, 0, 255];
@@ -1726,7 +1726,7 @@ fn hostile_text_in_drawings_never_panics() {
     assert!(drawn.words.chars().count() <= 2000 && drawn.words.starts_with("AB AB AB"));
     // A font that is not one, and one cut short, give no letters.
     for bad in [&b"not a font"[..], &face.data[..face.data.len() / 2], &[]] {
-        let broken = mailcraft_fonts::Face { data: bad.to_vec(), index: 0 };
+        let broken = openmailclient_fonts::Face { data: bad.to_vec(), index: 0 };
         let mut records = lettered(wmf_font(-20, 0, [0; 4]));
         records.push(ext_text((10, 40), b"AB", 0, &[]));
         assert_eq!(wmf_drawn(&wmf(&records), Some((24, 24)), Some(&broken)), None);
@@ -1797,7 +1797,7 @@ fn rtf_pictures_written_as_bytes_are_kept() {
     assert_eq!(doc.text(), "a b");
     assert!(doc.written.is_empty());
     // The same goes for the readers that only want the words.
-    assert_eq!(mailcraft_model::rtf::to_text(&rtf), "a b");
+    assert_eq!(openmailclient_model::rtf::to_text(&rtf), "a b");
 
     // A bitmap written as bytes becomes a picture file like one written as hex digits.
     let dib = small_dib();
@@ -2046,7 +2046,7 @@ fn rtf_list_paragraphs_have_their_numbers_and_bullets() {
     assert!(p[2].runs.last().is_some_and(|r| r.style.bold));
     assert_eq!(doc.text(), "before\n1. first\n2. second bold\n\u{2022} round\n\u{25e6} hollow\niv) old\n3. \u{a0}\nafter");
     // A reader that only wants the words still has the numbers the writer left.
-    assert!(mailcraft_model::rtf::to_text(b"{\\rtf1{\\listtext 1.\\tab}first\\par}").starts_with("1.\tfirst"));
+    assert!(openmailclient_model::rtf::to_text(b"{\\rtf1{\\listtext 1.\\tab}first\\par}").starts_with("1.\tfirst"));
 
     // Hostile: a number without end, markers inside markers, one never closed, one in a cell.
     let mut body = String::from("{\\rtf1{\\listtext ");

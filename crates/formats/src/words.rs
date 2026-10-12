@@ -2,7 +2,7 @@
 //! font the drawing names ([MS-WMF] 2.2.1.2, Font; [MS-EMF] 2.2.13, LogFont). The shapes come
 //! from whoever knows the installed fonts ([`Lettering`]); a line they cannot give is not drawn.
 
-use mailcraft_fonts::Lettering;
+use openmailclient_fonts::Lettering;
 
 use crate::canvas::{Canvas, MAX_SIDE, Point, Rgb};
 
@@ -65,7 +65,7 @@ impl Font {
             238 => 1250,
             _ => return None,
         };
-        Some(mailcraft_model::codepage::decode(page, bytes)).filter(|text| !text.contains('\u{FFFD}'))
+        Some(openmailclient_model::codepage::decode(page, bytes)).filter(|text| !text.contains('\u{FFFD}'))
     }
 }
 

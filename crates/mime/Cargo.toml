@@ -1,5 +1,5 @@
 [package]
-name = "mailcraft-mime"
+name = "openmailclient-mime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ description = "RFC 5322 / MIME (.eml) reader and writer"
 workspace = true
 
 [dependencies]
-mailcraft-model = { workspace = true }
+openmailclient-model = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 encoding_rs = { workspace = true }

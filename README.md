@@ -1,4 +1,4 @@
-# MailCraft
+# OpenMailClient
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M1%20%2B%20M2%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
@@ -11,10 +11,10 @@ A clean-room, open-source mail client written in Rust, aiming at parity with Mic
 (the Win32 desktop Outlook): the same layout and behaviour, files that go both ways, and every feature
 reachable as a command from the UI, a CLI and (later) an MCP server.
 
-MailCraft is an independent concept project. It is not affiliated with Microsoft. It follows the
+OpenMailClient is an independent concept project. It is not affiliated with Microsoft. It follows the
 conventions of [`storytold/wordcraft`](https://github.com/storytold/wordcraft).
 
-![The MailCraft window with the sample mailbox: folder pane, message list, and an RTF receipt with tables, a bordered note, an attachment card and a picture in the reading pane](docs/images/mailcraft-reading-pane.png)
+![The OpenMailClient window with the sample mailbox: folder pane, message list, and an RTF receipt with tables, a bordered note, an attachment card and a picture in the reading pane](docs/images/openmailclient-reading-pane.png)
 
 *The sample mailbox (invented content), drawn by `ui_shot`. The receipt is stored only as RTF.*
 
@@ -85,27 +85,27 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 ## Run it
 
 ```bash
-cargo run --release -p mailcraft -- --sample
+cargo run --release -p openmailclient -- --sample
 ```
 
 ```bash
-cargo run --release -p mailcraft -- path/to/archive.pst
+cargo run --release -p openmailclient -- path/to/archive.pst
 ```
 
 Without a window:
 
 ```bash
-cargo run --release -p mailcraft-cli -- inspect path/to/archive.pst --check
+cargo run --release -p openmailclient-cli -- inspect path/to/archive.pst --check
 ```
 
 ```bash
-cargo run --release -p mailcraft-cli -- convert message.msg message.eml
+cargo run --release -p openmailclient-cli -- convert message.msg message.eml
 ```
 
 A screenshot of the real UI without opening a window:
 
 ```bash
-cargo run --release -p mailcraft-ui-egui --example ui_shot
+cargo run --release -p openmailclient-ui-egui --example ui_shot
 ```
 
 ## Safety rules the code follows

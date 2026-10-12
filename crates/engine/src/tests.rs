@@ -1,5 +1,5 @@
 use crate::{Draft, EngineError, Session, catalog, registry};
-use mailcraft_model::{FolderId, FolderKind, RECIP_CC, RECIP_TO, time};
+use openmailclient_model::{FolderId, FolderKind, RECIP_CC, RECIP_TO, time};
 use serde_json::{Value, json};
 
 /// 2026-10-07 14:30 UTC, a Wednesday.
@@ -163,7 +163,7 @@ fn flags_categories_and_moves() {
     run(&mut s, "mail.flag", Value::Null);
     run(&mut s, "mail.categorize", json!({"category": "Green category"}));
     let row = &s.rows[1];
-    assert_eq!((row.flag, row.categories.as_slice()), (mailcraft_model::Flag::Flagged, ["Green category".to_string()].as_slice()));
+    assert_eq!((row.flag, row.categories.as_slice()), (openmailclient_model::Flag::Flagged, ["Green category".to_string()].as_slice()));
     run(&mut s, "mail.categorize", json!({"category": "green CATEGORY"}));
     assert!(s.rows[1].categories.is_empty(), "choosing a category again removes it");
     run(&mut s, "mail.move", json!({"folder": "Inbox/Projects"}));
@@ -319,7 +319,7 @@ fn what_was_done_to_a_message_can_be_taken_back() {
     assert!(!s.is_enabled("edit.undo"));
     let state = |s: &Session| {
         let it = s.open.as_ref().unwrap();
-        (it.subject(), it.is_read(), it.flag(), it.categories.clone(), it.props.i32(mailcraft_model::pid::IMPORTANCE))
+        (it.subject(), it.is_read(), it.flag(), it.categories.clone(), it.props.i32(openmailclient_model::pid::IMPORTANCE))
     };
     run(&mut s, "mail.select", json!({"index": 1}));
     let (id, before) = (s.selected.unwrap(), state(&s));
@@ -410,36 +410,41 @@ fn what_was_done_to_a_message_can_be_taken_back() {
 
 /// The sample mailbox, in which nothing can be put into one folder.
 struct Refusing {
-    inner: mailcraft_model::MemStore,
+    inner: openmailclient_model::MemStore,
     full: Option<FolderId>,
 }
 
-impl mailcraft_model::Store for Refusing {
+impl openmailclient_model::Store for Refusing {
     fn display_name(&self) -> String {
         self.inner.display_name()
     }
     fn writable(&self) -> bool {
         true
     }
-    fn folders(&mut self) -> Result<Vec<mailcraft_model::FolderInfo>, mailcraft_model::StoreError> {
+    fn folders(&mut self) -> Result<Vec<openmailclient_model::FolderInfo>, openmailclient_model::StoreError> {
         self.inner.folders()
     }
-    fn list(&mut self, folder: FolderId) -> Result<Vec<mailcraft_model::Summary>, mailcraft_model::StoreError> {
+    fn list(&mut self, folder: FolderId) -> Result<Vec<openmailclient_model::Summary>, openmailclient_model::StoreError> {
         self.inner.list(folder)
     }
-    fn load(&mut self, folder: FolderId, id: mailcraft_model::ItemId) -> Result<mailcraft_model::Item, mailcraft_model::StoreError> {
+    fn load(&mut self, folder: FolderId, id: openmailclient_model::ItemId) -> Result<openmailclient_model::Item, openmailclient_model::StoreError> {
         self.inner.load(folder, id)
     }
-    fn update(&mut self, folder: FolderId, id: mailcraft_model::ItemId, item: mailcraft_model::Item) -> Result<(), mailcraft_model::StoreError> {
+    fn update(
+        &mut self,
+        folder: FolderId,
+        id: openmailclient_model::ItemId,
+        item: openmailclient_model::Item,
+    ) -> Result<(), openmailclient_model::StoreError> {
         self.inner.update(folder, id, item)
     }
-    fn add(&mut self, folder: FolderId, item: mailcraft_model::Item) -> Result<mailcraft_model::ItemId, mailcraft_model::StoreError> {
+    fn add(&mut self, folder: FolderId, item: openmailclient_model::Item) -> Result<openmailclient_model::ItemId, openmailclient_model::StoreError> {
         if Some(folder) == self.full {
-            return Err(mailcraft_model::StoreError::Format("the folder is full".into()));
+            return Err(openmailclient_model::StoreError::Format("the folder is full".into()));
         }
         self.inner.add(folder, item)
     }
-    fn remove(&mut self, folder: FolderId, id: mailcraft_model::ItemId) -> Result<mailcraft_model::Item, mailcraft_model::StoreError> {
+    fn remove(&mut self, folder: FolderId, id: openmailclient_model::ItemId) -> Result<openmailclient_model::Item, openmailclient_model::StoreError> {
         self.inner.remove(folder, id)
     }
 }
@@ -474,7 +479,7 @@ fn a_message_that_cannot_be_put_where_it_is_going_stays_where_it_was() {
 #[test]
 fn what_is_being_written_is_not_lost_and_files_are_not_replaced() {
     use crate::outgoing::{Caution, HEAVY, cautions};
-    use mailcraft_model::Attachment;
+    use openmailclient_model::Attachment;
     let mut s = session();
     assert!(!s.is_enabled("compose.restore"));
 
@@ -512,7 +517,7 @@ fn what_is_being_written_is_not_lost_and_files_are_not_replaced() {
     assert_eq!(s.compose.as_ref().unwrap().subject, "Note 29");
 
     // Attaching: not a folder, not the same file twice, and it says what the message now carries.
-    let dir = std::env::temp_dir().join(format!("mailcraft-m221-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openmailclient-m221-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("rota.txt"), b"Monday: June").unwrap();
@@ -579,7 +584,7 @@ fn sort_search_and_filter() {
 fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
     use crate::SortKey;
     use crate::arrange::{groups, natural, sort};
-    use mailcraft_model::{Flag, Summary, time};
+    use openmailclient_model::{Flag, Summary, time};
     use std::cmp::Ordering::{Equal, Greater, Less};
     for (a, b, want) in [
         ("invoice 9", "invoice 10", Less),
@@ -721,7 +726,7 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
 #[test]
 fn search_understands_fields_states_dates_and_sizes() {
     use crate::search::{fold, parse};
-    use mailcraft_model::{Flag, Summary, time};
+    use openmailclient_model::{Flag, Summary, time};
     assert_eq!(fold("Zöe ÅNGSTRÖM, Tomás; cafe\u{301} Ærø Łódź ß"), "zoe angstrom, tomas; cafe ærø łodz ß");
 
     let at = |y, m, d, h| time::from_civil(y, m, d, h, 0, 0, 120);
@@ -856,7 +861,7 @@ fn search_understands_fields_states_dates_and_sizes() {
 #[test]
 fn hostile_queries_never_panic() {
     use crate::search::parse;
-    let row = mailcraft_model::Summary { subject: "é\u{301}\u{0}".into(), time: i64::MAX, size: u32::MAX, ..Default::default() };
+    let row = openmailclient_model::Summary { subject: "é\u{301}\u{0}".into(), time: i64::MAX, size: u32::MAX, ..Default::default() };
     let pieces = [
         "\"",
         "-",
@@ -901,7 +906,7 @@ fn hostile_queries_never_panic() {
     }
     // Far more clauses than are kept: those past the cap are left out, and it still answers.
     let long = "word ".repeat(10_000);
-    assert!(parse(&long, 0).matches(&mailcraft_model::Summary { subject: "a word".into(), ..Default::default() }));
+    assert!(parse(&long, 0).matches(&openmailclient_model::Summary { subject: "a word".into(), ..Default::default() }));
     let _ = parse(&"\"".repeat(100_001), 0);
     let _ = parse(&"OR ".repeat(50_000), 0);
 }
@@ -1001,8 +1006,8 @@ fn a_deleted_folder_can_be_taken_back_and_folders_say_what_they_hold() {
 
 #[test]
 fn an_attached_object_is_shown_by_the_best_picture_it_has() {
-    use mailcraft_formats::rich::{Block, Picture};
-    use mailcraft_model::{Attachment, Item, PropValue, pid, rtf};
+    use openmailclient_formats::rich::{Block, Picture};
+    use openmailclient_model::{Attachment, Item, PropValue, pid, rtf};
     use std::io::Write;
     let mut dib = Vec::new();
     for n in [40u32, 2, 2] {
@@ -1012,7 +1017,7 @@ fn an_attached_object_is_shown_by_the_best_picture_it_has() {
     dib.extend_from_slice(&[0; 24]);
     dib.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0]);
     let object = |kind: &str, bitmap: &[u8]| {
-        let mut a = Attachment::file("Card", "", mailcraft_msg::ole::picture_object(kind, bitmap).unwrap());
+        let mut a = Attachment::file("Card", "", openmailclient_msg::ole::picture_object(kind, bitmap).unwrap());
         a.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
         a.props.set(pid::RENDERING_POSITION, PropValue::Int32(0));
         a
@@ -1020,7 +1025,7 @@ fn an_attached_object_is_shown_by_the_best_picture_it_has() {
     let show = |a: Attachment| {
         let mut holder = Item::default();
         holder.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(b"{\\rtf1\\ansi\\pard \\objattph\\'20\\par}")));
-        let mut doc = mailcraft_formats::rtf::parse(&holder.body_rtf().unwrap());
+        let mut doc = openmailclient_formats::rtf::parse(&holder.body_rtf().unwrap());
         crate::pictures::settle(&mut doc, &Item { attachments: vec![a], ..Item::default() });
         let Some(Block::Para(para)) = doc.blocks.first() else { panic!("a paragraph") };
         let run = para.runs.iter().find(|r| r.picture.is_some() || r.text.contains("Card")).unwrap().clone();
@@ -1069,8 +1074,8 @@ fn an_attached_object_is_shown_by_the_best_picture_it_has() {
 
 #[test]
 fn attachments_stand_in_their_places_in_an_rtf_body() {
-    use mailcraft_formats::rich::{Block, Filed, Picture};
-    use mailcraft_model::{Attachment, Item, PropValue, pid, rtf};
+    use openmailclient_formats::rich::{Block, Filed, Picture};
+    use openmailclient_model::{Attachment, Item, PropValue, pid, rtf};
     // A bitmap of two by two pixels, the lower left one blue, drawn by a metafile (META_STRETCHDIB).
     let mut dib = Vec::new();
     for n in [40u32, 2, 2] {
@@ -1110,7 +1115,7 @@ fn attachments_stand_in_their_places_in_an_rtf_body() {
         let body = format!("{{\\rtf1\\ansi\\pard See {}\\par}}", "\\objattph\\'20".repeat(places));
         let mut holder = Item::default();
         holder.props.set(pid::RTF_COMPRESSED, PropValue::Binary(rtf::store(body.as_bytes())));
-        let mut doc = mailcraft_formats::rtf::parse(&holder.body_rtf().unwrap());
+        let mut doc = openmailclient_formats::rtf::parse(&holder.body_rtf().unwrap());
         crate::pictures::settle(&mut doc, item);
         doc
     };
@@ -1155,7 +1160,7 @@ fn attachments_stand_in_their_places_in_an_rtf_body() {
 
 #[test]
 fn a_message_prints_to_a_pdf_file() {
-    let dir = std::env::temp_dir().join(format!("mailcraft-engine-print-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openmailclient-engine-print-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = session();
     // Nothing is open: there is nothing to print.
@@ -1169,7 +1174,7 @@ fn a_message_prints_to_a_pdf_file() {
 
     // With the test font the pages are known; the installed fonts differ from machine to machine.
     let item = s.open.clone().unwrap();
-    let library = mailcraft_fonts::Library::empty();
+    let library = openmailclient_fonts::Library::empty();
     assert!(matches!(
         crate::print::layout(
             &item,
@@ -1177,7 +1182,7 @@ fn a_message_prints_to_a_pdf_file() {
                 owner: "Alex Morgan",
                 tz_offset_min: 0,
                 now: 0,
-                setup: &mailcraft_layout::Setup::default(),
+                setup: &openmailclient_layout::Setup::default(),
                 links: crate::print::Links::All
             },
             &library
@@ -1186,14 +1191,14 @@ fn a_message_prints_to_a_pdf_file() {
         Err(EngineError::Format(_))
     ));
     let printed = {
-        let mut fonts = mailcraft_layout::Fonts::new(&library);
+        let mut fonts = openmailclient_layout::Fonts::new(&library);
         let chars: String = (' '..='~').chain(['\u{e1}', '\u{2022}']).collect();
-        fonts.give("Arial", false, false, mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font(&chars), index: 0 });
+        fonts.give("Arial", false, false, openmailclient_fonts::Face { data: openmailclient_fonts::boxes::font(&chars), index: 0 });
         let fields = [("Subject", item.subject())];
-        let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
-        mailcraft_layout::memo(
-            &mailcraft_layout::Memo { owner: "Alex Morgan", fields: &fields, body: &body, plain: false, sizes: &|_| None },
-            mailcraft_layout::Paper::A4,
+        let body = openmailclient_formats::html::parse(&item.body_html().unwrap());
+        openmailclient_layout::memo(
+            &openmailclient_layout::Memo { owner: "Alex Morgan", fields: &fields, body: &body, plain: false, sizes: &|_| None },
+            openmailclient_layout::Paper::A4,
             &mut fonts,
         )
         .unwrap()
@@ -1208,14 +1213,14 @@ fn a_message_prints_to_a_pdf_file() {
     // is named, and nothing is fetched for it.
     run(&mut s, "mail.select", json!({"index": 4}));
     let item = s.open.clone().unwrap();
-    let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
+    let body = openmailclient_formats::html::parse(&item.body_html().unwrap());
     let pictures = crate::print::Pictures::of(&body, &item);
     let printed = {
-        let mut fonts = mailcraft_layout::Fonts::new(&library);
-        fonts.give("Arial", false, false, mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font("ab "), index: 0 });
-        let sizes = |picture: &mailcraft_layout::Picture| pictures.get(picture).map(|p| p.natural);
-        let memo = mailcraft_layout::Memo { owner: "a", fields: &[], body: &body, plain: false, sizes: &sizes };
-        mailcraft_layout::memo(&memo, mailcraft_layout::Paper::A4, &mut fonts).unwrap()
+        let mut fonts = openmailclient_layout::Fonts::new(&library);
+        fonts.give("Arial", false, false, openmailclient_fonts::Face { data: openmailclient_fonts::boxes::font("ab "), index: 0 });
+        let sizes = |picture: &openmailclient_layout::Picture| pictures.get(picture).map(|p| p.natural);
+        let memo = openmailclient_layout::Memo { owner: "a", fields: &[], body: &body, plain: false, sizes: &sizes };
+        openmailclient_layout::memo(&memo, openmailclient_layout::Paper::A4, &mut fonts).unwrap()
     };
     let placed: Vec<_> = printed.pages.iter().flat_map(|p| &p.pictures).collect();
     assert_eq!(placed.len(), 1);
@@ -1244,7 +1249,7 @@ fn a_message_prints_to_a_pdf_file() {
 #[test]
 fn print_lists_where_links_go() {
     use crate::print::{Links, note_links};
-    use mailcraft_formats::rich::{Block, Doc};
+    use openmailclient_formats::rich::{Block, Doc};
     assert_eq!(
         (Links::named("ALL"), Links::named("concerns"), Links::named("none"), Links::named("some")),
         (Some(Links::All), Some(Links::Concerns), Some(Links::None), None)
@@ -1265,13 +1270,13 @@ fn print_lists_where_links_go() {
     let html = s.open.as_ref().unwrap().body_html().unwrap();
 
     // As Outlook prints it: the body alone.
-    let mut doc = mailcraft_formats::html::parse(&html);
+    let mut doc = openmailclient_formats::html::parse(&html);
     let before = doc.clone();
     assert_eq!(note_links(&mut doc, Links::None), 0);
     assert_eq!(doc, before);
 
     // The four links that are not what they say are numbered where they stand and listed.
-    let mut doc = mailcraft_formats::html::parse(&html);
+    let mut doc = openmailclient_formats::html::parse(&html);
     assert_eq!(note_links(&mut doc, Links::Concerns), 4);
     let lines = text(&doc.blocks);
     assert!(lines.contains(&"https://mail.example.org/quota[1]".to_string()), "{lines:?}");
@@ -1290,7 +1295,7 @@ fn print_lists_where_links_go() {
     );
 
     // All of them: the honest one too, which only says where it goes.
-    let mut doc = mailcraft_formats::html::parse(&html);
+    let mut doc = openmailclient_formats::html::parse(&html);
     assert_eq!(note_links(&mut doc, Links::All), 5);
     let lines = text(&doc.blocks);
     assert_eq!(lines[lines.len() - 6], "Links in this message");
@@ -1298,7 +1303,7 @@ fn print_lists_where_links_go() {
 
     // A link written out as its own address, one inside the message and a picture of the message
     // need no line; the same link twice has one number; links in tables are found.
-    let mut doc = mailcraft_formats::html::parse(
+    let mut doc = openmailclient_formats::html::parse(
         r##"<p><a href="https://example.org/a">https://example.org/a</a> <a href="#top">top</a> <a href="cid:x@y">x</a>
         <a href="https://example.org/b">the <b>plan</b></a> and again <a href="https://example.org/b">the plan</a></p>
         <table><tr><td><a href="https://example.org/c">in a table</a></td></tr></table>"##,
@@ -1311,14 +1316,14 @@ fn print_lists_where_links_go() {
 
     // Hostile: far more links than are listed, with addresses far longer than are shown.
     let many: String = (0..1000).map(|n| format!(r#"<a href="https://example.org/{n}/{}">link {n}</a> "#, "x".repeat(1000))).collect();
-    let mut doc = mailcraft_formats::html::parse(&many);
+    let mut doc = openmailclient_formats::html::parse(&many);
     assert_eq!(note_links(&mut doc, Links::All), 200);
     let lines = text(&doc.blocks);
     assert!(lines.last().unwrap().starts_with("[200] ") && lines.last().unwrap().chars().count() < 420);
     assert_eq!(note_links(&mut Doc::default(), Links::All), 0);
 
     // Through the command.
-    let dir = std::env::temp_dir().join(format!("mailcraft-engine-print-links-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openmailclient-engine-print-links-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     assert!(matches!(s.run("file.print", &json!({"path": dir.join("p.pdf"), "links": "some"})), Err(EngineError::BadParams(_))));
     for (links, count) in [(Value::Null, 4), (json!("all"), 5), (json!("none"), 0)] {
@@ -1336,7 +1341,7 @@ fn print_lists_where_links_go() {
 
 #[test]
 fn messages_save_and_reopen_as_msg_and_eml() {
-    let dir = std::env::temp_dir().join(format!("mailcraft-engine-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openmailclient-engine-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = session();
     run(&mut s, "mail.select", json!({"index": 0}));
@@ -1469,14 +1474,14 @@ fn attachment_names_are_made_safe_and_told_apart() {
 
 #[test]
 fn saving_all_attachments_replaces_no_file() {
-    use mailcraft_model::Attachment;
-    let dir = std::env::temp_dir().join(format!("mailcraft-engine-attachments-{}", std::process::id()));
+    use openmailclient_model::Attachment;
+    let dir = std::env::temp_dir().join(format!("openmailclient-engine-attachments-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = session();
     run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
-    let mut inner = mailcraft_model::Item::default();
-    inner.props.set_str(mailcraft_model::pid::SUBJECT, "A note: inside");
+    let mut inner = openmailclient_model::Item::default();
+    inner.props.set_str(openmailclient_model::pid::SUBJECT, "A note: inside");
     {
         let item = s.open.as_mut().unwrap();
         assert_eq!(item.attachments.len(), 1, "the sample's launch timeline");
@@ -1485,7 +1490,7 @@ fn saving_all_attachments_replaces_no_file() {
         item.attachments.push(Attachment::file("..\\..\\escape.txt", "text/plain", b"stays here".to_vec()));
         item.attachments.push(Attachment::file("nul", "", b"not a device".to_vec()));
         let mut placed = Attachment::file("logo.png", "image/png", b"picture".to_vec());
-        placed.props.set_str(mailcraft_model::pid::ATTACH_CONTENT_ID, "logo@example.org");
+        placed.props.set_str(openmailclient_model::pid::ATTACH_CONTENT_ID, "logo@example.org");
         item.attachments.push(placed);
         let mut note = Attachment::file("A note: inside", "", Vec::new());
         note.embedded = Some(Box::new(inner));
@@ -1568,7 +1573,7 @@ fn inspect_marks_message_text_as_untrusted() {
 
 #[test]
 fn a_message_kept_only_as_rtf_has_text_a_preview_and_survives_as_html() {
-    use mailcraft_model::{Item, PropValue, pid, rtf};
+    use openmailclient_model::{Item, PropValue, pid, rtf};
     let mut s = session();
     run(&mut s, "mail.select", json!({ "folder": "Inbox/Receipts", "index": 0 }));
     let item = s.open.as_ref().unwrap();
@@ -1608,17 +1613,17 @@ fn a_picture_sent_with_a_message_is_an_attachment_the_body_shows_not_a_listed_on
 
 #[test]
 fn the_sample_receipt_has_a_drawing_that_is_drawn() {
-    use mailcraft_formats::metafile::wmf_picture;
+    use openmailclient_formats::metafile::wmf_picture;
     // The map is a metafile of shapes and no bitmap: it is drawn, at its own shape.
     let map = crate::sample::bay_map();
-    assert_eq!(mailcraft_formats::metafile::wmf_bitmap(&map), None);
+    assert_eq!(openmailclient_formats::metafile::wmf_bitmap(&map), None);
     let bmp = wmf_picture(&map, Some((240, 120))).unwrap();
     assert_eq!((&bmp[..2], &bmp[18..22], &bmp[22..26]), (&b"BM"[..], &480u32.to_le_bytes()[..], &240u32.to_le_bytes()[..]));
     // And it stands in the receipt's body as a picture that was read, beside the card.
     let mut s = session();
     run(&mut s, "mail.select", json!({ "folder": "Inbox/Receipts", "index": 0 }));
-    let rtf = s.open.as_ref().unwrap().props.bin(mailcraft_model::pid::RTF_COMPRESSED).and_then(mailcraft_model::rtf::decompress).unwrap();
-    let doc = mailcraft_formats::rtf::parse(&rtf);
+    let rtf = s.open.as_ref().unwrap().props.bin(openmailclient_model::pid::RTF_COMPRESSED).and_then(openmailclient_model::rtf::decompress).unwrap();
+    let doc = openmailclient_formats::rtf::parse(&rtf);
     assert_eq!(doc.written.len(), 1);
     assert_eq!(doc.written[0][..], bmp[..]);
 }
@@ -1678,7 +1683,7 @@ fn a_link_is_followed_only_when_it_is_the_message_s_and_safe_to_follow() {
 
 #[test]
 fn links_of_hostile_bodies_are_listed_within_bounds() {
-    use mailcraft_model::{Item, PropValue, pid};
+    use openmailclient_model::{Item, PropValue, pid};
     let mut html = String::from("<html><body>");
     for i in 0..3000 {
         html.push_str(&format!("<a href=\"javascript:{i}//{}\">{}</a> <a href=\"\">none</a> ", "x".repeat(5000), "t".repeat(3000)));
@@ -1702,7 +1707,7 @@ fn links_of_hostile_bodies_are_listed_within_bounds() {
 
 #[test]
 fn page_setup_is_kept_and_printed_with() {
-    use mailcraft_layout::{MM, Paper, Setup};
+    use openmailclient_layout::{MM, Paper, Setup};
     let mut s = session();
     // It can be asked about and changed with no message open.
     assert!(s.is_enabled("file.pageSetup"));
@@ -1766,7 +1771,7 @@ fn page_setup_is_kept_and_printed_with() {
     let job = |tz: i32| crate::print::Job {
         owner: "Alex Morgan",
         tz_offset_min: tz,
-        now: mailcraft_model::time::from_civil(2026, 10, 12, 23, 5, 0, 0),
+        now: openmailclient_model::time::from_civil(2026, 10, 12, 23, 5, 0, 0),
         setup: &kept,
         links: crate::print::Links::default(),
     };
@@ -1779,7 +1784,7 @@ fn page_setup_is_kept_and_printed_with() {
 
     // Printing uses the setup, and what a print asks for is for that print only. Through the
     // command there is a file, or the word that no font is installed.
-    let dir = std::env::temp_dir().join(format!("mailcraft-setup-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openmailclient-setup-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let has = |file: &[u8], needle: &str| file.windows(needle.len()).any(|w| w == needle.as_bytes());
     let kept = s.page_setup.clone();
@@ -1811,7 +1816,7 @@ fn a_page_can_be_looked_at_before_it_is_printed() {
     let mut s = session();
     assert!(!s.is_enabled("file.printPreview"));
     run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
-    let dir = std::env::temp_dir().join(format!("mailcraft-preview-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openmailclient-preview-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("page.png");
 
@@ -1834,14 +1839,14 @@ fn a_page_can_be_looked_at_before_it_is_printed() {
 
     // The page that is drawn is the page that is printed: with the test font both are known.
     let item = s.open.clone().unwrap();
-    let library = mailcraft_fonts::Library::empty();
+    let library = openmailclient_fonts::Library::empty();
     let laid = {
-        let mut fonts = mailcraft_layout::Fonts::new(&library);
+        let mut fonts = openmailclient_layout::Fonts::new(&library);
         let chars: String = (' '..='~').chain(['\u{e1}', '\u{2022}']).collect();
-        fonts.give("Arial", false, false, mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font(&chars), index: 0 });
-        let body = mailcraft_formats::html::parse(&item.body_html().unwrap());
-        let memo = mailcraft_layout::Memo { owner: "Alex Morgan", fields: &[], body: &body, plain: false, sizes: &|_| None };
-        let printed = mailcraft_layout::memo(&memo, mailcraft_layout::Paper::A4, &mut fonts).unwrap();
+        fonts.give("Arial", false, false, openmailclient_fonts::Face { data: openmailclient_fonts::boxes::font(&chars), index: 0 });
+        let body = openmailclient_formats::html::parse(&item.body_html().unwrap());
+        let memo = openmailclient_layout::Memo { owner: "Alex Morgan", fields: &[], body: &body, plain: false, sizes: &|_| None };
+        let printed = openmailclient_layout::memo(&memo, openmailclient_layout::Paper::A4, &mut fonts).unwrap();
         crate::print::Laid { links: 0, printed, pictures: crate::print::Pictures::default() }
     };
     let image = crate::print::raster(&laid, 0, 2.0).unwrap();

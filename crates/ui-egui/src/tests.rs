@@ -135,7 +135,7 @@ fn hostile_bodies_draw_without_panicking() {
     for dark in [false, true] {
         let tokens = theme::Tokens::named(dark);
         for html in &bodies {
-            let doc = mailcraft_formats::html::parse(html);
+            let doc = openmailclient_formats::html::parse(html);
             let ctx = egui::Context::default();
             install_fonts(&ctx);
             for width in [0.0, 30.0, 800.0] {
@@ -155,11 +155,9 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     let mut ui = MailUi::new(Session::with_sample());
     ui.execute("mail.select", &json!({ "folder": "Inbox/Receipts", "index": 0 })).unwrap();
     let doc = ui.body_doc().unwrap();
-    assert!(
-        doc.blocks.iter().any(
-            |b| matches!(b, mailcraft_formats::rich::Block::Table(t) if t.rows.len() == 5 && t.rows.iter().flatten().all(|c| c.edges.is_some()))
-        )
-    );
+    assert!(doc.blocks.iter().any(
+        |b| matches!(b, openmailclient_formats::rich::Block::Table(t) if t.rows.len() == 5 && t.rows.iter().flatten().all(|c| c.edges.is_some()))
+    ));
     assert!(doc.text().contains("parking.example.net/help"));
     let ctx = egui::Context::default();
     install_fonts(&ctx);
@@ -200,19 +198,19 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
 
     // Content ids are matched as the message writes them: brackets and letter case do not matter.
     // A picture the message does not carry, or carries as something else, stays a placeholder.
-    let mut item = mailcraft_model::Item::new_mail();
+    let mut item = openmailclient_model::Item::new_mail();
     for (name, id, data) in [
         ("a.png", "<Logo@Example>", sample_picture()),
         ("b.png", "notes", b"not a picture at all".to_vec()),
         ("c.svg", "drawing", b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>x()</script></svg>".to_vec()),
     ] {
-        let mut a = mailcraft_model::Attachment::file(name, "image/png", data);
+        let mut a = openmailclient_model::Attachment::file(name, "image/png", data);
         a.props.set_str(pid::ATTACH_CONTENT_ID, id);
         item.attachments.push(a);
     }
     let html = "<p>a<img src=\"cid:logo@example\"> <img src=\"cid:logo@example\" width=5000><br>b</p><table><tr><td><img src=cid:notes alt=N>\
                 <td><img src=cid:drawing><img src=cid:missing><img src=\"https://x.example/r.png\"></table>";
-    let doc = mailcraft_formats::html::parse(html);
+    let doc = openmailclient_formats::html::parse(html);
     let mut shown = pictures::Pictures::default();
     shown.load(&ctx, 1, &doc, &item);
     assert!(shown.get("logo@example").is_some());
@@ -224,7 +222,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
         output.textures_delta.clear();
     }
     // Another message: nothing of the last one is kept.
-    shown.load(&ctx, 2, &mailcraft_formats::html::parse("<p>text</p>"), &item);
+    shown.load(&ctx, 2, &openmailclient_formats::html::parse("<p>text</p>"), &item);
     assert!(shown.get("logo@example").is_none());
 }
 
@@ -293,12 +291,12 @@ fn pictures_written_into_the_body_and_at_its_sides_are_decoded_and_drawn() {
         written(b"not a picture at all"),
         "words beside the picture ".repeat(80),
     );
-    let doc = mailcraft_formats::html::parse(&html);
+    let doc = openmailclient_formats::html::parse(&html);
     assert_eq!(doc.written.len(), 2);
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut shown = pictures::Pictures::default();
-    shown.load(&ctx, 3, &doc, &mailcraft_model::Item::new_mail());
+    shown.load(&ctx, 3, &doc, &openmailclient_model::Item::new_mail());
     assert_eq!(shown.written(0).map(|p| p.size), Some(egui::vec2(240.0, 96.0)));
     assert!(shown.written(1).is_none() && shown.written(usize::MAX).is_none());
     for dark in [false, true] {
@@ -310,13 +308,13 @@ fn pictures_written_into_the_body_and_at_its_sides_are_decoded_and_drawn() {
             output.textures_delta.clear();
         }
     }
-    shown.load(&ctx, 4, &mailcraft_formats::html::parse("<p>text</p>"), &mailcraft_model::Item::new_mail());
+    shown.load(&ctx, 4, &openmailclient_formats::html::parse("<p>text</p>"), &openmailclient_model::Item::new_mail());
     assert!(shown.written(0).is_none(), "nothing of the last message is kept");
 }
 
 #[test]
 fn text_beside_a_picture_is_cut_where_the_picture_ends() {
-    use mailcraft_formats::rich::{Picture, Run};
+    use openmailclient_formats::rich::{Picture, Run};
     let text = |t: &str| Run { text: t.to_string(), ..Run::default() };
     let runs = [text("one two\n"), Run { text: "alt".to_string(), picture: Some(Picture::Remote), ..Run::default() }, text("thre\u{301}e four")];
     let ends = [8, 9, 20];
@@ -341,7 +339,7 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
                 <p style=\"font-family:..\\..\\Windows\\Fonts\\arial.ttf\">d</p><p style=\"font-family:monospace\">e</p>"
         .to_string()
         + &(0..200).map(|i| format!("<font face=\"Nosuch{i}, Other{i}\">f</font>")).collect::<String>();
-    let doc = mailcraft_formats::html::parse(&html);
+    let doc = openmailclient_formats::html::parse(&html);
     let ctx = egui::Context::default();
     let mut shown = faces::Faces::new(install_fonts(&ctx));
     assert!(shown.pick("Arial", false, false).is_none(), "nothing is drawn with a font before it is looked up");
@@ -364,7 +362,7 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
         }
     }
     // Another message with other names: still drawn, and the caps hold.
-    let other = mailcraft_formats::html::parse("<p style=\"font-family:Georgia\">g</p><p style=\"font-family:\">h</p>");
+    let other = openmailclient_formats::html::parse("<p style=\"font-family:Georgia\">g</p><p style=\"font-family:\">h</p>");
     for _ in 0..2 {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             shown.load(ui.ctx(), 2, &other);
@@ -377,7 +375,7 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
 
 /// The height a body takes when it is drawn `width` wide.
 fn drawn_height(html: &str, width: f32) -> f32 {
-    let doc = mailcraft_formats::html::parse(html);
+    let doc = openmailclient_formats::html::parse(html);
     let tokens = theme::Tokens::named(false);
     let ctx = egui::Context::default();
     install_fonts(&ctx);
@@ -452,11 +450,11 @@ fn hostile_rtf_bodies_draw_without_panicking() {
     ];
     let tokens = theme::Tokens::named(false);
     for rtf in &bodies {
-        let doc = mailcraft_formats::rtf::parse(rtf.as_bytes());
+        let doc = openmailclient_formats::rtf::parse(rtf.as_bytes());
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         let mut shown = pictures::Pictures::default();
-        shown.load(&ctx, 1, &doc, &mailcraft_model::Item::new_mail());
+        shown.load(&ctx, 1, &doc, &openmailclient_model::Item::new_mail());
         assert!(shown.written(0).is_none_or(|p| p.size.x > 0.0));
         for width in [0.0, 30.0, 800.0] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -470,7 +468,7 @@ fn hostile_rtf_bodies_draw_without_panicking() {
 
 #[test]
 fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
-    use mailcraft_formats::rich::{Block, Doc, Filed, Para, Picture, Run};
+    use openmailclient_formats::rich::{Block, Doc, Filed, Para, Picture, Run};
     let file = |filed: Filed| Run { text: format!("[Attachment: {}]", filed.name), picture: Some(Picture::File(filed)), ..Run::default() };
     let doc_of = |runs: Vec<Run>| Doc { blocks: vec![Block::Para(Para { runs, ..Para::default() })], ..Doc::default() };
     let notes = Filed { number: Some(3), name: "notes.txt".into(), kind: None, bytes: 2048, caution: None };
@@ -512,7 +510,7 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
         caution: Some("c".repeat(100_000)),
     };
     let mut hostile = doc_of((0..40).map(|_| file(long.clone())).collect());
-    let filled = mailcraft_formats::html::parse("<table><tr><td bgcolor=#203040>x</td></tr></table>");
+    let filled = openmailclient_formats::html::parse("<table><tr><td bgcolor=#203040>x</td></tr></table>");
     if let Some(Block::Table(table)) = filled.blocks.first() {
         let mut table = table.clone();
         table.rows[0][0].blocks = hostile.blocks.clone();
@@ -533,7 +531,7 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
 
 #[test]
 fn a_click_on_a_link_asks_and_only_the_answer_opens_it() {
-    use mailcraft_formats::rich::{Block, Doc, Para, Run, Style};
+    use openmailclient_formats::rich::{Block, Doc, Para, Run, Style};
     let link: std::sync::Arc<str> = "https://example.org/help".into();
     let run = Run { text: "A link with some words in it".into(), style: Style { link: Some(link.clone()), ..Style::default() }, ..Run::default() };
     let doc = Doc { blocks: vec![Block::Para(Para { runs: vec![run], ..Para::default() })], ..Doc::default() };
@@ -632,7 +630,7 @@ fn the_print_window_shows_the_pages_and_follows_the_setup() {
     assert_eq!(laid, pages > 0);
     // Looking at the pages prints nothing and changes nothing.
     assert!(ui.requests.is_empty());
-    assert_eq!(ui.session.page_setup, mailcraft_layout::Setup::default());
+    assert_eq!(ui.session.page_setup, openmailclient_layout::Setup::default());
 
     // A change of the setup, from the window or from outside, is laid out again.
     ui.execute("file.pageSetup", &json!({"paper": "a5", "orientation": "landscape", "margins": 30})).unwrap();

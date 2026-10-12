@@ -1,6 +1,6 @@
-# MailCraft — instructions for agents
+# OpenMailClient — instructions for agents
 
-MailCraft is a clean-room, open-source, Rust-native mail, calendar, contacts and tasks client targeting Microsoft Outlook Classic (the Win32 desktop Outlook, not "new Outlook") parity — and going further on speed, openness and agent control. It is meant to run natively on Windows, macOS, Linux and BSD, and on the web via WASM. It follows the conventions of the ArtCraft "Crafting Apps" family, most closely [`storytold/wordcraft`](https://github.com/storytold/wordcraft) (Word); siblings there: photocraft (Photoshop), vectorcraft (Illustrator), filmcraft (Premiere), lightcraft (Lightroom), pdfcraft (Acrobat), effectcraft (After Effects), designcraft (InDesign). Shared rules and learnings: [`storytold/craftrules`](https://github.com/storytold/craftrules) — read its `AGENTS.md`. MailCraft is an independent concept project; it is not affiliated with Microsoft, and not part of the storytold organisation unless its owner says so.
+OpenMailClient is a clean-room, open-source, Rust-native mail, calendar, contacts and tasks client targeting Microsoft Outlook Classic (the Win32 desktop Outlook, not "new Outlook") parity — and going further on speed, openness and agent control. It is meant to run natively on Windows, macOS, Linux and BSD, and on the web via WASM. It follows the conventions of the ArtCraft "Crafting Apps" family, most closely [`storytold/wordcraft`](https://github.com/storytold/wordcraft) (Word); siblings there: photocraft (Photoshop), vectorcraft (Illustrator), filmcraft (Premiere), lightcraft (Lightroom), pdfcraft (Acrobat), effectcraft (After Effects), designcraft (InDesign). Shared rules and learnings: [`storytold/craftrules`](https://github.com/storytold/craftrules) — read its `AGENTS.md`. OpenMailClient is an independent concept project; it is not affiliated with Microsoft, and not part of the storytold organisation unless its owner says so.
 
 > **Status: M1 in progress** (see `ROADMAP.md`). The readers, engine, CLI, egui window, print layout, page rasteriser and PDF writer exist; `proof`, `net`, `mcp` and the web app do not. The architecture table is **proposed** for those; paths that don't exist yet are where things go when they are created.
 
@@ -9,7 +9,7 @@ MailCraft is a clean-room, open-source, Rust-native mail, calendar, contacts and
 2. Follow the autonomous operation protocol (`plan/execution-plan.md` §5). Don't stop to ask unless a decision is genuinely the owner's (licensing, publishing, pushing to new remotes, secrets, anything that sends mail or touches a real account).
 
 ## Never crash, never lose mail
-People trust MailCraft with years of mail; a crash or a bad write loses it. **This outranks feature work**: never ship a feature through a panic path, and fix a crash before building on top of it. Standard: [`craftrules/standards/never-crash.md`](https://github.com/storytold/craftrules/blob/main/standards/never-crash.md).
+People trust OpenMailClient with years of mail; a crash or a bad write loses it. **This outranks feature work**: never ship a feature through a panic path, and fix a crash before building on top of it. Standard: [`craftrules/standards/never-crash.md`](https://github.com/storytold/craftrules/blob/main/standards/never-crash.md).
 - **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`, `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`).
 - **Errors are `Result<T, E>`** through the crate's error type and `?`. An unfinished feature returns an error or is disabled; it never panics.
 - **Input-derived numbers are hostile** (files, messages, server responses, commands, MCP/control params): `get()` instead of `[i]`, slice strings only at char boundaries, checked/saturating arithmetic, clamp sizes, cap allocations, bound recursion. A `.pst` block offset, a MIME boundary, a TNEF length and an IMAP literal size are all attacker-controlled.
@@ -36,7 +36,7 @@ A mail client reads content written by strangers and holds the owner's most pers
 
 ## Clean room
 - Outlook Classic is installed on the dev machine and may be **observed** black-box: run it, use its UI, take screenshots **of its window only** (by window handle — the machine runs other work; never capture the whole desktop) stored only under `plan/outlook/screenshots/` (gitignored, never committed). The owner has said the data in this Outlook profile is not sensitive and may be used for observation and local testing — and that it must **never be made public in any way**. See "Mail is hostile and private".
-- Don't change the owner's mailbox while observing: no sending, deleting, moving, rule changes or account changes in Outlook unless asked. Close a data file in Outlook before MailCraft opens it, and work on a copy under `plan/`.
+- Don't change the owner's mailbox while observing: no sending, deleting, moving, rule changes or account changes in Outlook unless asked. Close a data file in Outlook before OpenMailClient opens it, and work on a copy under `plan/`.
 - Never read, disassemble or copy anything inside the Office install (file names/listings only). Never commit files produced by Outlook (`.pst`, `.ost`, `.msg`, `.oft`, `.nk2`, exported `.ics`/`.vcf`); fixtures are produced by our own writers or written by hand. Never copy Microsoft wording beyond feature names.
 - File formats and protocols come from public specifications: Microsoft Open Specifications ([MS-PST], [MS-OXMSG], [MS-OXCMSG], [MS-OXPROPS], [MS-OXCDATA], [MS-OXTNEF], [MS-OXRTFCP], [MS-OXOCAL], [MS-OXCICAL], [MS-OXOCNTC], [MS-OXVCARD], [MS-OXOTASK], [MS-CFB]) and the IETF RFCs (5322 and 2045–2049 for messages and MIME, 5321 SMTP, 9051/3501 IMAP, 1939 POP3, 5545 iCalendar, 6350 vCard). Cite the spec section in the code where a layout or rule comes from it.
 - Never copy GPL/LGPL/AGPL code (libpst, libpff, Evolution, KMail, readpst…), and don't port other clients' code (Thunderbird and friends) either: read the spec, not their source.
@@ -51,7 +51,7 @@ A mail client reads content written by strangers and holds the owner's most pers
 | L4 | `engine` | Session, store and account management, undo, **command registry**, Outlook feature catalog, rules, search, samples, I/O dispatch |
 | L5 | `mcp` | MCP server (headless or bridged to the app) |
 | L6 | `ui-egui` | Outlook-Classic-style egui front end (swappable) |
-| apps | `apps/mailcraft`, `apps/mailcraft-cli`, `apps/mailcraft-web` | binaries |
+| apps | `apps/openmailclient`, `apps/openmailclient-cli`, `apps/openmailclient-web` | binaries |
 
 - **Everything is a command.** User-visible behaviour = a `CommandSpec` in `crates/engine/src/cmd/*.rs` (id, label, ribbon location, shortcut, params doc, `enabled`, `run`) + tests. UI-only commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search, CLI, control channel and MCP all dispatch by id. Programmatic calls never open dialogs.
 - **Parity is measured:** `crates/engine/src/catalog.rs` lists Outlook Classic's ribbon/menu features per module (Mail, Calendar, People, Tasks, and the item windows) with command ids. `cargo xtask parity` writes `docs/parity-checklist.md`; a test enforces a floor that only rises. Implement missing ids to raise it.
@@ -62,18 +62,18 @@ A mail client reads content written by strangers and holds the owner's most pers
 Before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, assets, layers, wasm). Commit after every arc of work that builds, with a task id in the message (`M2.1: reading pane header`).
 
 ## Behaves like Outlook Classic
-- **Files round-trip.** A data file Outlook Classic wrote opens in MailCraft, and a data file MailCraft wrote opens in Outlook Classic with nothing lost: properties MailCraft doesn't understand are preserved, not dropped. Coverage per format is tracked in `docs/file-format-parity.md` and pinned by round-trip tests; a format fix lands with a test.
+- **Files round-trip.** A data file Outlook Classic wrote opens in OpenMailClient, and a data file OpenMailClient wrote opens in Outlook Classic with nothing lost: properties OpenMailClient doesn't understand are preserved, not dropped. Coverage per format is tracked in `docs/file-format-parity.md` and pinned by round-trip tests; a format fix lands with a test.
 - **Interaction follows observed behaviour:** selection and keyboard in the message list, conversation grouping, read/unread and flag state, reply/forward quoting and prefixes, folder and navigation shortcuts, drag and drop, and compose-window typing follow Outlook Classic as recorded in `docs/interaction-parity.md`, pinned by `crates/engine/src/tests_interaction.rs` (keys go through the same commands as the keyboard). Change behaviour, doc and tests together.
 - Compare headlessly (`ui_shot`); don't drive GUIs with keystrokes on the shared machine.
 
 ## Running and looking at the app
 These are the conventions the binaries follow once they exist.
-- `cargo run --release -p mailcraft -- --sample --control 7985` (sample mailbox + control channel).
-- Drive it with JSON lines on `127.0.0.1:7985`, each with the window's key from `%APPDATA%\MailCraft\control-key.local-7985` (Linux: `~/.config/mailcraft/`, macOS: `~/Library/Application Support/MailCraft/`), e.g. `{"id":1,"key":"…","method":"engine.execute","params":{"command":"mail.select","params":{"folder":"Inbox","index":0}}}` then `{"id":2,"key":"…","method":"ui.screenshot","params":{"path":"plan/shots/shot.png"}}`. Methods: `crates/ui-egui/src/control.rs`; docs: `docs/control-protocol.md` (Keys).
-- **Headless window screenshots** (no focus stealing, works with a locked screen): `cargo run --release -p mailcraft-ui-egui --example ui_shot -- script.jsonl` (see the example's header).
+- `cargo run --release -p openmailclient -- --sample --control 7985` (sample mailbox + control channel).
+- Drive it with JSON lines on `127.0.0.1:7985`, each with the window's key from `%APPDATA%\OpenMailClient\control-key.local-7985` (Linux: `~/.config/openmailclient/`, macOS: `~/Library/Application Support/OpenMailClient/`), e.g. `{"id":1,"key":"…","method":"engine.execute","params":{"command":"mail.select","params":{"folder":"Inbox","index":0}}}` then `{"id":2,"key":"…","method":"ui.screenshot","params":{"path":"plan/shots/shot.png"}}`. Methods: `crates/ui-egui/src/control.rs`; docs: `docs/control-protocol.md` (Keys).
+- **Headless window screenshots** (no focus stealing, works with a locked screen): `cargo run --release -p openmailclient-ui-egui --example ui_shot -- script.jsonl` (see the example's header).
 - **For UI work, look at the result** (screenshot, read the PNG) and compare with Outlook Classic side by side.
-- CLI: `mailcraft-cli convert in.msg out.eml`, `mailcraft-cli inspect mailbox.pst`, `mailcraft-cli run --template sample --cmd 'mail.select={"folder":"Inbox","index":0}' --cmd mail.markRead --save out.pst`, `mailcraft-cli commands`, `mailcraft-cli parity`.
-- MCP: `mailcraft-cli mcp` (headless) or `mailcraft-cli mcp --connect 127.0.0.1:7985` (drives the running app). See `docs/mcp.md`.
+- CLI: `openmailclient-cli convert in.msg out.eml`, `openmailclient-cli inspect mailbox.pst`, `openmailclient-cli run --template sample --cmd 'mail.select={"folder":"Inbox","index":0}' --cmd mail.markRead --save out.pst`, `openmailclient-cli commands`, `openmailclient-cli parity`.
+- MCP: `openmailclient-cli mcp` (headless) or `openmailclient-cli mcp --connect 127.0.0.1:7985` (drives the running app). See `docs/mcp.md`.
 - Shell gotcha: the dev machine is Windows with PowerShell 5.1 — no `&&`/`||`, and `2>&1` on a native exe turns stderr into errors. Cargo may not be on `PATH`; it lives in `%USERPROFILE%\.cargo\bin`.
 - Parallel agents: separate `CARGO_TARGET_DIR` per agent; edit only the crates you own; delete your target dir when done (disk).
 

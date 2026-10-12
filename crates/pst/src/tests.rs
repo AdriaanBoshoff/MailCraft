@@ -3,8 +3,8 @@
 //! fixture for this crate and not a file Outlook would open.
 
 use super::*;
-use mailcraft_model::codepage::to_utf16le;
-use mailcraft_model::{RECIP_TO, pset};
+use openmailclient_model::codepage::to_utf16le;
+use openmailclient_model::{RECIP_TO, pset};
 
 struct Builder {
     wide: bool,
