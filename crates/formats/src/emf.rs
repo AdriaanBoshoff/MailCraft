@@ -1,7 +1,8 @@
-//! An enhanced metafile that is a drawing of lines, curves, filled shapes and text, drawn onto
-//! a page of pixels ([MS-EMF] 2.3.5 drawing records, 2.3.7 and 2.3.8 objects, 2.3.10 the path
-//! bracket, 2.3.11 state, 2.3.12 transforms, 2.3.2 clipping). A metafile that asks for anything
-//! this does not draw (bitmaps, patterned brushes, regions of many boxes, text in a font nobody
+//! An enhanced metafile that is a drawing of lines, curves, filled shapes, text and bitmaps,
+//! drawn onto a page of pixels ([MS-EMF] 2.3.5 drawing records, 2.3.1 bitmap records, 2.3.7 and
+//! 2.3.8 objects, 2.3.10 the path bracket, 2.3.11 state, 2.3.12 transforms, 2.3.2 clipping). A
+//! metafile that asks for anything this does not draw (a part of a bitmap, one that is turned or
+//! not copied as it is, patterned brushes, regions of many boxes, text in a font nobody
 //! here knows) is not drawn at all: half a picture is worse than its place.
 
 use std::f32::consts::TAU;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 use openmailclient_fonts::Lettering;
 
 use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
-use crate::metafile::{Drawn, size_at, u32_at};
+use crate::metafile::{COPY, Drawn, MAX_DIB_PIXELS, dib_pixels, emf_parts, size_at, u32_at};
 use crate::words::{self, Font, Line};
 
 /// Records one drawing is read through.
@@ -170,6 +171,8 @@ struct Page<'a> {
     /// Shapes go into the path, not onto the page.
     building: bool,
     points: usize,
+    /// Pixels of the bitmaps drawn so far.
+    pixels: usize,
     drew: bool,
 }
 
@@ -720,6 +723,28 @@ impl Page<'_> {
                     self.cut(to, mode)?;
                 }
             }
+            // [MS-EMF] 2.3.1.7, EMR_STRETCHDIBITS: where it goes, the part of the bitmap that is
+            // taken, the bitmap's two parts, what its colours are numbers in, how it is copied,
+            // and how large it is made. Only a whole bitmap, copied as it is onto a box that
+            // stands straight, is drawn.
+            81 => {
+                if u32_at(record, 64)? != 0 || u32_at(record, 68)? != COPY {
+                    return None;
+                }
+                let ((w, h), rgba) = dib_pixels(&emf_parts(record, 48)?, MAX_DIB_PIXELS.checked_sub(self.pixels)?)?;
+                self.pixels = self.pixels.checked_add(w.checked_mul(h)?)?;
+                if (point(record, 32)?, point(record, 40)?) != ((0.0, 0.0), (w as f32, h as f32)) {
+                    return None;
+                }
+                let (from, size, total) = (point(record, 24)?, point(record, 72)?, self.total());
+                let (a, b) = (total.at(from), total.at((from.0 + size.0, from.1 + size.1)));
+                if !total.straight() || b.0 < a.0 || b.1 < a.1 {
+                    return None;
+                }
+                self.canvas.clip = self.state.clip.unwrap_or(self.all());
+                self.canvas.image(&rgba, (w, h), (a.0, a.1, b.0, b.1))?;
+                self.drew = true;
+            }
             _ if IGNORED.contains(&kind) => {}
             _ => return None,
         }
@@ -727,7 +752,7 @@ impl Page<'_> {
     }
 }
 
-/// An enhanced metafile that draws lines, curves, filled shapes and text and nothing else → a
+/// An enhanced metafile that draws lines, curves, filled shapes, text and bitmaps and nothing else → a
 /// BMP file of it, for showing at `want` pixels when that is known. Text is drawn in the fonts
 /// `letters` knows; with nobody to ask, a metafile with text in it is not drawn.
 pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option<&dyn Lettering>) -> Option<Drawn> {
@@ -787,6 +812,7 @@ pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option
         path: Vec::new(),
         building: false,
         points: 0,
+        pixels: 0,
         drew: false,
     };
     for _ in 0..MAX_RECORDS {

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 42 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 43 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 193, all passing |
+| Tests | 197, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -77,8 +77,8 @@
 27. Done: page setup for print.
 28. Done: a print preview with the page setup in it.
 29. Done: Table Style: a folder's list printed as a table.
-30. Next: what is left of M2: metafiles with a bitmap beside the drawing; then M2 is
-    closed and what it leaves is listed.
+30. Done: bitmaps beside a metafile's drawing.
+31. Next: close M2 and list what it leaves.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -510,3 +510,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   dialog), so nothing is compared with it or claimed to go beyond it. Not yet: the
   columns of the view as the person arranged them, group headings, the selected rows
   only.
+- **2026-10-12** - M2.40: bitmaps beside a metafile's drawing. A Windows or enhanced metafile that
+  draws shapes or text and one or more bitmaps is now drawn whole, where it used to be left as
+  its place: the bitmap's pixels are read ([MS-WMF] 2.2.2.9: 1, 4, 8, 16, 24 and 32 bits to
+  the pixel, a table of colours or bit fields, bottom row first or top row first, the
+  twelve-byte header too) and laid over the box the record names, inside what the drawing is
+  cut to and under what is drawn after it (META_STRETCHDIB, META_DIBSTRETCHBLT, META_DIBBITBLT;
+  EMR_STRETCHDIBITS, in a world that is scaled and moved). Limits: a bitmap side of 4,096
+  pixels and 8 million pixels for all the bitmaps of one drawing, so a file of many large
+  bitmaps is given up soon. Still not drawn, and so the metafile stays a place rather than
+  half a picture: a part of a bitmap, one mirrored or turned, a copy that is not a plain one,
+  colours that are numbers in a palette, pixels packed in runs (RLE), EMR_BITBLT and its
+  kin, META_SETDIBTODEV beside a drawing. Checked by tests on files we build; no metafile of
+  Outlook's was compared, and nothing here goes beyond Outlook.

@@ -1,6 +1,7 @@
-//! A Windows metafile that is a drawing of lines, filled shapes and text, drawn onto a page of
-//! pixels ([MS-WMF] 2.3.3 drawing records, 2.3.4 object records, 2.3.5 state records). A
-//! metafile that asks for anything this does not draw (bitmaps, patterned brushes, regions,
+//! A Windows metafile that is a drawing of lines, filled shapes, text and bitmaps, drawn onto a
+//! page of pixels ([MS-WMF] 2.3.3 drawing records, 2.3.1 bitmap records, 2.3.4 object records,
+//! 2.3.5 state records). A metafile that asks for anything this does not draw (a part of a
+//! bitmap, or one that is not copied as it is; patterned brushes, regions,
 //! text in a font nobody here knows) is not drawn at all: half a picture is worse than its
 //! place.
 
@@ -10,7 +11,7 @@ use std::sync::Arc;
 use openmailclient_fonts::Lettering;
 
 use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
-use crate::metafile::{Drawn, size_at, u16_at, u32_at};
+use crate::metafile::{COPY, Drawn, MAX_DIB_PIXELS, dib_pixels, size_at, u16_at, u32_at};
 use crate::words::{self, Font, Line};
 
 /// Records one drawing is read through.
@@ -103,10 +104,45 @@ struct Page<'a> {
     saved: Vec<State>,
     objects: Vec<Option<Object>>,
     points: usize,
+    /// Pixels of the bitmaps drawn so far.
+    pixels: usize,
     drew: bool,
 }
 
 impl Page<'_> {
+    /// Lay the whole of the bitmap that `record` holds from `start` over a box of the drawing:
+    /// `from` is where the record says which part of the bitmap is taken (how high, how wide,
+    /// and from which row and column) and `to` the box (how high, how wide, its top and its
+    /// left), each four words. Only a bitmap taken whole, and laid the way it stands, is drawn.
+    fn bitmap(&mut self, record: &[u8], start: usize, from: Option<usize>, to: usize) -> Option<()> {
+        let word = |at: usize| i16_at(record, at).map(f32::from);
+        let ((w, h), rgba) = dib_pixels(record.get(start..)?, MAX_DIB_PIXELS.checked_sub(self.pixels)?)?;
+        self.pixels = self.pixels.checked_add(w.checked_mul(h)?)?;
+        let (high, wide, top, left) = match from {
+            Some(from) => {
+                if (word(from)?, word(from + 2)?, word(from + 4)?, word(from + 6)?) != (h as f32, w as f32, 0.0, 0.0) {
+                    return None;
+                }
+                (word(to)?, word(to + 2)?, word(to + 4)?, word(to + 6)?)
+            }
+            // META_DIBBITBLT: as large as it is, from a row and a column that must be the first.
+            None => {
+                if (word(to)?, word(to + 2)?, word(to + 4)?, word(to + 6)?) != (0.0, 0.0, h as f32, w as f32) {
+                    return None;
+                }
+                (h as f32, w as f32, word(to + 8)?, word(to + 10)?)
+            }
+        };
+        let map = self.ready()?;
+        let (a, b) = (map.at((left, top)), map.at((left + wide, top + high)));
+        if b.0 < a.0 || b.1 < a.1 {
+            return None;
+        }
+        self.canvas.as_mut()?.image(&rgba, (w, h), (a.0, a.1, b.0, b.1))?;
+        self.drew = true;
+        Some(())
+    }
+
     /// The page's pixels, made when the first thing is drawn: by then the window is known.
     fn ready(&mut self) -> Option<Map> {
         let (ex, ey) = self.state.extent?;
@@ -430,6 +466,14 @@ impl Page<'_> {
                 let was = self.canvas.as_ref()?.clip;
                 self.state.clip = Some((l.max(was.0), t.max(was.1), r.min(was.2), b.min(was.3)));
             }
+            // [MS-WMF] 2.3.1.6, META_STRETCHDIB: how it is copied, what its colours are numbers
+            // in, the part taken, the box it goes to, the bitmap.
+            0x0F43 if u32_at(record, 6)? == COPY && u16_at(record, 10)? == 0 => self.bitmap(record, 28, Some(12), 20)?,
+            // [MS-WMF] 2.3.1.3, META_DIBSTRETCHBLT: the same without the colours' way.
+            0x0B41 if u32_at(record, 6)? == COPY => self.bitmap(record, 26, Some(10), 18)?,
+            // [MS-WMF] 2.3.1.2, META_DIBBITBLT: where in the bitmap it starts (row, column), how
+            // high and wide the part is, and where it goes (top, left).
+            0x0940 if u32_at(record, 6)? == COPY => self.bitmap(record, 22, None, 10)?,
             _ if IGNORED.contains(&function) => {}
             _ => return None,
         }
@@ -437,7 +481,7 @@ impl Page<'_> {
     }
 }
 
-/// A Windows metafile that draws lines, filled shapes and text and nothing else → a BMP file of
+/// A Windows metafile that draws lines, filled shapes, text and bitmaps and nothing else → a BMP file of
 /// it, for showing at `want` pixels when that is known. Text is drawn in the fonts `letters`
 /// knows; with nobody to ask, a metafile with text in it is not drawn.
 pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option<&dyn Lettering>) -> Option<Drawn> {
@@ -475,8 +519,19 @@ pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option
         return None;
     }
     at += 18;
-    let mut page =
-        Page { letters, words: String::new(), want, natural, canvas: None, state, saved: Vec::new(), objects: Vec::new(), points: 0, drew: false };
+    let mut page = Page {
+        letters,
+        words: String::new(),
+        want,
+        natural,
+        canvas: None,
+        state,
+        saved: Vec::new(),
+        objects: Vec::new(),
+        points: 0,
+        pixels: 0,
+        drew: false,
+    };
     for _ in 0..MAX_RECORDS {
         let size = size_at(data, at)?.checked_mul(2)?;
         let function = u16_at(data, at.checked_add(4)?)?;

@@ -1,15 +1,16 @@
 //! Pictures in the older Windows forms an RTF body and an attachment's rendering are kept in: a
 //! bitmap without a file's header ([MS-WMF] 2.2.2.9, DeviceIndependentBitmap), and a metafile
 //! whose only drawing is one such bitmap ([MS-WMF], [MS-EMF]). Each becomes the bytes of a BMP
-//! file, undecoded. A metafile that is a drawing of lines, filled shapes and text is drawn (`wmf`,
-//! `emf`); one that draws anything else is not read: half a picture is worse than its place.
+//! file, undecoded. A metafile that is a drawing of lines, filled shapes, text and bitmaps is
+//! drawn (`wmf`, `emf`), its bitmaps read here into pixels; one that draws anything else is not
+//! read: half a picture is worse than its place.
 
 use openmailclient_fonts::Lettering;
 
 /// Records one metafile is searched through.
 const MAX_RECORDS: usize = 4096;
 /// The raster operation that copies the bitmap as it is ([MS-WMF] 2.1.1.31, SRCCOPY).
-const COPY: u32 = 0x00CC_0020;
+pub(crate) const COPY: u32 = 0x00CC_0020;
 
 pub(crate) fn u16_at(data: &[u8], at: usize) -> Option<u16> {
     let bytes = data.get(at..at.checked_add(2)?)?;
@@ -62,6 +63,125 @@ pub fn dib_file(dib: &[u8]) -> Option<Vec<u8>> {
     file.extend_from_slice(&u32::try_from(offset).ok()?.to_le_bytes());
     file.extend_from_slice(dib);
     Some(file)
+}
+
+/// Pixels a bitmap drawn into a drawing may have along a side, and the bitmaps of one drawing
+/// between them.
+const MAX_DIB_SIDE: usize = 4096;
+pub(crate) const MAX_DIB_PIXELS: usize = 8_000_000;
+
+/// A bitmap's pixels: how many across and down, and red, green, blue and cover for each, row
+/// after row from the top.
+pub(crate) type Pixels = ((usize, usize), Vec<u8>);
+
+/// The part of a pixel's number that `mask` keeps, as a byte.
+fn masked(value: u32, mask: u32) -> u8 {
+    let bits = mask.count_ones();
+    if bits == 0 {
+        return 0;
+    }
+    let part = (value & mask) >> mask.trailing_zeros();
+    // The most the part can be; a mask with holes in it keeps less, and is held to that.
+    let most = if bits >= 32 { u32::MAX } else { (1u32 << bits) - 1 };
+    let scaled = u64::from(part.min(most)) * 255 / u64::from(most);
+    u8::try_from(scaled).unwrap_or(u8::MAX)
+}
+
+/// A bitmap without a file's header → its pixels ([MS-WMF] 2.2.2.9, DeviceIndependentBitmap).
+/// Pixels that are numbers in a table of colours, bit fields, or blue, green and red bytes, kept
+/// from the bottom row up or from the top down; none that are packed in runs (BI_RLE8, BI_RLE4)
+/// or are a picture file of another kind (BI_JPEG, BI_PNG). `None` for those, for a bitmap that
+/// is cut short, and for one of more than `most` pixels.
+pub(crate) fn dib_pixels(dib: &[u8], most: usize) -> Option<Pixels> {
+    let header = size_at(dib, 0)?;
+    let long = |at: usize| u32_at(dib, at).map(|n| n as i32);
+    // How wide, how high (below nothing: the top row first), bits to the pixel, how they are
+    // packed, colours in the table, the bytes of one of them, and masks after the header.
+    let (w, h, bits, packed, used, entry, after) = match header {
+        // [MS-WMF] 2.2.2.2, BitmapCoreHeader.
+        12 => (i32::from(u16_at(dib, 4)?), i32::from(u16_at(dib, 6)?), u16_at(dib, 10)?, 0, 0, 3, 0),
+        // [MS-WMF] 2.2.2.3 to 2.2.2.5, BitmapInfoHeader and the two longer ones.
+        40..=124 => {
+            let packed = u32_at(dib, 16)?;
+            let after = if header == 40 && packed == 3 { 12 } else { 0 };
+            (long(4)?, long(8)?, u16_at(dib, 14)?, packed, size_at(dib, 32)?, 4, after)
+        }
+        _ => return None,
+    };
+    let top_first = h < 0;
+    let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h.checked_abs()?).ok()?);
+    if w == 0 || h == 0 || w > MAX_DIB_SIDE || h > MAX_DIB_SIDE || w.checked_mul(h)? > most {
+        return None;
+    }
+    // [MS-WMF] 2.1.1.7, Compression: BI_RGB, or BI_BITFIELDS for 16 and 32 bits to the pixel.
+    let masks = match (packed, bits) {
+        (0, 1 | 4 | 8 | 24) => None,
+        (0, 16) => Some([0x7C00, 0x03E0, 0x001F]),
+        (0, 32) => Some([0x00FF_0000, 0x0000_FF00, 0x0000_00FF]),
+        // The masks stand after the shortest header, and inside the longer ones.
+        (3, 16 | 32) => Some([u32_at(dib, 40)?, u32_at(dib, 44)?, u32_at(dib, 48)?]),
+        _ => return None,
+    };
+    let colors = match bits {
+        1 | 4 | 8 => {
+            let all = 1usize << bits;
+            if used == 0 { all } else { used.min(all) }
+        }
+        _ => used.min(256),
+    };
+    let table = header.checked_add(after)?;
+    let start = table.checked_add(colors.checked_mul(entry)?)?;
+    // A row is a whole number of four bytes ([MS-WMF] 2.2.2.9).
+    let bits = usize::from(bits);
+    let row = w.checked_mul(bits)?.checked_add(31)? / 32 * 4;
+    let data = dib.get(start..start.checked_add(row.checked_mul(h)?)?)?;
+    let colour = |n: usize| -> [u8; 3] {
+        let at = table.saturating_add(n.saturating_mul(entry));
+        match dib.get(at..at.saturating_add(3)) {
+            Some(&[blue, green, red]) if n < colors => [red, green, blue],
+            _ => [0; 3],
+        }
+    };
+    let mut rgba = Vec::with_capacity(w.checked_mul(h)?.checked_mul(4)?);
+    for y in 0..h {
+        let line = data.get((if top_first { y } else { h - 1 - y }) * row..)?;
+        for x in 0..w {
+            let [red, green, blue] = match bits {
+                1 | 4 => {
+                    let byte = usize::from(*line.get(x * bits / 8)?);
+                    // The first pixel is in the highest bits of its byte.
+                    let shift = 8 - bits - (x * bits) % 8;
+                    colour((byte >> shift) & ((1 << bits) - 1))
+                }
+                8 => colour(usize::from(*line.get(x)?)),
+                24 => match line.get(x * 3..x * 3 + 3)? {
+                    &[blue, green, red] => [red, green, blue],
+                    _ => return None,
+                },
+                _ => {
+                    let value = if bits == 16 { u32::from(u16_at(line, x * 2)?) } else { u32_at(line, x * 4)? };
+                    masks?.map(|mask| masked(value, mask))
+                }
+            };
+            rgba.extend_from_slice(&[red, green, blue, 255]);
+        }
+    }
+    Some(((w, h), rgba))
+}
+
+/// The bitmap of an EMF record that carries one: its header and its pixels are two parts of the
+/// record, each at an offset from its start that is written at `at` and at `at + 8`
+/// ([MS-EMF] 2.3.1.7).
+pub(crate) fn emf_parts(record: &[u8], at: usize) -> Option<Vec<u8>> {
+    let part = |at: usize| {
+        let (start, len) = (size_at(record, at)?, size_at(record, at.checked_add(4)?)?);
+        record.get(start..start.checked_add(len)?)
+    };
+    let (header, pixels) = (part(at)?, part(at.checked_add(8)?)?);
+    let mut dib = Vec::with_capacity(header.len().checked_add(pixels.len())?);
+    dib.extend_from_slice(header);
+    dib.extend_from_slice(pixels);
+    Some(dib)
 }
 
 /// WMF records that set things up and draw nothing ([MS-WMF] 2.3.5 state records, 2.3.4 object
@@ -169,15 +289,7 @@ pub fn emf_bitmap(data: &[u8]) -> Option<Vec<u8>> {
                 if found.is_some() || u32_at(record, 64)? != 0 || u32_at(record, 68)? != COPY {
                     return None;
                 }
-                let part = |at: usize| {
-                    let (start, len) = (size_at(record, at)?, size_at(record, at + 4)?);
-                    record.get(start..start.checked_add(len)?)
-                };
-                let (header, pixels) = (part(48)?, part(56)?);
-                let mut dib = Vec::with_capacity(header.len().checked_add(pixels.len())?);
-                dib.extend_from_slice(header);
-                dib.extend_from_slice(pixels);
-                found = Some(dib);
+                found = Some(emf_parts(record, 48)?);
             }
             _ if EMF_STATE.contains(&kind) => {}
             _ => return None,

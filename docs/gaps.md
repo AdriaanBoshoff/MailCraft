@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 32 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 33 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -31,7 +31,7 @@
    (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object by the best picture it has, [MS-OLEDS]
    2.3.4 and 2.3.6, any other as a card with its name and size that a click saves),
    paragraph borders and the room paragraphs ask for above and below,
-   and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
+   and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet in a metafile: a part of a bitmap, one mirrored, turned, packed in runs or not copied as it is, a patterned brush, or text that needs shaping
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
@@ -70,6 +70,7 @@
 
 ## Revision history
 
+- 33 · 2026-10-12 — bitmaps beside a metafile's drawing (item 1).
 - 32 · 2026-10-12 — Table Style (item 3).
 - 31 · 2026-10-12 — print preview (item 3).
 - 30 · 2026-10-12 — page setup for print (item 3).
