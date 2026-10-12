@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 55 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 56 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 259, all passing |
+| Tests | 260, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -90,7 +90,8 @@
 39. Done: unsaved changes to a data file are journalled as they are made and come back after a run that ended without saving (M3b.1).
 40. Done: `file.export` of a Unicode `.pst` copies it as it is stored: hidden items, folder properties and unknown properties go along (M3b.2).
 41. Done: the edges of the panes are dragged, and the window's size and place and the panes' sizes are kept between runs (M3b.3).
-42. Next: M3b.4: right-to-left text in the message list, the reading pane's header, folder names and the compose box, then the rest of the M3b list.
+42. Done: right-to-left text reads the right way in the message list, the reading pane's header and folder names, and a turning mark cannot disguise a name (M3b.4).
+43. Next: M3b.5: the rest of the M3b list, taking the shaping of print headers, footers and list markers next.
 
 ## Do later (from M2)
 
@@ -103,7 +104,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts; Arabic joined by the font's tables and across a change of look; copying text out of a PDF in the order it is read)~~ | done: M2.42 |
 | Shaping for the text print sets itself: the name and page number at the head and foot of a page, list markers, the header's field names and values | M3b |
 | Copying text out of our PDFs tried in PDF readers (the file says what its glyphs stand for; no reader was tried) | M3b |
-| Right-to-left text in the message list, the header of the reading pane, folder names and the compose box (drawn there as stored, so Hebrew and Arabic read backwards) | M3b |
+| ~~Right-to-left text in the message list, the header of the reading pane and folder names~~ | done: M3b.4 |
+| Right-to-left text while it is typed: the compose box, the search box and a folder's name being changed (egui's text editor draws them as stored; the cursor has to follow the turned text) | M3b |
+| A right-to-left line in the list, the header and the folder pane set from the right of its cell | M5, with views |
 | For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | ~~Keeping the page setup between runs~~ | done: M3.5 |
@@ -805,3 +808,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   them; the settings file is written at most once a second while a window is dragged. The
   list has no columns to keep yet (it shows each message on three lines); that waits for
   the views of M5.
+- **2026-10-12** - M3b.4: right-to-left text outside the body. Every single line the window draws from a
+  message or a data file (folder names, the sender, subject and preview in the list, the
+  header of the reading pane, the title, the chips of attachments) goes through one place,
+  and that place now puts a line with Hebrew or Arabic in it in the order it is read
+  (UAX #9), its direction that of its first letter, the same way a paragraph of a body is
+  turned. Made better on the way: a line too long for its room loses the end of the text as
+  it is read, with the ellipsis there, and not whatever happens to stand at the right; and
+  the marks that turn the text after them round (embeddings, overrides, isolates) are left
+  out of such lines, so an attachment called `photo<mark>gpj.exe` is shown with the ending it
+  has and not as `photoexe.jpg` (found by the test written for it: the marks were honoured
+  at first). Looked at in a headless capture with our own Hebrew and Arabic lines. Not yet:
+  the compose box and the search box (egui's own text editor draws them as stored), and a
+  right-to-left line is still set from the left of its cell.

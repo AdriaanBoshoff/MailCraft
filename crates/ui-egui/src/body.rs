@@ -842,7 +842,7 @@ struct Word {
 /// Adds `text` to a text to lay out as a section of its own. The text shaper works section by
 /// section and takes each to run one way; `LayoutJob::append` would make one section of
 /// neighbours that look alike.
-fn section_of_its_own(job: &mut LayoutJob, text: &str, lead: f32, format: TextFormat) {
+pub(crate) fn section_of_its_own(job: &mut LayoutJob, text: &str, lead: f32, format: TextFormat) {
     let start = job.text.len();
     job.text.push_str(text);
     job.sections.push(egui::text::LayoutSection {
@@ -873,7 +873,7 @@ fn shaped_from_the_right(text: &[char]) -> bool {
 /// A word as it is handed to the text shaper so that it is drawn the way `level` says. The
 /// shaper turns a word of right-to-left letters round, and its brackets with it; whatever else
 /// is to be turned is turned here.
-fn spelled(text: &[char], level: u8) -> String {
+pub(crate) fn spelled(text: &[char], level: u8) -> String {
     match (level % 2 == 1, shaped_from_the_right(text)) {
         (true, true) | (false, false) => text.iter().collect(),
         (true, false) => text.iter().rev().map(|c| script::mirrored(*c)).collect(),

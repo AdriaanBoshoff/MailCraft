@@ -236,8 +236,57 @@ pub(crate) fn bold(size: f32) -> FontId {
 }
 
 /// One line of untrusted text: control characters flattened and length capped before layout.
+/// The marks that turn the text after them round or set it apart (UAX #9, 2.1 to 2.4: the
+/// embeddings, overrides and isolates) are left out, so a name such as an attachment's cannot
+/// be made to show another ending than the one it has; letters keep their own direction.
 pub(crate) fn one_line(s: &str) -> String {
-    s.chars().take(400).map(|c| if c.is_control() { ' ' } else { c }).collect()
+    s.chars()
+        .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        .take(400)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// One line of text as it is seen: a line with right-to-left writing in it is put in the
+/// order it is read in (UAX #9, L2), its direction that of its first letter. The text shaper
+/// takes each piece it is handed to run one way, so letters written from the right are handed
+/// to it apart from everything else, as in a message's body.
+pub(crate) fn seen_line(text: &str, font: FontId, color: Color32) -> LayoutJob {
+    use openmailclient_fonts::script;
+    let text = one_line(text);
+    if !script::has_rtl(&text) {
+        return LayoutJob::simple_singleline(text, font, color);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let rtl = script::first_strong(&text).unwrap_or(false);
+    let levels = script::levels(&text, Some(rtl));
+    // Pieces: characters that stand equally deep and are of one kind (blanks, letters written
+    // from the right, anything else).
+    let mut pieces: Vec<(usize, usize, u8, u8)> = Vec::new();
+    for (at, c) in chars.iter().enumerate() {
+        let level = levels.get(at).copied().unwrap_or(0);
+        let kind = if c.is_whitespace() {
+            0
+        } else if script::is_rtl(*c) {
+            1
+        } else {
+            2
+        };
+        match pieces.last_mut() {
+            Some(last) if last.2 == level && last.3 == kind => last.1 = at + 1,
+            _ => pieces.push((at, at + 1, level, kind)),
+        }
+    }
+    let stand_ins: Vec<char> = pieces.iter().map(|p| if p.3 == 0 { ' ' } else { 'a' }).collect();
+    let depth: Vec<u8> = pieces.iter().map(|p| p.2).collect();
+    let format = egui::TextFormat::simple(font, color);
+    let mut job = LayoutJob::default();
+    for i in script::order(&stand_ins, &depth, u8::from(rtl)) {
+        let Some((from, to, level, _)) = pieces.get(i).copied() else { continue };
+        let Some(piece) = chars.get(from..to) else { continue };
+        body::section_of_its_own(&mut job, &body::spelled(piece, level), 0.0, format.clone());
+    }
+    job
 }
 
 /// Draw one line clipped to `width` with an ellipsis; returns the width used.
@@ -245,9 +294,37 @@ pub(crate) fn clip_text(p: &Painter, pos: Pos2, width: f32, text: &str, font: Fo
     if width < 6.0 {
         return 0.0;
     }
-    let mut job = LayoutJob::simple_singleline(one_line(text), font, color);
-    job.wrap = TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-    let galley = p.layout_job(job);
+    let galley = if openmailclient_fonts::script::has_rtl(text) {
+        // What does not fit is cut from the end of the text as it is read, which is not the
+        // right end of the line when the line is read from the right.
+        let chars: Vec<char> = one_line(text).chars().collect();
+        let cut = |keep: usize| {
+            let mut kept: String = chars.iter().take(keep).collect();
+            if keep < chars.len() {
+                kept.push('…');
+            }
+            p.layout_job(seen_line(&kept, font.clone(), color))
+        };
+        let whole = cut(chars.len());
+        if whole.size().x <= width {
+            whole
+        } else {
+            let (mut fits, mut too_long) = (0, chars.len());
+            while too_long - fits > 1 {
+                let middle = fits + (too_long - fits) / 2;
+                if cut(middle).size().x <= width {
+                    fits = middle;
+                } else {
+                    too_long = middle;
+                }
+            }
+            cut(fits)
+        }
+    } else {
+        let mut job = LayoutJob::simple_singleline(one_line(text), font, color);
+        job.wrap = TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        p.layout_job(job)
+    };
     let used = galley.size().x;
     p.galley(pos, galley, color);
     used

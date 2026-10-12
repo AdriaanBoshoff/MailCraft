@@ -1038,3 +1038,59 @@ fn the_window_stands_where_it_stood_and_never_where_no_screen_is() {
             && asked.contains(&egui::ViewportCommand::OuterPosition(egui::pos2(40.0, 40.0)))
     );
 }
+
+#[test]
+fn one_line_with_right_to_left_writing_is_drawn_in_the_order_it_is_read() {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    // What is drawn from the left, and how wide: a subject, a name, a folder's name.
+    let seen = |text: &str, width: f32| {
+        let mut out = (String::new(), 0.0);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let job = seen_line(text, font(13.0), Color32::BLACK);
+            let whole = ui.painter().layout_job(job);
+            let used = clip_text(ui.painter(), egui::pos2(0.0, 0.0), width, text, font(13.0), Color32::BLACK);
+            let drawn: String = whole.rows.iter().flat_map(|row| row.glyphs.iter().filter(|g| g.advance_width > 0.0).map(|g| g.chr)).collect();
+            out = (drawn, used);
+        });
+        output.textures_delta.clear();
+        out
+    };
+    // A Hebrew word in a Latin line is turned and stays where it is; a Latin word in a Hebrew
+    // line is read as it is, and the line runs from the right.
+    assert_eq!(seen("RE: \u{5d0}\u{5d1}\u{5d2} plan", 900.0).0, "RE: \u{5d2}\u{5d1}\u{5d0} plan");
+    assert_eq!(seen("\u{5d0}\u{5d1} ab cd (\u{5d2}).", 900.0).0, ".(\u{5d2}) ab cd \u{5d1}\u{5d0}");
+    assert_eq!(seen("\u{5d0}\u{5d1} 123 x", 900.0).0, "x 123 \u{5d1}\u{5d0}");
+    assert_eq!(seen("To  \u{5d3}\u{5d5}\u{5d3} <dod@example.org>", 900.0).0, "To  \u{5d3}\u{5d5}\u{5d3} <dod@example.org>");
+    // A mark that would turn the letters after it round does not: an attachment's name is
+    // seen with its ending where it is stored.
+    for name in ["photo\u{202e}gpj.exe", "\u{5d0} photo\u{202e}gpj.exe", "invoice\u{2067}fdp.scr\u{2069}"] {
+        let drawn: String = seen(name, 900.0).0.chars().filter(|c| c.is_ascii() && *c != ' ').collect();
+        assert!(drawn.ends_with("gpj.exe") || drawn.ends_with("fdp.scr"), "{drawn}");
+    }
+    // Text with no such writing goes the way it always did.
+    assert_eq!(seen("Budget (draft)", 900.0).0, "Budget (draft)");
+
+    // Too long for its room, a line loses its end as it is read, never its start.
+    let long = format!("\u{5e9}\u{5dc}\u{5d5}\u{5dd} {}", "\u{5d0}\u{5d1}\u{5d2} ".repeat(40));
+    let (whole, _) = seen(&long, 4000.0);
+    let width_of = |text: &str| seen(text, 4000.0).1;
+    assert!(width_of(&long) > 300.0);
+    let used = seen(&long, 120.0).1;
+    assert!(used <= 120.0 && used > 60.0, "{used}");
+    // What is kept is the start of the text, which stands at the right of the whole line.
+    assert!(whole.ends_with("\u{5dd}\u{5d5}\u{5dc}\u{5e9}"));
+    // No room at all, and hostile lines: nothing is drawn, nothing panics.
+    assert_eq!(seen(&long, 3.0).1, 0.0);
+    for hostile in [
+        "\u{202e}",
+        "\u{202e}\u{202e}\u{202d}a\u{5d0}\u{202c}\u{202c}\u{202c}",
+        "\u{5d0}\n\u{7}\u{0}",
+        &"\u{627}\u{644}".repeat(3000),
+        "\u{2067}\u{2066}\u{2069}",
+    ] {
+        for width in [0.0, 7.0, 40.0, 1e9, f32::INFINITY, f32::NAN] {
+            let _ = seen(hostile, width);
+        }
+    }
+}
