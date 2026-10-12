@@ -1,15 +1,15 @@
 # Gaps
 
-**Status:** revision 42 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 43 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 1. **No accounts, no sending, no receiving.** IMAP, POP3, SMTP and Exchange are absent. `compose.send`
    files the message in Outbox and says so.
-2. **Changes to a data file are kept only when saved, and only for a Unicode `.pst`.** `file.save`
+2. **Changes to a data file are kept only for a Unicode `.pst`, and none of it is proved in Outlook.** `file.save`
    (M3.4) rewrites the whole file beside itself and swaps it in; nothing we write has been opened in
-   Outlook. Changes are not journalled as they are made, so a crash loses what was not saved (never
-   the file). An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` (M3.3) goes
+   Outlook. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
+   after a run that ended without saving; a power cut may cost the last few of them. An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` (M3.3) goes
    through the model: hidden (associated) items and folder properties beyond name, class and counts
    are not carried, and the new file does not say which folder is the Calendar or Contacts. Changes
    made in the sample mailbox live in memory and are lost on exit unless exported.
@@ -76,6 +76,7 @@
 
 ## Revision history
 
+- 43 · 2026-10-12 — M3b.1: unsaved changes to a Unicode `.pst` are journalled beside the file and come back after a crash.
 - 42 · 2026-10-12 — M3.5: settings (page setup, panes, theme, open data files) are kept between runs; M3 closed.
 - 41 · 2026-10-12 — M3.4: changes to an open Unicode `.pst` are kept by `file.save`; `.ost`, ANSI and 4K-page files stay read-only.
 - 40 · 2026-10-12 — M3.3: a mailbox is saved as a new `.pst` (`file.export`); changing an open `.pst` is M3.4.

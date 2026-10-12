@@ -2232,3 +2232,66 @@ fn settings_are_kept_between_runs() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn unsaved_changes_come_back_when_the_data_file_is_opened_again() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-journal-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.pst");
+    run(&mut session(), "file.export", json!({"path": path}));
+    let first = std::fs::read(&path).unwrap();
+    let names = |s: &Session| s.folders[0].iter().map(|f| (f.name.clone(), f.total, f.unread)).collect::<Vec<_>>();
+
+    let mut s = Session::new();
+    s.now = now();
+    let opened = run(&mut s, "file.open", json!({"path": path}));
+    assert_eq!((opened["recovered"].clone(), opened["lost"].clone(), opened["staleJournal"].clone()), (json!(0), json!(0), json!(false)));
+    assert_eq!(s.inspect()["stores"][0]["journalled"], false, "nothing is unsaved yet");
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut s, "mail.flag", Value::Null);
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 1}));
+    run(&mut s, "mail.move", json!({"folder": "Sent Items"}));
+    run(&mut s, "folder.new", json!({"name": "Kept here"}));
+    assert!(s.unsaved() && !s.unjournalled());
+    assert_eq!(s.inspect()["stores"][0]["journalled"], true);
+    let want = names(&s);
+    // The run ends here without a save: the data file is as it was.
+    drop(s);
+    assert_eq!(std::fs::read(&path).unwrap(), first);
+
+    // Opened without asking for them, the changes stay where they are.
+    let mut cold = Session::new();
+    let opened = run(&mut cold, "file.open", json!({"path": path, "recover": false}));
+    assert_eq!(opened["recovered"], 0);
+    assert!(!cold.unsaved() && names(&cold) != want);
+    drop(cold);
+
+    let mut next = Session::new();
+    next.now = now();
+    let opened = run(&mut next, "file.open", json!({"path": path}));
+    assert!(opened["recovered"].as_u64().unwrap() >= 3 && opened["lost"] == 0, "{opened}");
+    assert!(next.status.contains("were brought back"), "{}", next.status);
+    assert!(next.unsaved() && next.is_enabled("file.save"));
+    assert_eq!(names(&next), want);
+    assert_eq!(std::fs::read(&path).unwrap(), first, "bringing changes back writes nothing to the data file");
+
+    // Thrown away, they are gone for good: the next opening finds nothing.
+    run(&mut next, "file.closeStore", json!({"discard": true}));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let opened = run(&mut next, "file.open", json!({"path": path}));
+    assert_eq!(opened["recovered"], 0);
+    assert!(!next.unsaved() && names(&next) != want);
+
+    // Saved, they are in the file and the journal is gone.
+    run(&mut next, "folder.new", json!({"name": "Saved this time"}));
+    let want = names(&next);
+    run(&mut next, "file.save", Value::Null);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    drop(next);
+    let mut last = Session::new();
+    assert_eq!(run(&mut last, "file.open", json!({"path": path}))["recovered"], 0);
+    assert_eq!(names(&last), want);
+    drop(last);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

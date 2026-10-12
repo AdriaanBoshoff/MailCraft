@@ -468,6 +468,12 @@ impl Session {
         cmd::settings::current(self, ui)
     }
 
+    /// True when unsaved changes to a data file are in memory only: not also in a journal
+    /// that would bring them back after a run that ends badly.
+    pub fn unjournalled(&self) -> bool {
+        self.stores.iter().any(|s| s.unsaved() && s.journal_trouble().is_some())
+    }
+
     /// True when a data file has changes that are not in the file yet.
     pub fn unsaved(&self) -> bool {
         self.stores.iter().any(|s| s.unsaved())
@@ -498,6 +504,7 @@ impl Session {
                     "path": s.path().map(|p| p.display().to_string()),
                     "writable": s.writable(),
                     "unsaved": s.unsaved(),
+                    "journalled": s.unsaved() && s.journal_trouble().is_none(),
                     "folders": folders.iter().map(|f| json!({
                         "id": f.id.0, "parent": f.parent.map(|p| p.0), "name": f.name, "kind": format!("{:?}", f.kind),
                         "total": f.total, "unread": f.unread,

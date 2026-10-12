@@ -7,13 +7,13 @@ use crate::{PstStore, Written};
 use openmailclient_model::{Attachment, Flag, FolderId, FolderInfo, FolderKind, Item, ItemId, PropValue, Store, StoreError, Summary, pid, ptype};
 use std::io::Cursor;
 
-type Whole = Vec<(String, FolderInfo, Vec<(Summary, Item)>)>;
+pub(super) type Whole = Vec<(String, FolderInfo, Vec<(Summary, Item)>)>;
 
 fn open() -> PstStore {
     PstStore::from_bytes(save(&mut mailbox()).0).unwrap()
 }
 
-fn folder(store: &mut PstStore, name: &str) -> FolderInfo {
+pub(super) fn folder(store: &mut PstStore, name: &str) -> FolderInfo {
     store.folders().unwrap().into_iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no folder {name}"))
 }
 
@@ -27,7 +27,7 @@ fn saved(store: &mut PstStore) -> PstStore {
 }
 
 /// A store's folders and messages, each message loaded.
-fn whole(store: &mut PstStore) -> Whole {
+pub(super) fn whole(store: &mut PstStore) -> Whole {
     tree(store)
         .into_iter()
         .map(|(path, f, list)| {
@@ -38,7 +38,7 @@ fn whole(store: &mut PstStore) -> Whole {
 }
 
 /// What was saved reads back as what was shown before saving.
-fn same_mailbox(want: &Whole, got: &Whole) {
+pub(super) fn same_mailbox(want: &Whole, got: &Whole) {
     assert_eq!(got.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), want.iter().map(|f| f.0.as_str()).collect::<Vec<_>>());
     for ((path, w, w_items), (_, g, g_items)) in want.iter().zip(got) {
         assert_eq!((g.id, g.parent, g.total, g.unread, g.has_children), (w.id, w.parent, w.total, w.unread, w.has_children), "{path}");
@@ -194,7 +194,7 @@ fn what_this_program_does_not_understand_is_kept() {
     assert!(!row.read && row.to.is_empty());
 }
 
-fn scratch(name: &str) -> std::path::PathBuf {
+pub(super) fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("omc-edit-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -241,7 +241,9 @@ fn a_file_on_disk_is_replaced_whole_or_not_at_all() {
     std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
     assert!(store.save(UID).is_err());
     assert!(store.unsaved() && std::fs::read(&path).unwrap() == theirs);
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    // Beside the file: the file as it first was, and the journal of what is not saved.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    assert!(crate::journal_beside(&path).exists());
     // The file as it first was is not written over by later saves.
     assert!(std::fs::read(crate::original_beside(&path)).unwrap() == bytes);
     drop(store);
@@ -264,7 +266,9 @@ fn a_file_another_program_has_open_is_not_replaced() {
     let theirs = std::fs::File::open(&path).unwrap();
     assert!(store.save(UID).is_err());
     assert!(store.unsaved() && std::fs::read(&path).unwrap() == before);
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    // Nothing is left of the save that failed; the journal of the change is still there.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    assert!(crate::journal_beside(&path).exists());
     // The store still reads the file it had, with the change on top.
     assert!(store.load(inbox.id, first).unwrap().is_read());
     drop(theirs);

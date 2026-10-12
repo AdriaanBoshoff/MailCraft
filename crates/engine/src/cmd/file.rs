@@ -3,7 +3,7 @@
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_str, p_u64};
 use crate::io::{self, Opened};
 use crate::{CmdResult, EngineError, Session, attachments};
-use openmailclient_model::{FolderId, MemStore, StoreError};
+use openmailclient_model::{FolderId, MemStore, Recovery, StoreError};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::Path;
@@ -19,7 +19,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "Ctrl+O",
-            params: r#"{"path": a .pst, .ost, .msg, .oft or .eml file}; nothing is written to it until file.save"#,
+            params: r#"{"path": a .pst, .ost, .msg, .oft or .eml file, "recover": false to leave unsaved changes of an earlier run where they are}; nothing is written to the file until file.save; changes a run that ended without saving left in the journal beside a data file are brought back, unsaved as they were; returns {"store", "recovered", "lost", "staleJournal"}"#,
             enabled: always,
             run: open,
         },
@@ -180,13 +180,33 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
         return Ok(json!({ "store": idx, "already": true }));
     }
     match io::open_path(path)? {
-        Opened::Store(store) => {
+        Opened::Store(mut store) => {
             let name = store.display_name();
+            // What a run that ended without saving left in the journal comes back, unsaved
+            // as it was. A journal that cannot be read does not keep the file from opening.
+            let found = if p_bool(p, "recover") == Some(false) { Ok(Recovery::default()) } else { store.recover() };
             let idx = s.add_store(store);
             s.select_default_folder(idx);
             let mode = if s.stores.get(idx).is_some_and(|st| st.writable()) { "changes are kept when saved" } else { "read-only" };
             s.status = format!("Opened {name} ({mode})");
-            Ok(json!({ "store": idx }))
+            let found = match found {
+                Ok(found) => found,
+                Err(e) => {
+                    s.status = format!("Opened {name}; the journal of unsaved changes beside it could not be read ({e})");
+                    Recovery::default()
+                }
+            };
+            if found.applied > 0 {
+                s.status = format!("Opened {name}: {} unsaved changes of last time were brought back; Save Changes keeps them", found.applied);
+            }
+            if found.lost > 0 {
+                s.status.push_str(&format!("; {} or more could not be, and the journal as it was found is kept beside the file", found.lost));
+            } else if found.stale {
+                s.status.push_str("; a journal of unsaved changes beside it is for the file as it once was, and was left alone");
+            } else if found.held {
+                s.status.push_str("; another running OpenMailClient has unsaved changes to it, so changes made here are not journalled");
+            }
+            Ok(json!({ "store": idx, "recovered": found.applied, "lost": found.lost, "staleJournal": found.stale }))
         }
         Opened::Item(item) => {
             let idx = match s.stores.iter().position(|st| st.display_name() == OPENED_FILES && st.writable()) {
@@ -437,6 +457,9 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
             return Err(EngineError::BadParams(
                 r#"the data file has unsaved changes: file.save first, or close it with {"save": true} or {"discard": true}"#.into(),
             ));
+        } else if let Some(store) = s.stores.get_mut(idx) {
+            // Thrown away for good: the journal of them goes too, so they do not come back.
+            store.discard();
         }
     }
     s.stores.remove(idx);

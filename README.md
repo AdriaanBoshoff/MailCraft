@@ -1,8 +1,8 @@
 # OpenMailClient
 
-![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20next-orange)
+![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-248%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-255%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -31,7 +31,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3 | **Writing `.pst`**: a mailbox saved as a `.pst`, changes to an open one kept, settings kept | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
-| M3b | **The do-later batch**: journalled changes and what M2 and M3 left | ![next](https://img.shields.io/badge/-next-orange) |
+| M3b | **The do-later batch**: journalled changes (done) and what M2 and M3 left | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
@@ -63,7 +63,9 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - Opens Outlook data files (`.pst`, `.ost`) and single messages (`.msg`, `.oft`, `.eml`). Nothing is
   written to a data file until Save Changes (Ctrl+S): changes to a Unicode `.pst` are then written
   to a new file that is checked, read back and swapped in, with the file as it was kept beside
-  it on the first save. `.ost`, ANSI and 4K-page files are read-only.
+  it on the first save. Until then each change is journalled beside the file, so a crash or a
+  closed window does not lose it: it comes back, still unsaved, when the file is opened again.
+  `.ost`, ANSI and 4K-page files are read-only.
 - An Outlook-Classic-style window: ribbon (simplified and classic), folder pane, message list with
   date groups, reading pane, light and dark themes.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
@@ -82,9 +84,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 ## What does not work yet
 
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
-- **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. Changes
-  are kept only when saved (no journal: a crash loses what was not saved, never the file), and
-  ANSI and 4K-page data files cannot be changed.
+- **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. ANSI
+  and 4K-page data files cannot be changed.
 - **Parts of formatted bodies.** Right-to-left text outside the message body; complex scripts
   on screen beyond what egui shapes; SVG, WebP and
   TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a

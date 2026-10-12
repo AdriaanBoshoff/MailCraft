@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 52 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 53 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 248, all passing |
+| Tests | 255, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | next |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -87,7 +87,8 @@
 36. Done: a mailbox is saved as a new `.pst`: folders, messages, attachments, the nodes every data file must have (M3.3).
 37. Done: changes to an open Unicode `.pst` are kept: `file.save` writes the file anew beside itself, with everything untouched copied as it is stored (M3.4).
 38. Done: settings are kept between runs: the page setup, the panes, the theme and ribbon, and the data files that were open (M3.5). M3 closed.
-39. Next: the M3b batch (the do-later list), starting with what guards mail: changes journalled as they are made.
+39. Done: unsaved changes to a data file are journalled as they are made and come back after a run that ended without saving (M3b.1).
+40. Next: M3b.2: `file.export` copies nodes as `file.save` does when the source is a `.pst` (hidden items and folder properties carried), then the rest of the M3b list.
 
 ## Do later (from M2)
 
@@ -111,7 +112,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile); with it, where a message attached to a message is kept and the bucket of a named property, both written from the specification alone | when the owner says so |
 | ~~Hidden (associated) items and a folder's own properties beyond name, class and counts kept when an open `.pst` is saved~~ | done: M3.4 |
 | Hidden (associated) items and a folder's own properties carried by `file.export` (it goes through the model; it should copy nodes as `file.save` does when the source is a `.pst`) | M3b |
-| Changes journalled as they are made, or saved on their own after a while: a crash loses what was not saved (never the file) | M3b |
+| ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
+| The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact | M3b |
+| Unsaved changes saved on their own after a while (waits for the writer to be proved in Outlook: nothing writes a data file unasked until then) | when the owner says so, with the Outlook check |
 | A save that does not rewrite the whole data file; saving off the UI thread, with progress | M3b |
 | Unknown properties of an attachment kept when a message's attachments change (the list is rewritten from the model then) | M3b |
 | The cells of a changed message in search-folder tables (rows of deleted messages are taken out; changed ones keep their old cells) | M3b |
@@ -746,3 +749,27 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   first wording also named has a slot: changes journalled as they are made (M3b) and rules
   kept between runs (M5, where rules are built). Nothing our writer made has been opened in
   Outlook yet (needs the owner's say).
+- **2026-10-12** - M3b.1: unsaved changes are journalled. Each change to an open Unicode `.pst` is now
+  also written, as it is made, to a journal beside the file (`name.pst.openmailclient-journal`,
+  `crates/pst/src/journal.rs`); the data file itself is still written only by `file.save`.
+  When the file is opened again after a run that ended without saving, `file.open` plays the
+  journal back and the changes are there, unsaved as they were (`{"recover": false}` leaves
+  them where they are); `file.save` puts them in the file and takes the journal away, and
+  closing with `{"discard": true}` throws both away. The journal is a list of what was asked
+  for, each record a length, a checksum and the request, and is tied to the file it was made
+  for by the file's length and the sum of its header: a journal for a file that anyone has
+  written since is never applied (it is left alone, and kept under `.old` when a new one
+  starts). Playing back stops at the first record that is cut short, damaged or cannot be
+  done; what came before stands, the journal as found is kept under `.old`, and the status
+  line says how many were lost. A journal is read as hostile: lengths are believed only as
+  far as the file goes, counts only as far as the record goes, messages attached to messages
+  16 deep. Two running copies do not write one journal: the second is told, and its changes
+  live in memory only (the File page and the word at exit say so). Made better on the way: a
+  change to a message is journalled as what changed in it, and a move as the move, so marking
+  a message with a 600 KB attachment as read and moving it costs under 1 KB; leaving the app
+  with unsaved changes no longer loses them, and the word at exit says they come back. Each
+  record reaches the system as it is made (a crash of the program loses nothing) and the disk
+  every 64 records (a power cut may cost the last few; the cut record is dropped, never half
+  applied). Not yet, each with a slot: the journal is beside the data file only (a folder
+  that cannot be written means no journal, said on the File page); a save still rewrites the
+  whole file.

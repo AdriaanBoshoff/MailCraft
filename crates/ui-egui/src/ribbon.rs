@@ -529,6 +529,8 @@ impl MailUi {
             clip_text(&p, pos2(x + 14.0, y), width, &store.display_name(), bold(14.0), t.text);
             let location = store.path().map_or_else(|| "In memory (not saved to disk)".to_string(), |path| path.display().to_string());
             let mode = match (store.writable(), store.unsaved()) {
+                (_, true) if store.journal_trouble().is_some() => "unsaved changes, in memory only",
+                (_, true) if store.path().is_some() => "unsaved changes, journalled beside the file",
                 (_, true) => "unsaved changes",
                 (true, false) => "editable",
                 (false, _) => "read-only",

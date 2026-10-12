@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 9 · 2026-10-12 · changes to an open Unicode `.pst` are kept when saved (M3.4): what was not changed is copied as stored; read back by our reader, not yet opened in Outlook
+**Status:** revision 10 · 2026-10-12 · unsaved changes to a Unicode `.pst` are journalled beside it and come back after a crash (M3b.1); nothing our writer made has been opened in Outlook yet
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -77,7 +77,7 @@ profile and waits for their say. `file.export` writes the new file beside the ta
 against the structure check and only then puts it in the target's place. `file.save` does the
 same for an open file, reads the new file back and compares it with what was shown, refuses
 when another program wrote the file since it was opened or has it open, and on the first save
-keeps the file as it was beside it (`name.before-openmailclient.pst`). `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
+keeps the file as it was beside it (`name.before-openmailclient.pst`). Until a save, each change is journalled in a file of our own beside the data file (`name.pst.openmailclient-journal`: our format, not Outlook's, and never read by it) and played back when the file is opened again; the data file is written only by a save. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
 the format (ANSI and 4K-page files are not checked yet).
 
 ## `.eml` (RFC 5322, MIME)

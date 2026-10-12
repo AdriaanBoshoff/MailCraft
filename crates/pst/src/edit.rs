@@ -7,13 +7,16 @@
 //! A changed message keeps every stored property that was not changed. The new file is checked,
 //! read back and only then put in the old one's place.
 
+use crate::journal::{self, Diff, Found, Journal, Op};
 use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Subs, encode, write_pc};
 use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver};
 use crate::store_write::{ASSOC, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, copy, count, flag, int, text};
 use crate::write::{NdbWriter, Sub};
 use crate::{LTP_INTERNAL, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore};
-use openmailclient_model::{FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropValue, StoreError, Summary, pid};
+use openmailclient_model::{
+    FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropValue, Recovery, StoreError, Summary, pid,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -156,6 +159,96 @@ impl PstStore {
 
     pub(crate) fn note_stamp(&mut self) {
         self.stamp = self.path.as_deref().and_then(stamp);
+        self.ident = self.path.as_deref().and_then(journal::ident);
+    }
+
+    /// Write a request that was done into the journal.
+    fn log(&mut self, op: &Op) {
+        self.journal.log(self.path.as_deref(), self.ident, op);
+    }
+
+    pub(crate) fn e_journal_trouble(&self) -> Option<String> {
+        self.journal.trouble.clone().filter(|_| self.e_unsaved())
+    }
+
+    /// Throw the unsaved changes away, and their journal with them.
+    pub(crate) fn e_discard(&mut self) {
+        self.edits = None;
+        self.journal.finish(self.path.as_deref());
+    }
+
+    /// Bring back the changes a run that ended without saving left in the journal beside the
+    /// file. They are unsaved again, as they were; the data file is not written. Playing back
+    /// stops at the first change that is damaged or cannot be made; when any is lost that
+    /// way, the journal as it was found is kept beside the file under another name.
+    pub fn recover(&mut self) -> Result<Recovery, PstError> {
+        let mut out = Recovery::default();
+        let (Some(path), Some(ident)) = (self.path.clone(), self.ident) else { return Ok(out) };
+        if !self.can_edit() || self.e_unsaved() || self.journal.open() {
+            return Ok(out);
+        }
+        match Journal::read(&path, ident)? {
+            Found::Nothing => {}
+            Found::Stale => out.stale = true,
+            Found::Held => {
+                out.held = true;
+                self.journal.trouble = Some("another running OpenMailClient has this data file's journal".to_string());
+            }
+            Found::Records { mut file, records, torn } => {
+                let total = records.len();
+                let (mut end, mut applied) = (journal::HEADER, 0usize);
+                self.journal.playing = true;
+                for (payload, ends) in records {
+                    if Op::decode(&payload).and_then(|op| self.play(op).ok()).is_none() {
+                        break;
+                    }
+                    (end, applied) = (ends, applied.saturating_add(1));
+                }
+                self.journal.playing = false;
+                out.applied = u32::try_from(applied).unwrap_or(u32::MAX);
+                out.lost = u32::try_from(total.saturating_sub(applied)).unwrap_or(u32::MAX).saturating_add(u32::from(torn && applied == total));
+                if out.lost > 0 {
+                    journal::keep_aside(&mut file, &path);
+                }
+                if applied == 0 {
+                    // Nothing to go on from: no journal until there is a change to write.
+                    self.edits = None;
+                    drop(file);
+                    let _ = std::fs::remove_file(journal::journal_beside(&path));
+                } else if let Err(e) = self.journal.resume(file, end, out.applied) {
+                    self.journal.trouble = Some(format!("the journal could not be gone on with ({e})"));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Do one journalled request again.
+    fn play(&mut self, op: Op) -> Result<(), StoreError> {
+        match op {
+            Op::Update { folder, id, diff } => {
+                let (folder, id) = (FolderId(folder), ItemId(id));
+                self.looked_into(folder)?;
+                let mut item = self.e_load(folder, id)?;
+                diff.apply(&mut item);
+                self.e_update(folder, id, item)
+            }
+            Op::Add { folder, item } => self.e_add(FolderId(folder), item).map(|_| ()),
+            Op::Put { folder, nid } => {
+                let at = self.looked_into(FolderId(folder))?;
+                let edits = self.edits()?;
+                let i = edits.limbo.iter().position(|(e, _)| e.nid == nid).ok_or(StoreError::NoItem)?;
+                let entry = edits.limbo.swap_remove(i).0;
+                self.entries(at)?.push(entry);
+                self.touched(at);
+                Ok(())
+            }
+            Op::Remove { folder, id } => self.e_remove(FolderId(folder), ItemId(id)).map(|_| ()),
+            Op::CreateFolder { parent, name } => self.e_create_folder(FolderId(parent), &name).map(|_| ()),
+            Op::RenameFolder { folder, name } => self.e_rename_folder(FolderId(folder), &name),
+            Op::DeleteFolder { folder } => self.e_delete_folder(FolderId(folder)),
+            Op::MoveFolder { folder, parent } => self.e_move_folder(FolderId(folder), FolderId(parent)),
+        }
     }
 
     fn edits(&mut self) -> Result<&mut Edits, StoreError> {
@@ -250,10 +343,31 @@ impl PstStore {
 
     pub(crate) fn e_update(&mut self, folder: FolderId, id: ItemId, item: Item) -> Result<(), StoreError> {
         let at = self.looked_into(folder)?;
+        let on = self.journal.on();
+        let entry = self.entries(at)?.iter().find(|e| u64::from(e.nid) == id.0).ok_or(StoreError::NoItem)?;
+        // The journal takes what changed in the message, not the message.
+        let op = if on {
+            let diff = match entry.item.as_deref().map(|was| Diff::between(was, &item)) {
+                Some(diff) => Ok(diff),
+                None => self.file_load(id).map(|was| Diff::between(&was, &item)),
+            };
+            match diff {
+                Ok(diff) => Some(Op::Update { folder: folder.0, id: id.0, diff }),
+                Err(e) => {
+                    self.journal.trouble = Some(format!("a message could not be read to journal a change to it ({e})"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let entry = self.entries(at)?.iter_mut().find(|e| u64::from(e.nid) == id.0).ok_or(StoreError::NoItem)?;
         entry.summary = item.summary(id.0);
         entry.item = Some(Box::new(item));
         self.touched(at);
+        if let Some(op) = op {
+            self.log(&op);
+        }
         Ok(())
     }
 
@@ -262,16 +376,24 @@ impl PstStore {
         let edits = self.edits()?;
         // A message just taken out of a folder is the same message when it is put into one:
         // it keeps its node, and with it everything the file holds for it.
-        let entry = match edits.limbo.iter().position(|(_, was)| *was == item) {
-            Some(i) => edits.limbo.swap_remove(i).0,
+        let (entry, op) = match edits.limbo.iter().position(|(_, was)| *was == item) {
+            Some(i) => {
+                let entry = edits.limbo.swap_remove(i).0;
+                let op = Op::Put { folder: folder.0, nid: entry.nid };
+                (entry, op)
+            }
             None => {
                 let nid = edits.fresh(TYPE_MESSAGE)?;
-                Entry { nid, summary: item.summary(u64::from(nid)), item: Some(Box::new(item)), new: true }
+                let summary = item.summary(u64::from(nid));
+                // The journal's copy is made only when there is a journal to write it to.
+                let op = Op::Add { folder: folder.0, item: if self.journal.on() { item.clone() } else { Item::default() } };
+                (Entry { nid, summary, item: Some(Box::new(item)), new: true }, op)
             }
         };
         let id = ItemId(u64::from(entry.nid));
         self.entries(at)?.push(entry);
         self.touched(at);
+        self.log(&op);
         Ok(id)
     }
 
@@ -290,6 +412,7 @@ impl PstStore {
         }
         edits.limbo.push((entry, item.clone()));
         self.touched(at);
+        self.log(&Op::Remove { folder: folder.0, id: id.0 });
         Ok(item)
     }
 
@@ -312,6 +435,7 @@ impl PstStore {
         edits.folders.insert(at, EFolder { info, nid, new: true, items: Some(Vec::new()), had: Vec::new() });
         edits.mark_parents();
         edits.dirty = true;
+        self.log(&Op::CreateFolder { parent: parent.0, name: name.to_string() });
         Ok(id)
     }
 
@@ -322,6 +446,7 @@ impl PstStore {
             f.info.name = name.to_string();
         }
         edits.dirty = true;
+        self.log(&Op::RenameFolder { folder: folder.0, name: name.to_string() });
         Ok(())
     }
 
@@ -332,6 +457,7 @@ impl PstStore {
         edits.folders.retain(|f| !doomed.contains(&f.info.id));
         edits.mark_parents();
         edits.dirty = true;
+        self.log(&Op::DeleteFolder { folder: folder.0 });
         Ok(())
     }
 
@@ -356,6 +482,7 @@ impl PstStore {
         edits.folders.extend(tail);
         edits.mark_parents();
         edits.dirty = true;
+        self.log(&Op::MoveFolder { folder: folder.0, parent: parent.0 });
         Ok(())
     }
 
@@ -769,8 +896,12 @@ impl PstStore {
         tmp_name.push(format!(".{}.tmp", std::process::id()));
         let tmp = path.with_file_name(tmp_name);
         let done = self.swap(&path, &tmp, seed);
-        if done.is_err() {
-            let _ = std::fs::remove_file(&tmp);
+        match done {
+            // The changes are in the file: the journal of them has done its work.
+            Ok(_) => self.journal.finish(Some(&path)),
+            Err(_) => {
+                let _ = std::fs::remove_file(&tmp);
+            }
         }
         done
     }

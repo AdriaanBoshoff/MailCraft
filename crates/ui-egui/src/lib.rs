@@ -324,7 +324,13 @@ impl MailUi {
             return true;
         }
         self.quit_asked = true;
-        self.session.status = "There are unsaved changes: Ctrl+S saves them. Exit again to leave without saving.".to_string();
+        // Unsaved changes are journalled beside their data file and come back when it is
+        // opened; only when that could not be done does leaving lose them.
+        self.session.status = if self.session.unjournalled() {
+            "There are unsaved changes: Ctrl+S saves them. Exit again to leave without them.".to_string()
+        } else {
+            "There are unsaved changes: Ctrl+S saves them. Exit again to leave; they come back, unsaved, when the data file is opened.".to_string()
+        };
         false
     }
 

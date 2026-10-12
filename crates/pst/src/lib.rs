@@ -13,6 +13,7 @@ mod check;
 mod crypt;
 mod crypt_table;
 mod edit;
+mod journal;
 mod ltp;
 mod ltp_write;
 mod ndb;
@@ -21,6 +22,7 @@ mod write;
 
 pub use check::{Check, check};
 pub use edit::original_beside;
+pub use journal::{journal_beside, set_aside};
 pub use store_write::{Written, write_store};
 
 use ltp::Raw;
@@ -89,6 +91,9 @@ pub struct PstStore {
     edits: Option<edit::Edits>,
     /// The file's length and time of writing when it was opened or last saved.
     stamp: Option<(u64, std::time::SystemTime)>,
+    /// What the journal of this file is tied to: the file's length and the sum of its header.
+    ident: Option<(u64, u32)>,
+    journal: journal::Journal,
 }
 
 impl PstStore {
@@ -120,6 +125,8 @@ impl PstStore {
             special: HashMap::new(),
             edits: None,
             stamp: None,
+            ident: None,
+            journal: journal::Journal::default(),
         };
         // The message store node ([MS-PST] 2.4.3): display name and the entry ids of the special folders.
         if let Ok((bag, _)) = store.node_props(NID_MESSAGE_STORE) {
@@ -378,6 +385,18 @@ impl Store for PstStore {
         self.e_save(seed)
     }
 
+    fn recover(&mut self) -> Result<openmailclient_model::Recovery, StoreError> {
+        PstStore::recover(self).map_err(StoreError::from)
+    }
+
+    fn discard(&mut self) {
+        self.e_discard();
+    }
+
+    fn journal_trouble(&self) -> Option<String> {
+        self.e_journal_trouble()
+    }
+
     fn update(&mut self, folder: FolderId, id: ItemId, item: Item) -> Result<(), StoreError> {
         self.e_update(folder, id, item)
     }
@@ -411,6 +430,8 @@ impl Store for PstStore {
 mod tests;
 #[cfg(test)]
 mod tests_edit;
+#[cfg(test)]
+mod tests_journal;
 #[cfg(test)]
 mod tests_store;
 #[cfg(test)]

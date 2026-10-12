@@ -503,6 +503,20 @@ pub fn strip_reply_prefix(s: &str) -> &str {
     }
 }
 
+/// What playing back a journal of unsaved changes did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Recovery {
+    /// Changes brought back.
+    pub applied: u32,
+    /// Changes that were damaged, cut short or could not be made again, and those after them
+    /// that could still be counted: at least this many were not brought back.
+    pub lost: u32,
+    /// True when a journal was found that is not for the file as it is now; it is left alone.
+    pub stale: bool,
+    /// True when another running program holds the journal.
+    pub held: bool,
+}
+
 /// A mail store: an Outlook data file, a sample mailbox, later a server account's cache.
 pub trait Store {
     fn display_name(&self) -> String;
@@ -519,6 +533,20 @@ pub trait Store {
     }
     /// Put the changes made so far where the store is kept. `seed` is 16 unpredictable bytes
     /// for the ids of what is new. A store that keeps nothing anywhere has nothing to do.
+    /// Bring back the changes a run that ended without saving left in a journal. They are
+    /// unsaved again, as they were; the data file is not written.
+    fn recover(&mut self) -> Result<Recovery, StoreError> {
+        Ok(Recovery::default())
+    }
+
+    /// Throw the unsaved changes away, and their journal with them.
+    fn discard(&mut self) {}
+
+    /// Why changes are held in memory only, when they are not also journalled.
+    fn journal_trouble(&self) -> Option<String> {
+        None
+    }
+
     fn save(&mut self, _seed: [u8; 16]) -> Result<(), StoreError> {
         Ok(())
     }
