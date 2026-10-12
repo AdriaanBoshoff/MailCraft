@@ -7,7 +7,7 @@ use openmailclient_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Pi
 
 use crate::flow::{Base, FOOT, Flow, HEAD};
 use crate::fonts::Fonts;
-use crate::{LayoutError, Page, Printed, Setup, Text};
+use crate::{LayoutError, Page, Printed, Setup};
 
 /// Fields a header shows, and characters of one field.
 const MAX_FIELDS: usize = 32;
@@ -123,56 +123,11 @@ fn edge(flow: &mut Flow, parts: &[String; 3], words: &[(String, String)], page: 
     let share = width / asked as f32 - if asked > 1 { SIZE } else { 0.0 };
     for (n, part) in parts.iter().enumerate() {
         let words = filled(part, page, pages, words);
-        let mut chain = flow.fonts.chain(HEAD_FONT, false, false, false);
-        let mut set = Vec::new();
-        let mut wide = 0.0f32;
-        let mut cut = false;
-        for ch in words.trim().chars() {
-            if let Some((pick, glyph)) = flow.fonts.resolve(&mut chain, ch) {
-                let advance = flow.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, SIZE));
-                if wide + advance > share + 0.01 && !set.is_empty() {
-                    cut = true;
-                    break;
-                }
-                wide += advance;
-                set.push((pick, glyph, ch, advance));
-            }
-        }
-        if cut {
-            // The last glyph makes way for the mark that says there was more.
-            if let Some((pick, glyph)) = flow.fonts.resolve(&mut chain, '\u{2026}') {
-                let advance = flow.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, SIZE));
-                while wide + advance > share + 0.01 {
-                    let Some(last) = set.pop() else { break };
-                    wide -= last.3;
-                }
-                wide += advance;
-                set.push((pick, glyph, '\u{2026}', advance));
-            }
-        }
-        let mut x = match n {
+        flow.words(page, words.trim(), HEAD_FONT, SIZE, Some(share), y, |wide| match n {
             0 => left,
             1 => left + (width - wide) / 2.0,
             _ => left + width - wide,
-        };
-        let Some(page) = flow.pages.get_mut(page) else { return };
-        for (pick, glyph, ch, advance) in set {
-            page.texts.push(Text {
-                x,
-                y,
-                face: pick.face,
-                size: SIZE,
-                color: [0, 0, 0],
-                glyphs: vec![(glyph, ch)],
-                width: advance,
-                kerns: Vec::new(),
-                bold: pick.bold,
-                slant: pick.slant,
-                lift: 0.0,
-                actual: None,
-            });
-            x += advance;
-        }
+        });
     }
 }
 

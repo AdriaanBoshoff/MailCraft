@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use openmailclient_formats::rich::{
-    Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign,
-    tab_room, tab_stop,
+    Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, TAB_STEP, Tab, Table, TableWidth,
+    VAlign, tab_room, tab_stop,
 };
 
 use crate::fonts::{Fonts, Pick};
@@ -42,6 +42,8 @@ const MEASURED_ROWS: usize = 200;
 const MAX_GLYPHS: usize = 4_000_000;
 /// Glyphs in one paragraph.
 const MAX_PARA_GLYPHS: usize = 400_000;
+/// Characters of a line the print sets itself: a page's head or foot, a list's marker.
+const MAX_WORDS_CHARS: usize = 400;
 /// Room kept at the foot of each page for its number.
 pub(crate) const FOOT: f32 = 16.0;
 /// Room over the body for the header, in points.
@@ -1025,34 +1027,140 @@ impl<'f, 'l> Flow<'f, 'l> {
 
     /// A list item's marker, ending at `right`.
     fn marker(&mut self, marker: &str, right: f32, baseline: f32, size: f32, page: usize) {
-        let mut chain = self.fonts.chain(&self.base.family.clone(), false, false, false);
-        let mut set: Vec<(Pick, u16, char, f32)> = Vec::new();
-        for ch in marker.chars().filter(|c| !c.is_control()).take(12) {
-            if let Some((pick, glyph)) = self.fonts.resolve(&mut chain, ch) {
-                let advance = self.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, size));
-                set.push((pick, glyph, ch, advance));
+        let marker: String = marker.chars().take(12).collect();
+        let family = self.base.family.clone();
+        // A marker longer than the room before its item (the room from the edge of the page
+        // inside the margin) is cut as a line of the head of a page is: it never hangs off
+        // the sheet.
+        let room = (right - self.left()).max(size);
+        self.words(page, &marker, &family, size, Some(room), baseline, |wide| (right - wide).max(0.0));
+    }
+
+    /// One line the print sets itself (what stands at the head and the foot of a page, the
+    /// marker of a list's item), set as a paragraph's text is: shaped by its font's own
+    /// tables, and drawn in the order it is seen when it has right-to-left writing in it, its
+    /// direction that of its first letter. With `room`, a line too long for it loses the end
+    /// of what it says, as that is read, and a mark says there was more. `place` is told how
+    /// wide the line came out and says where it starts.
+    pub(crate) fn words(
+        &mut self,
+        page: usize,
+        words: &str,
+        family: &str,
+        size: f32,
+        room: Option<f32>,
+        baseline: f32,
+        place: impl FnOnce(f32) -> f32,
+    ) {
+        // A character no font has is left out, and the mark that says there was more with it.
+        let mut chain = self.fonts.chain(family, false, false, false);
+        let mut has = |flow: &mut Self, c: char| matches!(c, '\u{200b}'..='\u{200f}') || flow.fonts.resolve(&mut chain, c).is_some();
+        let chars: Vec<char> = words.chars().filter(|c| !c.is_control()).take(MAX_WORDS_CHARS).filter(|c| has(self, *c)).collect();
+        let more = has(self, '\u{2026}').then_some('\u{2026}');
+        // What the body left of the page's allowance is not this line's to use up or to want,
+        // and a body that filled its pages still has its pages' heads and feet set.
+        let (left, no_font, full) = (self.glyphs_left, self.no_font, self.full);
+        (self.glyphs_left, self.full) = (MAX_WORDS_CHARS * 16, false);
+        let mut set = self.words_cut(&chars, chars.len(), more, family, size);
+        if let Some(room) = room.filter(|room| set.1 > *room + 0.01) {
+            let (mut fits, mut too_long) = (0usize, chars.len());
+            while too_long.saturating_sub(fits) > 1 {
+                let middle = fits + (too_long - fits) / 2;
+                if self.words_cut(&chars, middle, more, family, size).1 <= room + 0.01 {
+                    fits = middle;
+                } else {
+                    too_long = middle;
+                }
             }
+            set = self.words_cut(&chars, fits, more, family, size);
         }
-        let mut x = right - set.iter().map(|s| s.3).sum::<f32>();
-        for (pick, glyph, ch, advance) in set {
-            if let Some(page) = self.page(page) {
-                page.texts.push(Text {
-                    x,
-                    y: baseline,
-                    face: pick.face,
-                    size,
-                    color: BLACK,
-                    glyphs: vec![(glyph, ch)],
-                    width: advance,
-                    kerns: Vec::new(),
-                    bold: pick.bold,
-                    slant: pick.slant,
-                    lift: 0.0,
-                    actual: None,
-                });
+        (self.glyphs_left, self.no_font, self.full) = (left, no_font, full);
+        let (glyphs, wide, stored) = set;
+        let turned = glyphs.iter().any(|g| g.level > 0);
+        let mut pen = place(wide);
+        // The pieces of the line, each with the first of its characters it stands for.
+        let mut pieces: Vec<(usize, Text)> = Vec::new();
+        let mut i = 0usize;
+        while let Some(first) = glyphs.get(i) {
+            let rest = glyphs.get(i..).unwrap_or_default();
+            let count = rest.iter().take_while(|g| g.pick == first.pick && g.level == first.level).count().max(1);
+            i += count;
+            let mut run: Vec<(u16, char, usize, u16)> = Vec::new();
+            let mut kerns: Vec<f32> = Vec::new();
+            let mut from = pen;
+            let mut close = |run: &mut Vec<(u16, char, usize, u16)>, kerns: &mut Vec<f32>, from: f32, to: f32, lift: f32| {
+                let moved = kerns.iter().any(|k| *k != 0.0);
+                let kerns = std::mem::take(kerns);
+                let run = std::mem::take(run);
+                let Some(starts) = run.iter().map(|(_, _, at, _)| *at).min() else { return };
+                pieces.push((
+                    starts,
+                    Text {
+                        x: from,
+                        y: baseline,
+                        face: first.pick.face,
+                        size,
+                        color: BLACK,
+                        actual: said(&run, &stored),
+                        glyphs: run.iter().map(|(glyph, ch, ..)| (*glyph, *ch)).collect(),
+                        width: to - from,
+                        kerns: if moved { kerns } else { Vec::new() },
+                        bold: first.pick.bold,
+                        slant: first.pick.slant,
+                        lift,
+                    },
+                ));
+            };
+            for g in rest.get(..count).unwrap_or_default() {
+                if g.dx != 0.0 || g.dy != 0.0 {
+                    // A glyph the font puts somewhere else than where the line has got to is
+                    // a piece of its own.
+                    close(&mut run, &mut kerns, from, pen, 0.0);
+                    run.push((g.glyph, g.ch, g.at, g.span));
+                    kerns.push(0.0);
+                    close(&mut run, &mut kerns, pen + g.dx, pen + g.dx + g.advance, g.dy);
+                    from = pen + g.advance;
+                } else {
+                    run.push((g.glyph, if g.ch == '\u{a0}' { ' ' } else { g.ch }, g.at, g.span));
+                    kerns.push(g.kern);
+                }
+                pen += g.advance;
             }
-            x += advance;
+            close(&mut run, &mut kerns, from, pen, 0.0);
         }
+        // In the file the pieces follow one another as they are read, wherever each is drawn.
+        if turned {
+            pieces.sort_by_key(|(starts, _)| *starts);
+        }
+        if let Some(page) = self.page(page) {
+            page.texts.extend(pieces.into_iter().map(|(_, text)| text));
+        }
+    }
+
+    /// The first `keep` of a line's characters, with a mark after them when that is not all:
+    /// their glyphs in the order they are drawn, how wide they are together, and the
+    /// characters they stand for.
+    fn words_cut(&mut self, chars: &[char], keep: usize, more: Option<char>, family: &str, size: f32) -> (Vec<Glyph>, f32, Vec<char>) {
+        let mut text: String = chars.iter().take(keep).collect();
+        if keep < chars.len() {
+            text = text.trim_end().to_string();
+            text.extend(more);
+        }
+        let rtl = script::first_strong(&text).unwrap_or(false);
+        let style = Style { family: Some(family.into()), size: Some(size), ..Style::default() };
+        let para = Para { runs: vec![Run { text, style, ..Run::default() }], rtl, ..Para::default() };
+        let (glyphs, _, _, stored) = self.glyphs(&para, self.width(), None);
+        let glyphs: Vec<Glyph> = glyphs.into_iter().filter(|g| g.picture.is_none() && g.kind != Kind::Break && g.ch != '\t').collect();
+        let glyphs = if rtl || glyphs.iter().any(|g| g.level > 0) {
+            let chars: Vec<char> = glyphs.iter().map(|g| g.ch).collect();
+            let levels: Vec<u8> = glyphs.iter().map(|g| g.level).collect();
+            script::order(&chars, &levels, u8::from(rtl)).into_iter().filter_map(|i| glyphs.get(i).copied()).collect()
+        } else {
+            glyphs
+        };
+        // The last glyph of a line has nothing after it to stand closer to.
+        let wide = glyphs.iter().map(|g| g.advance).sum::<f32>() - glyphs.last().map_or(0.0, |g| g.kern);
+        (glyphs, wide, stored)
     }
 
     /// The narrowest and the widest a paragraph can usefully be: its longest word, and its

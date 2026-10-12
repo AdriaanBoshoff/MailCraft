@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 46 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 47 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 47 · 2026-10-12 — M3b.5: the head and foot of a printed page and list markers are shaped and turned as the body is.
 - 46 · 2026-10-12 — M3b.4: right-to-left text in the list, the header and folder names; turning marks left out of one-line text.
 - 45 · 2026-10-12 — M3b.3: pane edges are dragged; window size and place and pane sizes are kept between runs.
 - 44 · 2026-10-12 — M3b.2: `file.export` copies a Unicode `.pst` as it is stored (hidden items, folder properties, unknown properties).

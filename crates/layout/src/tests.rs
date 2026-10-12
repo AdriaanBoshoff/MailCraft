@@ -145,7 +145,7 @@ fn looks_are_carried_onto_the_page() {
     assert!((right.x + right.width - (Paper::A4.width - 36.0)).abs() < 0.01);
     let item = find("item");
     assert!((item.x - 66.0).abs() < 0.01);
-    let dot = find(".");
+    let dot = find("1.");
     assert!(dot.x + dot.width < item.x && dot.y == item.y);
     let quoted = find("quoted");
     assert_eq!(page.rules.iter().filter(|r| r.from.0 == r.to.0 && r.from.1 < quoted.y && r.to.1 > quoted.y).count(), 2);
@@ -771,7 +771,16 @@ fn pages_are_set_up_as_asked() {
     let words = |n: usize| vec!["word"; n].join(" ");
     // The glyphs on one baseline, with where they start and end.
     let on = |page: &Page, y: f32| -> Vec<(f32, f32, char)> {
-        page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).map(|t| (t.x, t.x + t.width, t.glyphs[0].1)).collect()
+        let mut out = Vec::new();
+        for t in page.texts.iter().filter(|t| (t.y - y).abs() < 0.01) {
+            let mut x = t.x;
+            for (_, ch) in &t.glyphs {
+                let wide = f32::from(if *ch == ' ' { boxes::SPACE } else { boxes::ADVANCE }) / f32::from(boxes::UNITS) * t.size;
+                out.push((x, x + wide, *ch));
+                x += wide;
+            }
+        }
+        out
     };
     let said = |line: &[(f32, f32, char)]| line.iter().map(|g| g.2).collect::<String>();
     let set = |setup: &Setup, body: &Doc| {
@@ -1276,4 +1285,106 @@ fn a_character_the_italic_face_lacks_comes_from_the_plain_face_leant() {
     let hebrew = of('\u{5d0}');
     assert!(hebrew.slant && hebrew.face != of('a').face);
     assert!(hebrew.glyphs.iter().all(|(glyph, _)| *glyph != 0));
+}
+
+#[test]
+fn what_stands_at_a_page_s_head_and_foot_and_before_an_item_is_shaped_as_the_body_is() {
+    let of = |text: &str| -> Vec<u16> { text.chars().map(|c| glyph_in(SHAPED, c)).collect() };
+    let part = |s: &str| s.to_string();
+    let set = |setup: &Setup, body: &Doc| {
+        let library = Library::empty();
+        let mut fonts = Fonts::new(&library);
+        fonts.give("Segoe UI", false, false, Face { data: shaped_font(), index: 0 });
+        fonts.give("Times New Roman", false, false, Face { data: shaped_font(), index: 0 });
+        memo(&Memo { owner: "abc", fields: &[], body, plain: false, sizes: &|_| None }, setup, &mut fonts).unwrap()
+    };
+    // The texts on the line over the body and under it, from the left.
+    let line = |page: &Page, over: bool| -> Vec<Text> {
+        let y = if over { page.texts.iter().map(|t| t.y).fold(f32::MAX, f32::min) } else { page.texts.iter().map(|t| t.y).fold(0.0, f32::max) };
+        let mut line: Vec<Text> = page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).cloned().collect();
+        line.sort_by(|a, b| a.x.total_cmp(&b.x));
+        line
+    };
+    let glyphs = |line: &[Text]| -> Vec<u16> { line.iter().flat_map(|t| t.glyphs.iter().map(|(g, _)| *g)).collect() };
+    let read =
+        |line: &[Text]| -> String { line.iter().map(|t| t.actual.clone().unwrap_or_else(|| t.glyphs.iter().map(|(_, c)| *c).collect())).collect() };
+    let body = doc(vec![Block::Para(para("abc"))]);
+    let paper = Paper { width: 400.0, height: 300.0, margin: 20.0 };
+
+    // Letters drawn as one glyph are; Arabic letters join; Hebrew is drawn from the right in
+    // a line that is not; a line that starts with it runs from the right.
+    let setup = Setup {
+        header: [part("baffle fi"), part("\u{628}\u{628}\u{628}"), part("ab \u{5d0}\u{5d1}\u{5d2} cd")],
+        footer: [part("\u{5d0}\u{5d1} ab [Page]"), String::new(), String::new()],
+        ..Setup::from(paper)
+    };
+    let printed = set(&setup, &body);
+    let head = line(&printed.pages[0], true);
+    assert_eq!(glyphs(&head), of("ba2e 1\u{fe90}\u{fe92}\u{fe91}ab \u{5d2}\u{5d1}\u{5d0} cd"), "{head:?}");
+    // What the page says is what was asked for, in the order it is read.
+    let texts = &printed.pages[0].texts;
+    let says = |what: &str| texts.iter().any(|t| t.actual.as_deref() == Some(what) || t.glyphs.iter().map(|(_, c)| *c).collect::<String>() == what);
+    assert!(says("baffle fi") && says("\u{628}\u{628}\u{628}"), "{texts:?}");
+    let foot = line(&printed.pages[0], false);
+    // A number after Latin letters is read with them (UAX #9, W7).
+    assert_eq!(glyphs(&foot), of("ab 1 \u{5d1}\u{5d0}"));
+    // Each part stands where it stood: at the left, in the middle, at the right.
+    let right = head.last().unwrap();
+    assert!((right.x + right.width - 380.0).abs() < 0.01 && (head[0].x - 20.0).abs() < 0.01, "{head:?}");
+
+    // Too long for its share of the line, a part loses its end as it is read, whichever way
+    // it is drawn, and stays in its share.
+    let long_ltr = "fi ".repeat(60);
+    let long_rtl = "\u{5d0}\u{5d1}\u{5d2} ".repeat(60);
+    let setup = Setup {
+        header: [long_ltr.clone(), String::new(), long_rtl.clone()],
+        footer: [String::new(), String::new(), String::new()],
+        ..Setup::from(paper)
+    };
+    let printed = set(&setup, &body);
+    let head = line(&printed.pages[0], true);
+    let (left, right): (Vec<Text>, Vec<Text>) = head.into_iter().partition(|t| t.x < 200.0);
+    assert!(left.iter().all(|t| t.x >= 19.99 && t.x + t.width <= 200.0) && right.iter().all(|t| t.x >= 200.0 && t.x + t.width <= 380.01));
+    let start = read(&left);
+    assert!(start.ends_with('\u{2026}') && long_ltr.starts_with(start.trim_end_matches('\u{2026}')) && start.len() > 20, "{start}");
+    // The start of the Hebrew is what is kept, and it stands at the right edge.
+    let kept: Vec<u16> = glyphs(&right);
+    assert!(kept.len() > 20 && kept.ends_with(&of("\u{5d2}\u{5d1}\u{5d0}")), "{kept:?}");
+    let last = right.iter().map(|t| t.x + t.width).fold(0.0, f32::max);
+    assert!((last - 380.0).abs() < 0.01, "{last}");
+
+    // A marker is set the same way, and ends where it ended.
+    let item = |marker: &str| Para { kind: ParaKind::Item(marker.into()), ..para("abc") };
+    let printed = set(&Setup::from(paper), &doc(vec![Block::Para(item("fi.")), Block::Para(item("\u{5d0}\u{5d1}"))]));
+    let page = &printed.pages[0];
+    let with = |glyph: char| page.texts.iter().find(|t| t.glyphs.iter().any(|(g, _)| *g == glyph_in(SHAPED, glyph))).unwrap();
+    let (one, two) = (with('1'), with('\u{5d0}'));
+    assert_eq!(one.actual.as_deref(), Some("fi."));
+    assert_eq!(two.glyphs.iter().map(|(g, _)| *g).collect::<Vec<u16>>(), of("\u{5d1}\u{5d0}"));
+    assert!((two.x + two.width - (one.x + one.width)).abs() < 0.3, "{one:?} {two:?}");
+
+    // A body that filled what a print may hold still has its pages numbered, and junk at the
+    // head of a page is set or left out, never more.
+    for junk in [
+        "\u{202e}\u{202e}a\u{5d0}\u{202c}",
+        "\u{7}\n\t\u{0}",
+        "\u{10ffff}\u{e000}zzz",
+        &"\u{628}\u{301}".repeat(5000),
+        "[Page][Pages][Page of Pages][nothing]",
+    ] {
+        for size in [Paper { width: 60.0, height: 90.0, margin: 20.0 }, paper] {
+            let setup =
+                Setup { header: [part(junk), part(junk), part(junk)], footer: [part(junk), String::new(), part("[Page]")], ..Setup::from(size) };
+            let printed = set(&setup, &doc(vec![Block::Para(item(junk))]));
+            for page in &printed.pages {
+                assert!(
+                    page.texts.iter().all(|t| t.x.is_finite()
+                        && t.width.is_finite()
+                        && (size.width < 100.0 || (t.x >= -0.01 && t.x + t.width <= size.width + 0.01))),
+                    "{junk:?} {:?}",
+                    page.texts.iter().map(|t| (t.x, t.width, t.y, t.glyphs.len())).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
 }
