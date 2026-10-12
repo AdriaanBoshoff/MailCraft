@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 47 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 48 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -42,7 +42,7 @@
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
-   right-to-left text in the compose box and the rest of what a right-to-left paragraph moves to the right (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, sending pages to a printer,
+   right-to-left text in the compose box and what is left of what a right-to-left paragraph moves to the right (tab leaders, frames, tables) (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 48 · 2026-10-12 — M3b.6: a right-to-left paragraph's indent, list marker and quotation bars stand at the right.
 - 47 · 2026-10-12 — M3b.5: the head and foot of a printed page and list markers are shaped and turned as the body is.
 - 46 · 2026-10-12 — M3b.4: right-to-left text in the list, the header and folder names; turning marks left out of one-line text.
 - 45 · 2026-10-12 — M3b.3: pane edges are dragged; window size and place and pane sizes are kept between runs.

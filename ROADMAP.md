@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 57 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 58 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 261, all passing |
+| Tests | 262, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -92,7 +92,8 @@
 41. Done: the edges of the panes are dragged, and the window's size and place and the panes' sizes are kept between runs (M3b.3).
 42. Done: right-to-left text reads the right way in the message list, the reading pane's header and folder names, and a turning mark cannot disguise a name (M3b.4).
 43. Done: the head and foot of a printed page and the markers of lists are shaped and turned as the body is (M3b.5).
-44. Next: M3b.6: the rest of the M3b list, taking what a right-to-left paragraph moves to the right next (markers, indents, quotation bars).
+44. Done: a paragraph written from the right has its indent, its list marker and its quotation bars at the right, on screen and in print (M3b.6).
+45. Next: M3b.7: the rest of the M3b list, taking the journal's loose ends next (kept elsewhere when the folder cannot be written, forced to disk on a timer).
 
 ## Do later (from M2)
 
@@ -108,7 +109,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Right-to-left text in the message list, the header of the reading pane and folder names~~ | done: M3b.4 |
 | Right-to-left text while it is typed: the compose box, the search box and a folder's name being changed (egui's text editor draws them as stored; the cursor has to follow the turned text) | M3b |
 | A right-to-left line in the list, the header and the folder pane set from the right of its cell | M5, with views |
-| For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
+| ~~For a right-to-left paragraph: list markers, indents and quotation bars at the right~~ | done: M3b.6 |
+| For a right-to-left paragraph: tab stops and their leaders counted from the right; a frame's own indent at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | ~~Keeping the page setup between runs~~ | done: M3.5 |
 | Rules kept between runs (there are no rules yet; they are kept in the data file as Outlook keeps them, and in the settings for accounts without one) | M5, with rules |
@@ -834,3 +836,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   junk test: a twelve-letter marker stood fifteen points left of the page); and a body that
   filled what a print may hold still has its pages' heads and feet set. Looked at in a page
   rendered from our own text.
+- **2026-10-12** - M3b.6: what a right-to-left paragraph moves to the right. A paragraph written from the
+  right is now set in from the right by the room its list level and its quotation take; the
+  marker of an item stands at the right of the item, outside its text; the bars of a
+  quotation stand at the right. The same on screen and in print, pinned in print as the
+  mirror of the same paragraph written from the left. Made better on the way: the marker is
+  read the way its item is, so the stop after a number stands at its left (`.1`), and a
+  marker at the right is held on the sheet as one at the left is. Looked at in the window
+  and on a rendered page with our own Hebrew and Arabic lists. Not yet, and listed: tab
+  leaders, a frame's own indent, text beside a picture, the columns of a right-to-left table,
+  `<bdo>` and `unicode-bidi`.

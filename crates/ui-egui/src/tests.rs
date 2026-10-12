@@ -1068,6 +1068,14 @@ fn one_line_with_right_to_left_writing_is_drawn_in_the_order_it_is_read() {
         let drawn: String = seen(name, 900.0).0.chars().filter(|c| c.is_ascii() && *c != ' ').collect();
         assert!(drawn.ends_with("gpj.exe") || drawn.ends_with("fdp.scr"), "{drawn}");
     }
+    // The marker of an item read from the right is read from the right too.
+    let mut marker = String::new();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let galley = ui.painter().layout_job(seen_line_from("12.", Some(true), font(13.0), Color32::BLACK));
+        marker = galley.rows.iter().flat_map(|row| row.glyphs.iter().filter(|g| g.advance_width > 0.0).map(|g| g.chr)).collect();
+    });
+    output.textures_delta.clear();
+    assert_eq!(marker, ".12");
     // Text with no such writing goes the way it always did.
     assert_eq!(seen("Budget (draft)", 900.0).0, "Budget (draft)");
 

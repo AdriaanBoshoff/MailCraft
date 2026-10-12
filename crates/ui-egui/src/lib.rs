@@ -252,13 +252,19 @@ pub(crate) fn one_line(s: &str) -> String {
 /// takes each piece it is handed to run one way, so letters written from the right are handed
 /// to it apart from everything else, as in a message's body.
 pub(crate) fn seen_line(text: &str, font: FontId, color: Color32) -> LayoutJob {
+    seen_line_from(text, None, font, color)
+}
+
+/// [`seen_line`] for a line whose direction is known from where it stands: `Some(true)` for
+/// one read from the right whatever its first letter is.
+pub(crate) fn seen_line_from(text: &str, rtl: Option<bool>, font: FontId, color: Color32) -> LayoutJob {
     use openmailclient_fonts::script;
     let text = one_line(text);
-    if !script::has_rtl(&text) {
+    if rtl != Some(true) && !script::has_rtl(&text) {
         return LayoutJob::simple_singleline(text, font, color);
     }
     let chars: Vec<char> = text.chars().collect();
-    let rtl = script::first_strong(&text).unwrap_or(false);
+    let rtl = rtl.or_else(|| script::first_strong(&text)).unwrap_or(false);
     let levels = script::levels(&text, Some(rtl));
     // Pieces: characters that stand equally deep and are of one kind (blanks, letters written
     // from the right, anything else).

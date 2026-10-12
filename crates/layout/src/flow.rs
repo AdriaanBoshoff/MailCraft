@@ -786,7 +786,9 @@ impl<'f, 'l> Flow<'f, 'l> {
             at.y += px(para.lead());
         }
         let inset = Self::inset(para, width);
-        let (left, room) = (x + inset, (width - inset).max(24.0));
+        // What a paragraph is set in by, it is set in by on the side it starts at: the right
+        // for one written from the right.
+        let (left, room) = (if para.rtl { x } else { x + inset }, (width - inset).max(24.0));
         // A picture standing at one side ends where it ends, or where a paragraph asks to
         // start below it.
         if self.aside.is_some_and(|a| para.clear || a.page != at.page || at.y >= a.bottom - 0.01) {
@@ -984,13 +986,15 @@ impl<'f, 'l> Flow<'f, 'l> {
                 page.texts.extend(set.into_iter().map(|(_, text)| text));
             }
             for level in 0..para.quote.min(8) {
-                let bar = x + (f32::from(level) * QUOTE + 4.0) * PX;
+                let bar = (f32::from(level) * QUOTE + 4.0) * PX;
+                let bar = if para.rtl { x + width - bar } else { x + bar };
                 self.rule(at.page, (bar, at.y), (bar, at.y + tall), 1.5, [170, 170, 170], Line::Solid);
             }
             if n == 0
                 && let ParaKind::Item(marker) = &para.kind
             {
-                self.marker(marker, left - 5.0, baseline, own_size, at.page);
+                let edge = if para.rtl { left + room.min(width - inset) + 5.0 } else { left - 5.0 };
+                self.marker(marker, edge, para.rtl, baseline, own_size, at.page);
             }
             at.y += tall;
             if next <= from {
@@ -1026,14 +1030,24 @@ impl<'f, 'l> Flow<'f, 'l> {
     }
 
     /// A list item's marker, ending at `right`.
-    fn marker(&mut self, marker: &str, right: f32, baseline: f32, size: f32, page: usize) {
+    /// The marker of a list's item, ending at `edge`; for an item written from the right it
+    /// stands at the right of the item and starts there.
+    fn marker(&mut self, marker: &str, edge: f32, rtl: bool, baseline: f32, size: f32, page: usize) {
         let marker: String = marker.chars().take(12).collect();
         let family = self.base.family.clone();
         // A marker longer than the room before its item (the room from the edge of the page
         // inside the margin) is cut as a line of the head of a page is: it never hangs off
         // the sheet.
-        let room = (right - self.left()).max(size);
-        self.words(page, &marker, &family, size, Some(room), baseline, |wide| (right - wide).max(0.0));
+        let sheet = self.paper.width;
+        if rtl {
+            // Read from the right, as its item is: the stop after a number stands at its left.
+            let marker = format!("\u{200f}{marker}");
+            let room = (self.left() + self.width() - edge).max(size);
+            self.words(page, &marker, &family, size, Some(room), baseline, |wide| edge.min(sheet - wide).max(0.0));
+        } else {
+            let room = (edge - self.left()).max(size);
+            self.words(page, &marker, &family, size, Some(room), baseline, |wide| (edge - wide).max(0.0));
+        }
     }
 
     /// One line the print sets itself (what stands at the head and the foot of a page, the

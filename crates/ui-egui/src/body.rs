@@ -591,7 +591,8 @@ fn room(ui: &Ui, para: &Para) -> (f32, f32) {
 
 fn quote_bars(ui: &Ui, para: &Para, rect: Rect, t: &Tokens) {
     for level in 0..para.quote.min(8) {
-        let x = rect.left() + f32::from(level) * QUOTE + 4.0;
+        let x = f32::from(level) * QUOTE + 4.0;
+        let x = if para.rtl { rect.right() - x } else { rect.left() + x };
         ui.painter().vline(x, rect.y_range(), (2.0, t.line.lerp_to_gamma(t.text_faint, 0.6)));
     }
 }
@@ -1159,7 +1160,9 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
     if !ui.is_rect_visible(rect) {
         return rect;
     }
-    let text_left = rect.left() + inset + spot.left;
+    // What a paragraph is set in by, it is set in by on the side it starts at: the right for
+    // one written from the right.
+    let text_left = rect.left() + spot.left + if para.rtl { 0.0 } else { inset };
     // Never past the room there is: a narrow table cell has less than the least a text wraps at.
     let wide = spot.width.min((rect.right() - text_left).max(0.0));
     let pos = match para.align {
@@ -1174,7 +1177,13 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
         let marker: String = marker.chars().take(12).collect();
         // In the letters of the text it stands before, so that it sits on the same line.
         let like = runs.iter().find(|r| r.picture.is_none()).map_or_else(|| font(BODY_PX), |r| section(r, look).1.font_id);
-        ui.painter().text(pos2(rect.left() + inset - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, like, look.text());
+        if para.rtl {
+            // Read from the right, as its item is: the stop after a number stands at its left.
+            let galley = ui.painter().layout_job(crate::seen_line_from(&marker, Some(true), like, look.text()));
+            ui.painter().galley(pos2(rect.right() - inset + 7.0, rect.top()), galley, look.text());
+        } else {
+            ui.painter().text(pos2(rect.left() + inset - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, like, look.text());
+        }
     }
 
     let spots = match &turned {

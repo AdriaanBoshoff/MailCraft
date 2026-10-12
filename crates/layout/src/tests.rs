@@ -1388,3 +1388,69 @@ fn what_stands_at_a_page_s_head_and_foot_and_before_an_item_is_shaped_as_the_bod
         }
     }
 }
+
+#[test]
+fn a_paragraph_written_from_the_right_is_set_in_at_the_right() {
+    let paper = Paper { width: 400.0, height: 300.0, margin: 20.0 };
+    let item = |rtl: bool| Para {
+        rtl,
+        align: if rtl { Align::Right } else { Align::Left },
+        indent: 1,
+        quote: 2,
+        kind: ParaKind::Item("1.".into()),
+        ..para(&"word ".repeat(40))
+    };
+    let set = |rtl: bool| print(&doc(vec![Block::Para(item(rtl))]), paper);
+    let (ltr, rtl) = (set(false), set(true));
+    // The lines of the item, its marker and its bars, without the head and foot of the page.
+    let parts = |printed: &Printed, rtl: bool| {
+        let page = &printed.pages[0];
+        let said = |t: &Text| t.glyphs.iter().map(|(_, c)| *c).collect::<String>();
+        let lines: Vec<(f32, f32)> = page.texts.iter().filter(|t| said(t).starts_with("word")).map(|t| (t.x, t.x + t.width)).collect();
+        // Beside an item read from the right, the stop stands at the left of its number: a
+        // piece of its own.
+        let of = |what: &str| page.texts.iter().find(|t| said(t) == what).map(|t| (t.x, t.x + t.width, t.y));
+        let marker = if rtl {
+            let (stop, number) = (of(".").unwrap(), of("1").unwrap());
+            assert!((stop.1 - number.0).abs() < 0.01 && stop.2 == number.2, "{stop:?} {number:?}");
+            (stop.0, number.1, stop.2)
+        } else {
+            of("1.").unwrap()
+        };
+        let first = page.texts.iter().find(|t| said(t).starts_with("word")).unwrap().y;
+        let bars: Vec<f32> = page.rules.iter().filter(|r| r.from.0 == r.to.0).map(|r| r.from.0).collect();
+        // A bar is drawn line by line.
+        let mut bars = bars;
+        bars.sort_by(f32::total_cmp);
+        bars.dedup();
+        (lines, marker, first, bars)
+    };
+    let (l_lines, l_marker, l_first, l_bars) = parts(&ltr, false);
+    let (r_lines, r_marker, r_first, r_bars) = parts(&rtl, true);
+    assert!(l_lines.len() > 1 && l_lines.len() == r_lines.len());
+    // Set in by the same room, on the other side: the picture in a mirror.
+    let inset = l_lines[0].0 - 20.0;
+    assert!(inset > 30.0);
+    assert!(l_lines.iter().all(|l| (l.0 - 20.0 - inset).abs() < 0.01 && l.1 <= 380.01));
+    assert!(r_lines.iter().all(|l| l.0 >= 19.99 && l.1 <= 380.01 - inset), "{r_lines:?}");
+    assert!((r_lines[0].1 - (380.0 - inset)).abs() < 0.3, "{r_lines:?}");
+    // The marker stands outside the text on the side the item starts at, on its first line.
+    assert!(l_marker.1 < l_lines[0].0 && r_marker.0 > r_lines[0].1 && r_marker.1 <= 380.01, "{r_marker:?}");
+    assert!((l_lines[0].0 - l_marker.1 - (r_marker.0 - r_lines[0].1)).abs() < 0.3);
+    assert_eq!((l_marker.2, r_marker.2), (l_first, r_first));
+    // And so do the bars of a quotation.
+    assert_eq!((l_bars.len(), r_bars.len()), (2, 2));
+    for (l, r) in l_bars.iter().zip(r_bars.iter().rev()) {
+        assert!((l - 20.0 - (380.0 - r)).abs() < 0.01, "{l_bars:?} {r_bars:?}");
+    }
+    // In a cell too narrow for any of it, and with a marker too long, nothing leaves the sheet.
+    let long = Para { kind: ParaKind::Item("abcdefghijkl".into()), indent: 12, quote: 8, ..item(true) };
+    let narrow = Table {
+        rows: vec![vec![Cell { blocks: vec![Block::Para(long.clone())], span: 1, rows: 1, width: 4, ..Cell::default() }, cell("a")]],
+        ..Table::default()
+    };
+    let printed = print(&doc(vec![Block::Para(long), Block::Table(narrow)]), paper);
+    for page in &printed.pages {
+        assert!(page.texts.iter().all(|t| t.x >= -0.01 && t.x + t.width <= 400.01 && t.x.is_finite()));
+    }
+}
