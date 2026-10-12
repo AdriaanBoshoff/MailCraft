@@ -4,7 +4,7 @@
 use crate::journal::{Diff, Op};
 use crate::tests_edit::{Whole, folder, same_mailbox, scratch, whole};
 use crate::tests_store::{UID, mail, mailbox, save};
-use crate::{PstStore, journal_beside, set_aside};
+use crate::{PstStore, journal_beside, journal_elsewhere, set_aside};
 use openmailclient_model::{Attachment, Flag, Item, ItemId, NameId, NamedKey, PropBag, PropValue, Recovery, Store, pid};
 use std::path::{Path, PathBuf};
 
@@ -200,7 +200,7 @@ fn a_journal_for_another_file_is_left_alone() {
         (Vec::new(), Recovery { stale: true, ..none() }),
         (b"OMCJRNL1 and then something else entirely".to_vec(), Recovery { stale: true, ..none() }),
         (head.clone(), none()),
-        (huge, Recovery { lost: 1, ..none() }),
+        (huge, Recovery { lost: 1, more: true, ..none() }),
         ([head.clone(), record(&[])].concat(), Recovery { lost: 1, ..none() }),
         ([head.clone(), record(&[9, 9, 9])].concat(), Recovery { lost: 1, ..none() }),
         // A request that cannot be done: a folder that is not there, a message no one took out.
@@ -371,4 +371,133 @@ fn records_say_what_was_asked_for_and_junk_is_no_record() {
     }
     assert!(Op::Add { folder: 1, item: deep }.encode().is_none());
     assert_eq!(pid::SUBJECT, 0x0037);
+}
+
+#[test]
+fn a_journal_that_cannot_be_kept_beside_the_file_is_kept_elsewhere() {
+    let (dir, path, bytes) = on_disk("journal-elsewhere");
+    let other = dir.join("journals of our own");
+    // Nothing can be written where the journal would be: a folder stands in its place.
+    std::fs::create_dir(journal_beside(&path)).unwrap();
+    let there = journal_elsewhere(&other, &path);
+    assert!(there.starts_with(&other) && there != journal_elsewhere(&other, &dir.join("deeper").join("box.pst")));
+
+    // With nowhere else to go, the changes are in memory only, and that is said.
+    let mut alone = PstStore::open(&path).unwrap();
+    assert!(alone.recover().is_err(), "what stands there cannot be read as a journal");
+    busy(&mut alone);
+    assert!(alone.journal_trouble().is_some() && alone.journal_place().is_none() && !alone.settle());
+    drop(alone);
+
+    let mut store = PstStore::open(&path).unwrap();
+    store.journal_elsewhere(&other);
+    assert_eq!(store.recover().unwrap(), none());
+    assert!(!other.exists(), "looking for a journal makes no folder");
+    let made = busy(&mut store);
+    let want = whole(&mut store);
+    assert!(store.journal_trouble().is_none());
+    assert_eq!(store.journal_place(), Some(there.as_path()));
+    // Forced to disk when asked, and only when there is something new to force.
+    assert!(store.settle() && !store.settle());
+    assert!(std::fs::read(&path).unwrap() == bytes);
+    drop(store);
+
+    // A run that does not know of the other place finds nothing; one that does, all of it.
+    let mut blind = PstStore::open(&path).unwrap();
+    assert!(blind.recover().is_err() && !blind.unsaved());
+    drop(blind);
+    let mut back = PstStore::open(&path).unwrap();
+    back.journal_elsewhere(&other);
+    assert_eq!(back.recover().unwrap(), Recovery { applied: made, ..none() });
+    alike(&want, &whole(&mut back));
+    // It goes on there, and what is cut off it is kept beside it, not beside the data file.
+    let inbox = folder(&mut back, "Inbox");
+    back.create_folder(inbox.id, "One more").unwrap();
+    drop(back);
+    let full = std::fs::read(&there).unwrap();
+    std::fs::write(&there, &full[..full.len() - 2]).unwrap();
+    let mut back = PstStore::open(&path).unwrap();
+    back.journal_elsewhere(&other);
+    assert_eq!(back.recover().unwrap(), Recovery { applied: made, lost: 1, ..none() });
+    let aside = PathBuf::from(format!("{}.old", there.display()));
+    assert!(aside.exists() && !set_aside(&path).exists());
+    // Thrown away: the journal goes from where it was.
+    back.discard();
+    assert!(!there.exists() && !back.unsaved());
+    // The next change is journalled there again.
+    let inbox = folder(&mut back, "Inbox");
+    back.create_folder(inbox.id, "Again").unwrap();
+    assert!(there.exists() && back.journal_trouble().is_none());
+    drop(back);
+
+    // Once the folder can be written again, the journal that is elsewhere is still found.
+    std::fs::remove_dir(journal_beside(&path)).unwrap();
+    let mut back = PstStore::open(&path).unwrap();
+    back.journal_elsewhere(&other);
+    assert_eq!(back.recover().unwrap(), Recovery { applied: 1, ..none() });
+    assert!(!journal_beside(&path).exists());
+    drop(back);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn what_a_damaged_journal_lost_is_counted_as_far_as_it_can_be() {
+    let (dir, path, _) = on_disk("journal-count");
+    let journal = journal_beside(&path);
+    let ident = crate::journal::ident(&path).unwrap();
+    let mut head = b"OMCJRNL1".to_vec();
+    head.extend_from_slice(&ident.0.to_le_bytes());
+    head.extend_from_slice(&ident.1.to_le_bytes());
+    let record = |name: &str| {
+        let mut store = PstStore::open(&path).unwrap();
+        let inbox = folder(&mut store, "Inbox");
+        store.create_folder(inbox.id, name).unwrap();
+        drop(store);
+        let all = std::fs::read(&journal).unwrap();
+        std::fs::remove_file(&journal).unwrap();
+        all[head.len()..].to_vec()
+    };
+    let records: Vec<Vec<u8>> = ["One", "Two", "Three", "Four", "Five"].iter().map(|n| record(n)).collect();
+    let all = |damage: &dyn Fn(&mut Vec<Vec<u8>>)| {
+        let mut records = records.clone();
+        damage(&mut records);
+        [head.clone(), records.concat()].concat()
+    };
+    let cases: Vec<(Vec<u8>, Recovery)> = vec![
+        (all(&|_| {}), Recovery { applied: 5, ..none() }),
+        // One byte of the second request wrong: it and the three after it, exactly.
+        (all(&|r| *r[1].last_mut().unwrap() ^= 1), Recovery { applied: 1, lost: 4, ..none() }),
+        // The last one wrong, and the last one cut short.
+        (all(&|r| *r[4].last_mut().unwrap() ^= 1), Recovery { applied: 4, lost: 1, ..none() }),
+        (all(&|r| r[4].truncate(5)), Recovery { applied: 4, lost: 1, ..none() }),
+        (all(&|r| r[4].truncate(11)), Recovery { applied: 4, lost: 1, ..none() }),
+        // A damaged one in the middle and the last cut short after it.
+        (
+            all(&|r| {
+                *r[2].last_mut().unwrap() ^= 1;
+                r[4].truncate(3);
+            }),
+            Recovery { applied: 2, lost: 3, ..none() },
+        ),
+        // A length that is wrong: where the next record starts is not known any more.
+        (all(&|r| r[1][0] ^= 0x10), Recovery { applied: 1, lost: 1, more: true, ..none() }),
+        (all(&|r| r[3][3] = 0xFF), Recovery { applied: 3, lost: 1, more: true, ..none() }),
+    ];
+    for (n, (bytes, want)) in cases.into_iter().enumerate() {
+        std::fs::write(&journal, &bytes).unwrap();
+        let mut store = PstStore::open(&path).unwrap();
+        let found = store.recover().unwrap();
+        // A wrong length may by chance land on what reads as records: never fewer than said.
+        if want.more {
+            assert!(found.applied == want.applied && found.lost >= 1, "case {n}: {found:?}");
+        } else {
+            assert_eq!(found, want, "case {n}");
+        }
+        whole(&mut store);
+        store.discard();
+        drop(store);
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_file(set_aside(&path));
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }

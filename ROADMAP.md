@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 58 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 59 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 262, all passing |
+| Tests | 265, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -93,7 +93,8 @@
 42. Done: right-to-left text reads the right way in the message list, the reading pane's header and folder names, and a turning mark cannot disguise a name (M3b.4).
 43. Done: the head and foot of a printed page and the markers of lists are shaped and turned as the body is (M3b.5).
 44. Done: a paragraph written from the right has its indent, its list marker and its quotation bars at the right, on screen and in print (M3b.6).
-45. Next: M3b.7: the rest of the M3b list, taking the journal's loose ends next (kept elsewhere when the folder cannot be written, forced to disk on a timer).
+45. Done: the journal of unsaved changes is kept in a folder of our own when it cannot be kept beside the data file, is forced to disk once a second, and says exactly how many changes a damaged journal lost when that can be known (M3b.7).
+46. Next: M3b.8: the rest of the M3b list, taking right-to-left text while it is typed next (the compose box, the search box, a folder being renamed).
 
 ## Do later (from M2)
 
@@ -124,7 +125,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Hidden (associated) items and a folder's own properties carried by `file.export` when the source is a Unicode `.pst`~~ | done: M3b.2 |
 | Hidden items and a folder's own properties carried by `file.export` from an `.ost`, an ANSI `.pst` and a 4K-page file (read through the model still) | M3b, with writing those kinds |
 | ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
-| The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact | M3b |
+| ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
 | Unsaved changes saved on their own after a while (waits for the writer to be proved in Outlook: nothing writes a data file unasked until then) | when the owner says so, with the Outlook check |
 | A save that does not rewrite the whole data file; saving off the UI thread, with progress | M3b |
 | Unknown properties of an attachment kept when a message's attachments change (the list is rewritten from the model then) | M3b |
@@ -846,3 +847,17 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   and on a rendered page with our own Hebrew and Arabic lists. Not yet, and listed: tab
   leaders, a frame's own indent, text beside a picture, the columns of a right-to-left table,
   `<bdo>` and `unicode-bidi`.
+- **2026-10-12** - M3b.7: the journal's loose ends. When the journal cannot be kept beside the data file
+  (the folder is not to be written), it is kept in a folder of the program's own beside the
+  settings (`journals/`, under the data file's name and a number made of the whole of where
+  the file is), and found there when the file is opened again, also once the folder can be
+  written again; what is cut off a damaged journal is kept beside the journal, wherever it
+  is. A journal another running copy holds is never gone around that way. The window now
+  has the journal forced to disk no more than a second after a change, where it was every
+  64 changes only, so a power cut costs the last second and not up to 63 changes
+  (`Session::settle`; the store has no clock of its own, which keeps it building for the
+  web). The count of what a damaged journal lost is now exact where it can be: a record
+  whose sum is wrong is counted with each that follows it, and a last record cut short is
+  one; only when a length itself is wrong, so that records cannot be told apart any more,
+  does the status line say "or more" (`lostMore` in what `file.open` returns). Pinned in
+  `crates/pst/src/tests_journal.rs` and the engine's tests.

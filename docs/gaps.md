@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 48 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 49 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,7 +9,7 @@
 2. **Changes to a data file are kept only for a Unicode `.pst`, and none of it is proved in Outlook.** `file.save`
    (M3.4) rewrites the whole file beside itself and swaps it in; nothing we write has been opened in
    Outlook. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
-   after a run that ended without saving; a power cut may cost the last few of them. An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` copies a
+   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` copies a
    Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
    (associated) items and folder properties beyond name, class and counts are not carried then, and
    the new file does not say which folder is the Calendar or Contacts. Changes
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 49 · 2026-10-12 — M3b.7: the journal is kept elsewhere when the folder cannot be written, forced to disk once a second, and counts what it lost exactly.
 - 48 · 2026-10-12 — M3b.6: a right-to-left paragraph's indent, list marker and quotation bars stand at the right.
 - 47 · 2026-10-12 — M3b.5: the head and foot of a printed page and list markers are shaped and turned as the body is.
 - 46 · 2026-10-12 — M3b.4: right-to-left text in the list, the header and folder names; turning marks left out of one-line text.

@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-262%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-265%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -63,7 +63,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - Opens Outlook data files (`.pst`, `.ost`) and single messages (`.msg`, `.oft`, `.eml`). Nothing is
   written to a data file until Save Changes (Ctrl+S): changes to a Unicode `.pst` are then written
   to a new file that is checked, read back and swapped in, with the file as it was kept beside
-  it on the first save. Until then each change is journalled beside the file, so a crash or a
+  it on the first save. Until then each change is journalled beside the file (or in a folder of our own when that
+  one cannot be written), so a crash or a
   closed window does not lose it: it comes back, still unsaved, when the file is opened again.
   `.ost`, ANSI and 4K-page files are read-only.
 - An Outlook-Classic-style window: ribbon (simplified and classic), folder pane, message list with

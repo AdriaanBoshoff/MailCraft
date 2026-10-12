@@ -171,10 +171,26 @@ impl PstStore {
         self.journal.trouble.clone().filter(|_| self.e_unsaved())
     }
 
+    /// A folder to keep the journal in when it cannot be kept beside the data file.
+    pub fn journal_elsewhere(&mut self, dir: &Path) {
+        self.journal.elsewhere = Some(dir.to_path_buf());
+    }
+
+    /// Where this run's journal of unsaved changes is, when it has one.
+    pub fn journal_place(&self) -> Option<&Path> {
+        self.journal.place()
+    }
+
+    /// Have the disk keep the journal as far as it is written. True when there was something
+    /// to keep.
+    pub fn settle(&mut self) -> bool {
+        self.journal.settle()
+    }
+
     /// Throw the unsaved changes away, and their journal with them.
     pub(crate) fn e_discard(&mut self) {
         self.edits = None;
-        self.journal.finish(self.path.as_deref());
+        self.journal.finish();
     }
 
     /// Bring back the changes a run that ended without saving left in the journal beside the
@@ -187,14 +203,14 @@ impl PstStore {
         if !self.can_edit() || self.e_unsaved() || self.journal.open() {
             return Ok(out);
         }
-        match Journal::read(&path, ident)? {
+        match Journal::read(&path, ident, self.journal.elsewhere.as_deref())? {
             Found::Nothing => {}
             Found::Stale => out.stale = true,
             Found::Held => {
                 out.held = true;
                 self.journal.trouble = Some("another running OpenMailClient has this data file's journal".to_string());
             }
-            Found::Records { mut file, records, torn } => {
+            Found::Records { mut file, at, records, after } => {
                 let total = records.len();
                 let (mut end, mut applied) = (journal::HEADER, 0usize);
                 self.journal.playing = true;
@@ -206,16 +222,22 @@ impl PstStore {
                 }
                 self.journal.playing = false;
                 out.applied = u32::try_from(applied).unwrap_or(u32::MAX);
-                out.lost = u32::try_from(total.saturating_sub(applied)).unwrap_or(u32::MAX).saturating_add(u32::from(torn && applied == total));
-                if out.lost > 0 {
-                    journal::keep_aside(&mut file, &path);
+                // What could not be made again and all after it, the records that are there
+                // but damaged, and the one that was cut short as it was written.
+                out.lost = u32::try_from(total.saturating_sub(applied))
+                    .unwrap_or(u32::MAX)
+                    .saturating_add(after.damaged)
+                    .saturating_add(u32::from(after.cut || after.unknown));
+                out.more = after.unknown;
+                if out.lost > 0 || out.more {
+                    journal::keep_aside(&mut file, &at);
                 }
                 if applied == 0 {
                     // Nothing to go on from: no journal until there is a change to write.
                     self.edits = None;
                     drop(file);
-                    let _ = std::fs::remove_file(journal::journal_beside(&path));
-                } else if let Err(e) = self.journal.resume(file, end, out.applied) {
+                    let _ = std::fs::remove_file(&at);
+                } else if let Err(e) = self.journal.resume(file, at, end, out.applied) {
                     self.journal.trouble = Some(format!("the journal could not be gone on with ({e})"));
                 }
             }
@@ -898,7 +920,7 @@ impl PstStore {
         let done = self.swap(&path, &tmp, seed);
         match done {
             // The changes are in the file: the journal of them has done its work.
-            Ok(_) => self.journal.finish(Some(&path)),
+            Ok(_) => self.journal.finish(),
             Err(_) => {
                 let _ = std::fs::remove_file(&tmp);
             }

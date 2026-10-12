@@ -22,7 +22,7 @@ mod write;
 
 pub use check::{Check, check};
 pub use edit::original_beside;
-pub use journal::{journal_beside, set_aside};
+pub use journal::{journal_beside, journal_elsewhere, set_aside};
 pub use store_write::{Written, write_store};
 
 use ltp::Raw;
@@ -395,6 +395,14 @@ impl Store for PstStore {
 
     fn discard(&mut self) {
         self.e_discard();
+    }
+
+    fn journal_elsewhere(&mut self, dir: &Path) {
+        PstStore::journal_elsewhere(self, dir);
+    }
+
+    fn settle(&mut self) -> bool {
+        PstStore::settle(self)
     }
 
     fn journal_trouble(&self) -> Option<String> {

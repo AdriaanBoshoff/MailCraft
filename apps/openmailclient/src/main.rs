@@ -20,12 +20,25 @@ struct App {
     /// When they were last written: a window being dragged changes them every frame, and
     /// the file is written no more than once a second.
     written: Option<std::time::Instant>,
+    /// When the journals of unsaved changes were last forced to disk.
+    settled: Option<std::time::Instant>,
 }
 
 impl App {
     fn run(&mut self, id: &str, params: Value) {
         if let Err(e) = self.ui.execute(id, &params) {
             self.ui.session.status = e;
+        }
+    }
+
+    /// Force the journals of unsaved changes to disk, no more than once a second: a power
+    /// cut then costs the last second of changes at most.
+    fn settle(&mut self) {
+        if self.settled.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1)) {
+            return;
+        }
+        if self.ui.session.settle() {
+            self.settled = Some(std::time::Instant::now());
         }
     }
 
@@ -189,12 +202,18 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         self.serve(&ctx);
+        self.settle();
+        if self.ui.session.unsaved() {
+            // A change made a moment after the last forcing is forced a second later.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
         if self.keep_settings(false) {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
     }
 
     fn on_exit(&mut self) {
+        self.ui.session.settle();
         self.keep_settings(true);
     }
 }
@@ -217,7 +236,9 @@ fn main() -> ExitCode {
     session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
-    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None };
+    // Journals that cannot be kept beside their data file go beside the settings.
+    session.journal_dir = settings_path().and_then(|p| p.parent().map(|dir| dir.join("journals")));
+    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None };
     if let Some(path) = app.settings.clone() {
         // The data files of last time are opened again unless this run names what to open.
         let reopen = !args.iter().any(|a| a == "--sample" || !a.starts_with("--"));

@@ -19,7 +19,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "Ctrl+O",
-            params: r#"{"path": a .pst, .ost, .msg, .oft or .eml file, "recover": false to leave unsaved changes of an earlier run where they are}; nothing is written to the file until file.save; changes a run that ended without saving left in the journal beside a data file are brought back, unsaved as they were; returns {"store", "recovered", "lost", "staleJournal"}"#,
+            params: r#"{"path": a .pst, .ost, .msg, .oft or .eml file, "recover": false to leave unsaved changes of an earlier run where they are}; nothing is written to the file until file.save; changes a run that ended without saving left in the journal beside a data file are brought back, unsaved as they were; a journal that cannot be kept beside the file is kept in a folder of the program's own; returns {"store", "recovered", "lost", "lostMore": true when more than "lost" may be missing, "staleJournal"}"#,
             enabled: always,
             run: open,
         },
@@ -184,6 +184,9 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
             let name = store.display_name();
             // What a run that ended without saving left in the journal comes back, unsaved
             // as it was. A journal that cannot be read does not keep the file from opening.
+            if let Some(dir) = &s.journal_dir {
+                store.journal_elsewhere(dir);
+            }
             let found = if p_bool(p, "recover") == Some(false) { Ok(Recovery::default()) } else { store.recover() };
             let idx = s.add_store(store);
             s.select_default_folder(idx);
@@ -200,13 +203,15 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
                 s.status = format!("Opened {name}: {} unsaved changes of last time were brought back; Save Changes keeps them", found.applied);
             }
             if found.lost > 0 {
-                s.status.push_str(&format!("; {} or more could not be, and the journal as it was found is kept beside the file", found.lost));
+                // The count is said as far as it is known, and no further.
+                let more = if found.more { " or more" } else { "" };
+                s.status.push_str(&format!("; {}{more} could not be, and the journal as it was found is kept", found.lost));
             } else if found.stale {
                 s.status.push_str("; a journal of unsaved changes beside it is for the file as it once was, and was left alone");
             } else if found.held {
                 s.status.push_str("; another running OpenMailClient has unsaved changes to it, so changes made here are not journalled");
             }
-            Ok(json!({ "store": idx, "recovered": found.applied, "lost": found.lost, "staleJournal": found.stale }))
+            Ok(json!({ "store": idx, "recovered": found.applied, "lost": found.lost, "lostMore": found.more, "staleJournal": found.stale }))
         }
         Opened::Item(item) => {
             let idx = match s.stores.iter().position(|st| st.display_name() == OPENED_FILES && st.writable()) {

@@ -534,23 +534,44 @@ pub fn journal_beside(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// Where the journal of a data file is kept when it cannot be kept beside it (the folder is
+/// not to be written, as on a disc or a share that is only read): in `dir`, under the data
+/// file's name and a number made of the whole of where the file is, so that two files of
+/// one name in two folders do not share a journal.
+pub fn journal_elsewhere(dir: &Path, path: &Path) -> PathBuf {
+    let whole = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    // FNV-1a, 64 bits: a name, not a secret.
+    let mut sum = 0xcbf2_9ce4_8422_2325u64;
+    for b in whole.to_string_lossy().bytes() {
+        sum = (sum ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let mut name = path.file_name().map(std::ffi::OsString::from).unwrap_or_default();
+    name.push(format!(".{sum:016x}.openmailclient-journal"));
+    dir.join(name)
+}
+
 /// Where a journal that could not be played back, or not all of it, is kept.
 pub fn set_aside(path: &Path) -> PathBuf {
-    let mut name = journal_beside(path).into_os_string();
+    aside_of(&journal_beside(path))
+}
+
+/// The other name of the journal kept at `at`.
+pub(crate) fn aside_of(at: &Path) -> PathBuf {
+    let mut name = at.as_os_str().to_os_string();
     name.push(".old");
     PathBuf::from(name)
 }
 
 /// Keep what a journal holds under the other name before any of it is cut off. Read through
-/// the handle that holds it, which is the only one that may.
-pub(crate) fn keep_aside(file: &mut std::fs::File, path: &Path) {
+/// the handle that holds it, which is the only one that may. `at` is where the journal is.
+pub(crate) fn keep_aside(file: &mut std::fs::File, at: &Path) {
     let copied = file.seek(SeekFrom::Start(0)).and_then(|_| {
-        let mut out = std::fs::File::create(set_aside(path))?;
+        let mut out = std::fs::File::create(aside_of(at))?;
         std::io::copy(file, &mut out)?;
         out.sync_all()
     });
     if copied.is_err() {
-        let _ = std::fs::remove_file(set_aside(path));
+        let _ = std::fs::remove_file(aside_of(at));
     }
 }
 
@@ -576,17 +597,27 @@ fn hold(file: &std::fs::File) -> bool {
     !matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
+fn held() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::WouldBlock, "another program holds it")
+}
+
 /// The journal of one open data file.
 #[derive(Default)]
 pub(crate) struct Journal {
     file: Option<std::fs::File>,
+    /// Where that file is: beside the data file, or in the other place.
+    at: Option<PathBuf>,
     records: u32,
     /// Why changes are not journalled any more, when they are not.
     pub(crate) trouble: Option<String>,
     /// True while the journal is played back: what is played is not written again.
     pub(crate) playing: bool,
-    /// True when the file beside the data file is this run's to write and to take away.
+    /// True when the journal file is this run's to write and to take away.
     mine: bool,
+    /// A folder to keep the journal in when it cannot be kept beside the data file.
+    pub(crate) elsewhere: Option<PathBuf>,
+    /// Records were written that the disk has not been told to keep yet.
+    loose: bool,
 }
 
 /// What reading a journal found.
@@ -597,15 +628,39 @@ pub(crate) enum Found {
     Stale,
     /// Another running program holds it.
     Held,
-    /// Its records, each with where it ends in the file. `torn` when bytes follow the last
-    /// whole one.
-    Records { file: std::fs::File, records: Vec<(Vec<u8>, u64)>, torn: bool },
+    /// Its records, each with where it ends in the file, and where the journal is.
+    Records { file: std::fs::File, at: PathBuf, records: Vec<(Vec<u8>, u64)>, after: After },
+}
+
+/// What follows the last whole record of a journal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct After {
+    /// Records that are there but not to be believed: one whose sum is wrong, and each that
+    /// follows it (a record is played only after all before it).
+    pub(crate) damaged: u32,
+    /// One more record was begun and cut short: the last thing written before the end.
+    pub(crate) cut: bool,
+    /// Bytes follow that cannot be told into records: how many requests they were is not
+    /// known.
+    pub(crate) unknown: bool,
 }
 
 impl Journal {
-    /// Read the journal beside a data file.
-    pub(crate) fn read(path: &Path, ident: (u64, u32)) -> std::io::Result<Found> {
-        let mut file = match std::fs::File::options().read(true).write(true).open(journal_beside(path)) {
+    /// Read the journal of a data file: the one beside it, or, when there is none there, the
+    /// one in the other place.
+    pub(crate) fn read(path: &Path, ident: (u64, u32), elsewhere: Option<&Path>) -> std::io::Result<Found> {
+        match Self::read_at(journal_beside(path), ident) {
+            Ok(Found::Nothing) | Err(_) if elsewhere.is_some() => {}
+            found => return found,
+        }
+        match elsewhere {
+            Some(dir) => Self::read_at(journal_elsewhere(dir, path), ident),
+            None => Ok(Found::Nothing),
+        }
+    }
+
+    fn read_at(at: PathBuf, ident: (u64, u32)) -> std::io::Result<Found> {
+        let mut file = match std::fs::File::options().read(true).write(true).open(&at) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Found::Nothing),
             Err(e) => return Err(e),
@@ -620,44 +675,54 @@ impl Journal {
             return Ok(Found::Stale);
         }
         let mut reader = std::io::BufReader::new(&file);
-        let (mut at, mut records, mut torn) = (HEADER, Vec::new(), false);
-        while at < len {
+        let (mut at_byte, mut good, mut records, mut after) = (HEADER, HEADER, Vec::new(), After::default());
+        while at_byte < len {
             let mut lead = [0u8; 8];
             let (Ok(()), Some(size), Some(sum)) = (
                 reader.read_exact(&mut lead),
                 lead.first_chunk::<4>().map(|b| u32::from_le_bytes(*b)),
                 lead.last_chunk::<4>().map(|b| u32::from_le_bytes(*b)),
             ) else {
-                torn = true;
+                // Less than the start of a record: one that was cut short as it was begun.
+                after.cut = true;
                 break;
             };
-            let end = at.saturating_add(8).saturating_add(u64::from(size));
-            // The length is believed only as far as the file goes.
-            if end > len || usize::try_from(size).map_or(true, |n| n > MAX_RECORD) {
-                torn = true;
+            let end = at_byte.saturating_add(8).saturating_add(u64::from(size));
+            // The length is believed only as far as it can be one.
+            if usize::try_from(size).map_or(true, |n| n > MAX_RECORD) {
+                after.unknown = true;
+                break;
+            }
+            if end > len {
+                // A record that says it goes on past the end: after whole records, the one
+                // that was being written; after a damaged one, nothing that can be trusted.
+                (after.cut, after.unknown) = (after.damaged == 0, after.damaged > 0);
                 break;
             }
             let mut payload = Vec::new();
-            if (&mut reader).take(u64::from(size)).read_to_end(&mut payload).is_err()
-                || payload.len() as u64 != u64::from(size)
-                || crc(&payload) != sum
-            {
-                torn = true;
+            if (&mut reader).take(u64::from(size)).read_to_end(&mut payload).is_err() || payload.len() as u64 != u64::from(size) {
+                after.unknown = true;
                 break;
             }
-            records.push((payload, end));
-            at = end;
+            if after.damaged > 0 || crc(&payload) != sum {
+                // Counted, not played: the records still follow one another.
+                after.damaged = after.damaged.saturating_add(1);
+            } else {
+                records.push((payload, end));
+                good = end;
+            }
+            at_byte = end;
         }
         drop(reader);
-        file.seek(SeekFrom::Start(at))?;
-        Ok(Found::Records { file, records, torn })
+        file.seek(SeekFrom::Start(good))?;
+        Ok(Found::Records { file, at, records, after })
     }
 
     /// Go on writing a journal that was played back, from where its last good record ends.
-    pub(crate) fn resume(&mut self, mut file: std::fs::File, end: u64, records: u32) -> std::io::Result<()> {
+    pub(crate) fn resume(&mut self, mut file: std::fs::File, at: PathBuf, end: u64, records: u32) -> std::io::Result<()> {
         file.set_len(end)?;
         file.seek(SeekFrom::Start(end))?;
-        (self.file, self.records, self.mine) = (Some(file), records, true);
+        (self.file, self.at, self.records, self.mine) = (Some(file), Some(at), records, true);
         Ok(())
     }
 
@@ -669,6 +734,11 @@ impl Journal {
     /// True when this run has a journal open.
     pub(crate) fn open(&self) -> bool {
         self.file.is_some()
+    }
+
+    /// Where this run's journal is, when it has one.
+    pub(crate) fn place(&self) -> Option<&Path> {
+        self.at.as_deref().filter(|_| self.file.is_some())
     }
 
     /// Write one request. When that cannot be done the journal ends there: what it holds is
@@ -688,8 +758,8 @@ impl Journal {
         let payload = op.encode().ok_or("a change was too large to journal")?;
         let size = u32::try_from(payload.len()).map_err(|_| "a change was too large to journal")?;
         if self.file.is_none() {
-            self.file = Some(start(path, ident).map_err(|e| format!("the journal could not be started ({e})"))?);
-            self.mine = true;
+            let (file, at) = start(path, ident, self.elsewhere.as_deref()).map_err(|e| format!("the journal could not be started ({e})"))?;
+            (self.file, self.at, self.mine) = (Some(file), Some(at), true);
         }
         let file = self.file.as_mut().ok_or("the journal is not open")?;
         let mut record = Vec::with_capacity(payload.len().saturating_add(8));
@@ -706,38 +776,67 @@ impl Journal {
             return Err(format!("the journal could not be written ({e})"));
         }
         self.records = self.records.saturating_add(1);
+        self.loose = true;
         if self.records.is_multiple_of(SYNC_EVERY) {
-            let _ = file.sync_data();
+            self.settle();
         }
         Ok(())
     }
 
+    /// Have the disk keep what was written so far. Asked for now and then by whoever has a
+    /// clock, so that a power cut costs the last moments and not the last 63 changes.
+    /// Returns true when there was something to keep.
+    pub(crate) fn settle(&mut self) -> bool {
+        let loose = std::mem::take(&mut self.loose);
+        if loose && let Some(file) = &self.file {
+            let _ = file.sync_data();
+        }
+        loose && self.file.is_some()
+    }
+
     /// The changes are in the data file, or were thrown away: the journal has done its work.
-    pub(crate) fn finish(&mut self, path: Option<&Path>) {
-        let mine = self.mine;
-        *self = Self::default();
-        if let Some(path) = path
+    pub(crate) fn finish(&mut self) {
+        let (mine, at, elsewhere) = (self.mine, self.at.take(), self.elsewhere.take());
+        *self = Self { elsewhere, ..Self::default() };
+        if let Some(at) = at
             && mine
         {
-            let _ = std::fs::remove_file(journal_beside(path));
+            let _ = std::fs::remove_file(at);
         }
     }
 }
 
-/// Begin a journal. One that is already there was not played back (it is for this file as
-/// it once was, or the person chose not to): it is kept under another name, not written over.
-fn start(path: &Path, ident: (u64, u32)) -> std::io::Result<std::fs::File> {
-    let at = journal_beside(path);
+/// Begin a journal beside the data file, or in the other place when that cannot be done.
+fn start(path: &Path, ident: (u64, u32), elsewhere: Option<&Path>) -> std::io::Result<(std::fs::File, PathBuf)> {
+    let beside = journal_beside(path);
+    match (start_at(&beside, ident), elsewhere) {
+        (Ok(file), _) => Ok((file, beside)),
+        // Held by another running program: its changes are not to be written beside in
+        // another place, where neither would find the other's.
+        (Err(e), _) if e.kind() == std::io::ErrorKind::WouldBlock => Err(e),
+        (Err(e), None) => Err(e),
+        (Err(_), Some(dir)) => {
+            std::fs::create_dir_all(dir)?;
+            let at = journal_elsewhere(dir, path);
+            start_at(&at, ident).map(|file| (file, at))
+        }
+    }
+}
+
+/// Begin a journal at `at`. One that is already there was not played back (it is for this
+/// file as it once was, or the person chose not to): it is kept under another name, not
+/// written over.
+fn start_at(at: &Path, ident: (u64, u32)) -> std::io::Result<std::fs::File> {
     if at.exists() {
         // Not from under another running program that is writing it.
-        if !hold(&std::fs::File::options().read(true).write(true).open(&at)?) {
-            return Err(std::io::Error::other("another program holds it"));
+        if !hold(&std::fs::File::options().read(true).write(true).open(at)?) {
+            return Err(held());
         }
-        std::fs::rename(&at, set_aside(path))?;
+        std::fs::rename(at, aside_of(at))?;
     }
-    let mut file = std::fs::File::options().read(true).write(true).create_new(true).open(&at)?;
+    let mut file = std::fs::File::options().read(true).write(true).create_new(true).open(at)?;
     if !hold(&file) {
-        return Err(std::io::Error::other("another program holds it"));
+        return Err(held());
     }
     file.write_all(&header(ident))?;
     file.sync_all()?;

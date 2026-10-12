@@ -509,8 +509,11 @@ pub struct Recovery {
     /// Changes brought back.
     pub applied: u32,
     /// Changes that were damaged, cut short or could not be made again, and those after them
-    /// that could still be counted: at least this many were not brought back.
+    /// that could still be counted.
     pub lost: u32,
+    /// True when more than `lost` may not have been brought back: what follows the last
+    /// record that could be counted cannot be told into records.
+    pub more: bool,
     /// True when a journal was found that is not for the file as it is now; it is left alone.
     pub stale: bool,
     /// True when another running program holds the journal.
@@ -546,6 +549,15 @@ pub trait Store {
 
     /// Throw the unsaved changes away, and their journal with them.
     fn discard(&mut self) {}
+
+    /// A folder of the program's own to keep the journal of unsaved changes in when it
+    /// cannot be kept beside the data file. Said before `recover`.
+    fn journal_elsewhere(&mut self, _dir: &std::path::Path) {}
+
+    /// Have the disk keep what was journalled so far. True when there was something to keep.
+    fn settle(&mut self) -> bool {
+        false
+    }
 
     /// Why changes are held in memory only, when they are not also journalled.
     fn journal_trouble(&self) -> Option<String> {

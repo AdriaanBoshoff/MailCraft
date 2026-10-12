@@ -2337,3 +2337,36 @@ fn a_damaged_data_file_is_exported_as_far_as_it_reads() {
     assert!(read > 0, "no damage made the copy fall back ({copied} copied)");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn unsaved_changes_are_journalled_elsewhere_when_the_folder_cannot_be_written() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-journal-elsewhere-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (path, ours) = (dir.join("box.pst"), dir.join("ours"));
+    run(&mut session(), "file.export", json!({"path": path}));
+    // Nothing can be written where the journal would be: a folder stands in its place.
+    std::fs::create_dir(dir.join("box.pst.openmailclient-journal")).unwrap();
+
+    let mut s = Session::new();
+    s.now = now();
+    s.journal_dir = Some(ours.clone());
+    assert!(!s.settle(), "nothing is open");
+    run(&mut s, "file.open", json!({"path": path}));
+    run(&mut s, "folder.new", json!({"name": "Kept elsewhere"}));
+    assert!(s.unsaved() && !s.unjournalled(), "{}", s.status);
+    assert_eq!(std::fs::read_dir(&ours).unwrap().count(), 1);
+    assert!(s.settle() && !s.settle());
+    drop(s);
+
+    let mut next = Session::new();
+    next.now = now();
+    next.journal_dir = Some(ours.clone());
+    let opened = run(&mut next, "file.open", json!({"path": path}));
+    assert_eq!((opened["recovered"].clone(), opened["lost"].clone(), opened["lostMore"].clone()), (json!(1), json!(0), json!(false)));
+    assert!(next.folders[0].iter().any(|f| f.name == "Kept elsewhere"));
+    run(&mut next, "file.closeStore", json!({"discard": true}));
+    assert_eq!(std::fs::read_dir(&ours).unwrap().count(), 0);
+    drop(next);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

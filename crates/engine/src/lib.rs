@@ -173,6 +173,9 @@ pub struct Session {
     pub page_setup: openmailclient_layout::Setup,
     /// What is printed: the open message, or the folder's list. `file.pageSetup` changes it.
     pub print_style: print::Style,
+    /// A folder of the program's own where the journal of a data file's unsaved changes is
+    /// kept when it cannot be kept beside the file. Set by the host; `None` keeps none there.
+    pub journal_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Session {
@@ -207,6 +210,7 @@ impl Session {
             undo: Vec::new(),
             set_aside: Vec::new(),
             page_setup: openmailclient_layout::Setup::default(),
+            journal_dir: None,
             print_style: print::Style::default(),
         }
     }
@@ -472,6 +476,18 @@ impl Session {
     /// that would bring them back after a run that ends badly.
     pub fn unjournalled(&self) -> bool {
         self.stores.iter().any(|s| s.unsaved() && s.journal_trouble().is_some())
+    }
+
+    /// Have the disk keep what the journals of unsaved changes hold so far. The host asks for
+    /// it now and then (it has the clock): a journal is otherwise forced to disk every so
+    /// many changes only. True when there was something to keep.
+    pub fn settle(&mut self) -> bool {
+        // Every one of them, not only up to the first that had something.
+        let mut any = false;
+        for store in &mut self.stores {
+            any |= store.settle();
+        }
+        any
     }
 
     /// True when a data file has changes that are not in the file yet.

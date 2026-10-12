@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 11 · 2026-10-12 · `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
+**Status:** revision 12 · 2026-10-12 · the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -77,7 +77,7 @@ profile and waits for their say. `file.export` writes the new file beside the ta
 against the structure check and only then puts it in the target's place. `file.save` does the
 same for an open file, reads the new file back and compares it with what was shown, refuses
 when another program wrote the file since it was opened or has it open, and on the first save
-keeps the file as it was beside it (`name.before-openmailclient.pst`). Until a save, each change is journalled in a file of our own beside the data file (`name.pst.openmailclient-journal`: our format, not Outlook's, and never read by it) and played back when the file is opened again; the data file is written only by a save. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
+keeps the file as it was beside it (`name.before-openmailclient.pst`). Until a save, each change is journalled in a file of our own beside the data file (`name.pst.openmailclient-journal`: our format, not Outlook's, and never read by it) and played back when the file is opened again; when the folder cannot be written the journal is kept in a folder of our own beside the settings instead (M3b.7); the data file is written only by a save. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
 the format (ANSI and 4K-page files are not checked yet).
 
 ## `.eml` (RFC 5322, MIME)
