@@ -11,7 +11,7 @@ const CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456
 /// A sheet 200 wide with 160 of room: 26 body characters to the line.
 const SMALL: Paper = Paper { width: 200.0, height: 300.0, margin: 20.0 };
 
-fn print_on(library: &Library, memo_: &Memo, paper: Paper) -> Result<Printed, LayoutError> {
+fn print_on(library: &Library, memo_: &Memo, paper: impl Into<Setup>) -> Result<Printed, LayoutError> {
     let mut fonts = Fonts::new(library);
     for family in ["Segoe UI", "Times New Roman", "Calibri"] {
         fonts.give(family, false, false, Face { data: boxes::font(CHARS), index: 0 });
@@ -760,6 +760,133 @@ fn text_stands_beside_a_picture_at_one_side() {
             for placed in &page.pictures {
                 assert!(placed.width > 0.0 && placed.height > 0.0 && placed.x.is_finite() && placed.y.is_finite());
                 assert!(placed.y + placed.height <= page.height + 0.01 && placed.y >= -0.01, "{placed:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn pages_are_set_up_as_asked() {
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let words = |n: usize| vec!["word"; n].join(" ");
+    // The glyphs on one baseline, with where they start and end.
+    let on = |page: &Page, y: f32| -> Vec<(f32, f32, char)> {
+        page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).map(|t| (t.x, t.x + t.width, t.glyphs[0].1)).collect()
+    };
+    let said = |line: &[(f32, f32, char)]| line.iter().map(|g| g.2).collect::<String>();
+    let set = |setup: &Setup, body: &Doc| {
+        print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body, plain: false, sizes: &|_| None }, setup).unwrap()
+    };
+    let part = |s: &str| s.to_string();
+    let long = doc(vec![Block::Para(para(&words(900)))]);
+
+    // A sheet on its long side, with a margin of its own at each edge.
+    let setup = Setup {
+        landscape: true,
+        margins: [72.0, 50.0, 60.0, 40.0],
+        header: [part("[Subject]"), part("[date] x"), part("p[ Page ].[PAGES]")],
+        footer: [part("[User]"), String::new(), part("[Page of Pages]")],
+        words: vec![(part("Subject"), part("[Page] of [Pages]")), (part("Date"), part("d")), (part("User"), part("me"))],
+        ..Setup::from(Paper::A4)
+    };
+    let printed = set(&setup, &long);
+    assert!(printed.pages.len() > 1);
+    for (n, page) in printed.pages.iter().enumerate() {
+        assert_eq!((page.width, page.height), (841.89, 595.28));
+        // The header is one line in the room over the body: its parts at the left, in the
+        // middle and at the right. What a name gives is not looked through for names.
+        let head = on(page, 72.0 + 4.0 + 6.4);
+        let pages = printed.pages.len();
+        assert_eq!(said(&head), format!("[Page] of [Pages]d xp{}.{pages}", n + 1));
+        let (left, middle, right) = (&head[..17], &head[17..20], &head[20..]);
+        assert!(near(left[0].0, 40.0), "{left:?}");
+        assert!(near(right.last().unwrap().1, 841.89 - 50.0), "{right:?}");
+        assert!(near(middle[0].0 - 40.0, 841.89 - 50.0 - middle[2].1), "{middle:?}");
+        let foot = on(page, 595.28 - 60.0 - 4.0);
+        assert_eq!(said(&foot), format!("me{} of {pages}", n + 1));
+        assert!(near(foot[0].0, 40.0) && near(foot.last().unwrap().1, 841.89 - 50.0));
+        // The body keeps inside the margins, under the header and over the footer.
+        for text in page.texts.iter().filter(|t| t.size > 8.0) {
+            assert!(text.x >= 40.0 - 0.01 && text.x + text.width <= 841.89 - 50.0 + 0.01, "{text:?}");
+            assert!(text.y > 72.0 + 16.0 && text.y <= 595.28 - 60.0 - 16.0 + 0.01, "{text:?}");
+        }
+    }
+
+    // With no header and no footer the body has their room: it starts at the top margin and
+    // goes down to the bottom one.
+    let bare = Setup { header: Default::default(), footer: Default::default(), ..setup.clone() };
+    let printed = set(&bare, &doc(vec![Block::Para(para(&words(3000)))]));
+    let page = &printed.pages[0];
+    assert!(page.texts.iter().all(|t| t.size > 8.0));
+    let (top, bottom) = page.texts.iter().fold((f32::MAX, 0.0f32), |(a, b), t| (a.min(t.y), b.max(t.y)));
+    assert!(top < 72.0 + 16.0 && bottom > 595.28 - 60.0 - 16.0 && bottom <= 595.28 - 60.0 + 0.01, "{top} {bottom}");
+    // A sheet that is wider than tall already lies as it is, and upright is as given.
+    let wide = Paper { width: 300.0, height: 200.0, margin: 20.0 };
+    for landscape in [false, true] {
+        let page = &set(&Setup { landscape, ..Setup::from(wide) }, &long).pages[0];
+        assert_eq!((page.width, page.height), (300.0, 200.0));
+    }
+    assert_eq!(set(&Setup { landscape: true, ..Setup::from(SMALL) }, &long).pages[0].width, 300.0);
+
+    // A paper alone is the sheet upright with its number at the foot, as before.
+    assert_eq!(
+        Setup::from(Paper::LETTER),
+        Setup {
+            paper: Paper::LETTER,
+            landscape: false,
+            margins: [36.0; 4],
+            header: Default::default(),
+            footer: [String::new(), part("[Page of Pages]"), String::new()],
+            words: vec![]
+        }
+    );
+    assert_eq!(Setup::default().paper, Paper::A4);
+    for name in Paper::NAMES {
+        let paper = Paper::named(&name.to_uppercase()).unwrap();
+        assert_eq!(paper.name(), Some(name));
+        assert!(paper.height > paper.width && paper.margin == 36.0);
+    }
+    assert!(Paper::named("foolscap").is_none() && SMALL.name().is_none());
+
+    // Brackets that name nothing of ours stand as they are; a part longer than its share of
+    // the line is cut, and the parts do not run into each other.
+    let odd = Setup {
+        header: [part("[nothing] [ [Page"), part("a]b[]"), part("[Page]]")],
+        footer: [words(40), words(40), words(40)],
+        ..Setup::from(SMALL)
+    };
+    let printed = set(&odd, &doc(vec![Block::Para(para("body"))]));
+    let page = &printed.pages[0];
+    assert!(said(&on(page, 20.0 + 4.0 + 6.4)).starts_with("[nothing]"));
+    let roomy = set(&Setup { paper: Paper::A4, margins: [36.0; 4], ..odd.clone() }, &doc(vec![Block::Para(para("body"))]));
+    assert_eq!(said(&on(&roomy.pages[0], 36.0 + 4.0 + 6.4)), "[nothing] [ [Pagea]b[]1]");
+    let foot = on(page, 300.0 - 20.0 - 4.0);
+    assert!(foot.len() > 6 && foot.windows(2).all(|w| w[1].0 >= w[0].1 - 0.01), "{foot:?}");
+    assert!(near(foot[0].0, 20.0) && foot.last().unwrap().1 <= 180.01);
+    within(&printed, SMALL);
+
+    // Hostile: margins and sheets that are no sizes, headers of any length, names without end.
+    let wild = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1e30, 1e30, 0.0, 5000.0];
+    let brackets = "[".repeat(60_000) + &"]".repeat(60_000);
+    let many: Vec<(String, String)> = (0..5000).map(|i| (format!("n{i}"), "[n0]".repeat(5000))).collect();
+    for (i, a) in wild.iter().enumerate() {
+        for b in wild {
+            let setup = Setup {
+                paper: Paper { width: *a, height: b, margin: *a },
+                landscape: i % 2 == 0,
+                margins: [*a, b, b, *a],
+                header: [brackets.clone(), "[n0][n4999][Page]".repeat(4000), "\u{0}\n\t[Pages]".into()],
+                footer: ["[n1]".repeat(9000), brackets.clone(), "x".repeat(100_000)],
+                words: many.clone(),
+            };
+            let printed = set(&setup, &doc(vec![Block::Para(para(&words(60)))]));
+            assert!(!printed.pages.is_empty());
+            for page in &printed.pages {
+                assert!(page.width >= 72.0 && page.height >= 72.0 && page.width <= 14_400.0 && page.height <= 14_400.0);
+                for text in &page.texts {
+                    assert!(text.x.is_finite() && text.y.is_finite() && text.x >= -0.01 && text.x + text.width <= page.width + 0.01, "{text:?}");
+                    assert!(text.y >= 0.0 && text.y <= page.height, "{text:?}");
+                }
             }
         }
     }

@@ -1,8 +1,8 @@
 # MailCraft
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M1%20%2B%20M2%20in%20progress-orange)
-![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-41%20of%20115%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-184%20passing-brightgreen)
+![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
+![tests](https://img.shields.io/badge/tests-186%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -40,12 +40,12 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | Area | Done | | |
 |---|---|---|---|
 | Mail | 32 of 67 | `██████████░░░░░░░░░░` | 48% |
-| File | 5 of 12 | `████████░░░░░░░░░░░░` | 42% |
+| File | 6 of 13 | `█████████░░░░░░░░░░░` | 46% |
 | Message window | 4 of 17 | `█████░░░░░░░░░░░░░░░` | 24% |
 | Calendar | 0 of 9 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | People | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | Tasks | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
-| **All** | **41 of 115** | `███████░░░░░░░░░░░░░` | **36%** |
+| **All** | **42 of 116** | `███████░░░░░░░░░░░░░` | **36%** |
 
 ### File formats and protocols
 

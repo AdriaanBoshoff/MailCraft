@@ -25,6 +25,9 @@ pub use fonts::{Fonts, Loaded};
 pub use mailcraft_formats::rich::{Line, Picture, Rgb};
 pub use memo::{Memo, memo};
 
+/// Points in a millimetre.
+pub const MM: f32 = 72.0 / 25.4;
+
 /// Pages one message may take.
 pub const MAX_PAGES: usize = 2000;
 
@@ -48,13 +51,90 @@ impl Paper {
     /// US Letter, 8.5 by 11 inches.
     pub const LETTER: Paper = Paper { width: 612.0, height: 792.0, margin: 36.0 };
 
+    /// US Legal, 8.5 by 14 inches.
+    pub const LEGAL: Paper = Paper { width: 612.0, height: 1008.0, margin: 36.0 };
+    /// ISO 216 A3, 297 by 420 mm.
+    pub const A3: Paper = Paper { width: 841.89, height: 1190.55, margin: 36.0 };
+    /// ISO 216 A5, 148 by 210 mm.
+    pub const A5: Paper = Paper { width: 419.53, height: 595.28, margin: 36.0 };
+    /// ISO 216 B5, 176 by 250 mm.
+    pub const B5: Paper = Paper { width: 498.90, height: 708.66, margin: 36.0 };
+    /// US Executive, 7.25 by 10.5 inches.
+    pub const EXECUTIVE: Paper = Paper { width: 522.0, height: 756.0, margin: 36.0 };
+    /// US Tabloid, 11 by 17 inches.
+    pub const TABLOID: Paper = Paper { width: 792.0, height: 1224.0, margin: 36.0 };
+
+    /// The names [`Paper::named`] knows.
+    pub const NAMES: [&'static str; 8] = ["a4", "letter", "legal", "a3", "a5", "b5", "executive", "tabloid"];
+
     /// A sheet by its name, in any letter case.
     pub fn named(name: &str) -> Option<Paper> {
         match name.to_ascii_lowercase().as_str() {
             "a4" => Some(Self::A4),
             "letter" => Some(Self::LETTER),
+            "legal" => Some(Self::LEGAL),
+            "a3" => Some(Self::A3),
+            "a5" => Some(Self::A5),
+            "b5" => Some(Self::B5),
+            "executive" => Some(Self::EXECUTIVE),
+            "tabloid" => Some(Self::TABLOID),
             _ => None,
         }
+    }
+
+    /// The name of a sheet of this size, when it is one of the known ones.
+    pub fn name(&self) -> Option<&'static str> {
+        Self::NAMES
+            .into_iter()
+            .find(|name| Self::named(name).is_some_and(|p| (p.width - self.width).abs() < 0.5 && (p.height - self.height).abs() < 0.5))
+    }
+}
+
+/// How pages are set up: the sheet and which way it lies, the room left free at each edge,
+/// and what stands over and under every page.
+///
+/// A header or footer has three parts, at the left, in the middle and at the right, each one
+/// line. In them `[Page]` is the page's number, `[Pages]` how many pages there are, and
+/// `[Page of Pages]` the number, with "of" how many when there is more than one; any other
+/// `[name]` is looked up in `words`. Names are matched in any letter case, and what a name
+/// gives is not looked through for names again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Setup {
+    /// The sheet, standing upright. Its `margin` is not looked at.
+    pub paper: Paper,
+    /// The sheet lies on its long side.
+    pub landscape: bool,
+    /// Room left free at the top, the right, the bottom and the left, in points.
+    pub margins: [f32; 4],
+    pub header: [String; 3],
+    pub footer: [String; 3],
+    /// Names a header or footer may ask for, each with what it gives.
+    pub words: Vec<(String, String)>,
+}
+
+impl From<Paper> for Setup {
+    /// The sheet upright with its margin at every edge, and each page's number at its foot.
+    fn from(paper: Paper) -> Self {
+        Setup {
+            paper,
+            landscape: false,
+            margins: [paper.margin; 4],
+            header: Default::default(),
+            footer: [String::new(), "[Page of Pages]".into(), String::new()],
+            words: Vec::new(),
+        }
+    }
+}
+
+impl From<&Setup> for Setup {
+    fn from(setup: &Setup) -> Self {
+        setup.clone()
+    }
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Paper::A4.into()
     }
 }
 

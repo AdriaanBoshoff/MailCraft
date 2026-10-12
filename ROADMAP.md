@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 39 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 40 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 184, all passing |
+| Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 186, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -74,8 +74,9 @@
 24. Done: fills behind blocks, and room on each side of them, in HTML and RTF bodies.
 25. Done: opening a link, after being asked.
 26. Done: text beside pictures, and kerning, in print.
-27. Next: what is left of M2, in this order: page setup, Table Style and a print preview;
-    metafiles with a bitmap beside the drawing.
+27. Done: page setup for print.
+28. Next: what is left of M2, in this order: a print preview (with the page setup in it),
+    Table Style; metafiles with a bitmap beside the drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -461,3 +462,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   pages were checked by their numbers (tests, and a sample message printed in the
   installed fonts, where 19 of 33 pieces of text carry pairs), not by eye: nothing on this
   machine draws a PDF, and the print preview is next. Nothing here goes beyond Outlook.
+- **2026-10-12** - M2.37: page setup. `file.pageSetup` keeps how pages are set up for printing and
+  says how they are: the sheet (A4, Letter, Legal, A3, A5, B5, Executive, Tabloid), upright
+  or on its long side, a margin for each edge in millimetres, and a header and a footer of
+  three parts each (left, middle, right; one line, a part longer than its share is cut
+  with a mark). In them `[Page]`, `[Pages]`, `[Page of Pages]`, `[Date]`, `[Time]`,
+  `[User]` and `[Subject]` are filled in; these names are our own. What a name gives is not
+  looked through for names again, so a subject that says `[Page]` prints as it is. With no
+  header or footer the body has their room. `file.print` prints with the setup and takes
+  the same parameters for one print only. A margin is held to a third of the sheet, and
+  sizes that are no numbers fall back to the least. Not yet: a window for it (it comes
+  with the print preview, next), the setup kept between runs, a font or size of one's own
+  for header and footer. Not compared with Outlook's page setup; nothing here is claimed
+  to go beyond it.

@@ -12,7 +12,7 @@ use mailcraft_formats::rich::{
 };
 
 use crate::fonts::{Fonts, Pick};
-use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Text};
+use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Setup, Text};
 
 /// Points to the pixel.
 const PX: f32 = 0.75;
@@ -43,6 +43,10 @@ const MAX_GLYPHS: usize = 4_000_000;
 const MAX_PARA_GLYPHS: usize = 400_000;
 /// Room kept at the foot of each page for its number.
 pub(crate) const FOOT: f32 = 16.0;
+/// Room over the body for the header, in points.
+pub(crate) const HEAD: f32 = 16.0;
+/// The least height of body a page keeps under a header.
+const MIN_BODY: f32 = 24.0;
 
 const BLACK: Rgb = [0, 0, 0];
 const GREY: Rgb = [128, 128, 128];
@@ -120,7 +124,13 @@ type Mark = (usize, usize, usize, usize);
 
 pub(crate) struct Flow<'f, 'l> {
     pub fonts: &'f mut Fonts<'l>,
+    /// The sheet as it lies. Its `margin` is not looked at: `margins` has the four.
     pub paper: Paper,
+    /// Room left free at the top, the right, the bottom and the left.
+    pub(crate) margins: [f32; 4],
+    /// Room the header and the footer take inside the margins; nothing where there is none.
+    pub(crate) head: f32,
+    pub(crate) foot: f32,
     pub pages: Vec<Page>,
     pub base: Base,
     /// The limits were reached: nothing more is set.
@@ -269,14 +279,23 @@ struct Waiting<'a> {
 }
 
 impl<'f, 'l> Flow<'f, 'l> {
-    pub fn new(fonts: &'f mut Fonts<'l>, paper: Paper, base: Base, sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>) -> Self {
+    pub fn new(fonts: &'f mut Fonts<'l>, setup: &Setup, base: Base, sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>) -> Self {
         let sane = |v: f32, least: f32, most: f32| if v.is_finite() { v.clamp(least, most) } else { least };
-        let width = sane(paper.width, 72.0, 14_400.0);
-        let height = sane(paper.height, 72.0, 14_400.0);
-        let margin = sane(paper.margin, 0.0, width.min(height) / 3.0);
+        let (width, height) = (sane(setup.paper.width, 72.0, 14_400.0), sane(setup.paper.height, 72.0, 14_400.0));
+        let (width, height) = if setup.landscape && width < height { (height, width) } else { (width, height) };
+        // A third of the sheet is the most an edge keeps free, so that a third is left.
+        let [top, right, bottom, left] = setup.margins;
+        let margins = [sane(top, 0.0, height / 3.0), sane(right, 0.0, width / 3.0), sane(bottom, 0.0, height / 3.0), sane(left, 0.0, width / 3.0)];
+        let asked = |parts: &[String; 3]| parts.iter().any(|part| !part.trim().is_empty());
+        let foot = if asked(&setup.footer) { FOOT } else { 0.0 };
+        let room = height - margins[0] - margins[2] - foot;
+        let head = if asked(&setup.header) && room - HEAD >= MIN_BODY { HEAD } else { 0.0 };
         Self {
             fonts,
-            paper: Paper { width, height, margin },
+            paper: Paper { width, height, margin: 0.0 },
+            margins,
+            head,
+            foot,
             pages: Vec::new(),
             base,
             full: false,
@@ -288,19 +307,19 @@ impl<'f, 'l> Flow<'f, 'l> {
     }
 
     pub fn top(&self) -> f32 {
-        self.paper.margin
+        self.margins[0] + self.head
     }
 
     fn bottom(&self) -> f32 {
-        self.paper.height - self.paper.margin - FOOT
+        self.paper.height - self.margins[2] - self.foot
     }
 
     pub fn left(&self) -> f32 {
-        self.paper.margin
+        self.margins[3]
     }
 
     pub fn width(&self) -> f32 {
-        self.paper.width - self.paper.margin * 2.0
+        self.paper.width - self.margins[1] - self.margins[3]
     }
 
     pub fn start(&mut self) -> At {

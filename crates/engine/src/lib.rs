@@ -169,6 +169,8 @@ pub struct Session {
     /// Messages that were being written and were discarded or made way for another, the newest
     /// last: `compose.restore` brings one back.
     pub set_aside: Vec<Draft>,
+    /// How pages are set up for printing: `file.pageSetup` changes it.
+    pub page_setup: mailcraft_layout::Setup,
 }
 
 impl Default for Session {
@@ -202,6 +204,7 @@ impl Session {
             user_email: "alex.morgan@example.org".to_string(),
             undo: Vec::new(),
             set_aside: Vec::new(),
+            page_setup: mailcraft_layout::Setup::default(),
         }
     }
 

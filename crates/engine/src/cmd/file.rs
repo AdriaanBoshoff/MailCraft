@@ -69,9 +69,19 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "Ctrl+P",
-            params: r#"{"path": target ending in .pdf, "paper": "a4" (default) or "letter", "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"}; returns {"path", "pages", "truncated", "links"}"#,
+            params: r#"{"path": target ending in .pdf, "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "paper", "orientation", "margins", "header", "footer"}; returns {"path", "pages", "truncated", "links"}"#,
             enabled: has_selection,
             run: print,
+        },
+        CommandSpec {
+            id: "file.pageSetup",
+            label: "Page Setup",
+            tab: "File",
+            group: "Print",
+            shortcut: "",
+            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
+            enabled: always,
+            run: page_setup,
         },
         CommandSpec {
             id: "file.closeStore",
@@ -219,10 +229,7 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
     if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return Err(EngineError::BadParams("printing writes a PDF file: the path must end in .pdf".into()));
     }
-    let paper = match p_str(p, "paper") {
-        Some(name) => mailcraft_layout::Paper::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown paper {name:?}: a4 or letter")))?,
-        None => mailcraft_layout::Paper::A4,
-    };
+    let setup = crate::print::setup_with(&s.page_setup, p)?;
     let links = match p_str(p, "links") {
         Some(name) => {
             crate::print::Links::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown links {name:?}: none, concerns or all")))?
@@ -231,10 +238,21 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
     };
     let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
     let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
-    let printed = crate::print::pdf(item, owner, s.tz_offset_min, paper, links)?;
+    let printed = crate::print::pdf(item, &crate::print::Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup: &setup, links })?;
     io::write_atomic(path, &printed.file)?;
     s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
     Ok(json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated, "links": printed.links}))
+}
+
+/// Change how pages are set up for printing, and say how they are.
+fn page_setup(s: &mut Session, p: &Value) -> CmdResult {
+    let from = if p_bool(p, "reset") == Some(true) { mailcraft_layout::Setup::default() } else { s.page_setup.clone() };
+    let setup = crate::print::setup_with(&from, p)?;
+    if setup != s.page_setup {
+        s.page_setup = setup;
+        s.status = "Page setup changed".to_string();
+    }
+    Ok(crate::print::setup_json(&s.page_setup))
 }
 
 fn close_store(s: &mut Session, p: &Value) -> CmdResult {

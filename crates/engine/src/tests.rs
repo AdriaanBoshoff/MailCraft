@@ -42,7 +42,7 @@ fn catalog_names_real_commands_and_parity_only_rises() {
     }
     let (done, total) = catalog::summary();
     // The floor only goes up: raise it when features land.
-    assert!(done >= 41, "parity fell to {done} of {total}");
+    assert!(done >= 42, "parity fell to {done} of {total}");
     assert!(catalog::checklist().contains("- [x] New: New Email"));
 }
 
@@ -66,6 +66,9 @@ fn hostile_params_never_panic() {
         json!({"path": "Z:\\no\\such\\dir\\file.msg", "folder": "/", "name": "\u{7}", "field": "to", "value": "<<<>>>;;;,,,\"", "index": 99999}),
         json!({"show": "yes", "on": 3, "descending": "no", "clear": "true"}),
         json!({"address": 7, "confirm": 7}),
+        json!({"margins": 1e308, "orientation": 7, "reset": "x", "header": {"left": "[".repeat(70_000)}, "footer": []}),
+        json!({"margins": {"top": null, "left": -1e300}, "header": 7, "footer": {"center": "[Page".repeat(20_000)}}),
+        json!({"margins": 0, "paper": "tabloid", "orientation": "landscape", "header": "[Subject][Date][Time][User]", "reset": true}),
         json!({"address": "file:///C:/a.exe", "confirm": true, "index": 0}),
         json!({"address": "h".repeat(70_000), "confirm": "x"}),
     ];
@@ -1166,7 +1169,18 @@ fn a_message_prints_to_a_pdf_file() {
     let item = s.open.clone().unwrap();
     let library = mailcraft_fonts::Library::empty();
     assert!(matches!(
-        crate::print::layout(&item, "Alex Morgan", 0, mailcraft_layout::Paper::A4, crate::print::Links::All, &library).map(|_| ()),
+        crate::print::layout(
+            &item,
+            &crate::print::Job {
+                owner: "Alex Morgan",
+                tz_offset_min: 0,
+                now: 0,
+                setup: &mailcraft_layout::Setup::default(),
+                links: crate::print::Links::All
+            },
+            &library
+        )
+        .map(|_| ()),
         Err(EngineError::Format(_))
     ));
     let printed = {
@@ -1682,4 +1696,110 @@ fn links_of_hostile_bodies_are_listed_within_bounds() {
     for index in [0, 1, 499] {
         assert!(s.run("mail.openLink", &json!({"index": index, "confirm": true})).is_err());
     }
+}
+
+#[test]
+fn page_setup_is_kept_and_printed_with() {
+    use mailcraft_layout::{MM, Paper, Setup};
+    let mut s = session();
+    // It can be asked about and changed with no message open.
+    assert!(s.is_enabled("file.pageSetup"));
+    let was = run(&mut s, "file.pageSetup", json!({}));
+    assert_eq!(
+        was,
+        json!({"paper": "a4", "width_mm": 210.0, "height_mm": 297.0, "orientation": "portrait",
+            "margins": {"top": 12.7, "right": 12.7, "bottom": 12.7, "left": 12.7},
+            "header": {"left": "", "center": "", "right": ""}, "footer": {"left": "", "center": "[Page of Pages]", "right": ""}})
+    );
+    assert_eq!(s.page_setup, Setup::default());
+
+    // What is asked for changes; the rest stays.
+    let now = run(
+        &mut s,
+        "file.pageSetup",
+        json!({"paper": "Legal", "orientation": "Landscape", "margins": {"top": 25, "left": 20.5}, "header": "[Subject]"}),
+    );
+    assert_eq!(now["paper"], "legal");
+    assert_eq!(now["orientation"], "landscape");
+    assert_eq!(now["margins"], json!({"top": 25.0, "right": 12.7, "bottom": 12.7, "left": 20.5}));
+    assert_eq!(now["header"], json!({"left": "", "center": "[Subject]", "right": ""}));
+    assert_eq!(now["footer"], was["footer"]);
+    assert_eq!(s.status, "Page setup changed");
+    let now = run(&mut s, "file.pageSetup", json!({"margins": 10, "header": {"right": "[Date]\u{7}\n"}, "footer": {"left": "[User]", "centre": ""}}));
+    assert_eq!(now["margins"], json!({"top": 10.0, "right": 10.0, "bottom": 10.0, "left": 10.0}));
+    assert_eq!(now["header"], json!({"left": "", "center": "[Subject]", "right": "[Date]"}));
+    assert_eq!(now["footer"], json!({"left": "[User]", "center": "", "right": ""}));
+    assert_eq!(s.page_setup.paper, Paper::LEGAL);
+    assert!(s.page_setup.landscape && (s.page_setup.margins[0] - 10.0 * MM).abs() < 0.001);
+    // A part is no longer than may stand on a line of any sheet.
+    let now = run(&mut s, "file.pageSetup", json!({"footer": "f".repeat(5000)}));
+    assert_eq!(now["footer"]["center"].as_str().unwrap().len(), 400);
+
+    // What is no setup changes nothing.
+    let kept = s.page_setup.clone();
+    for bad in [
+        json!({"paper": "foolscap"}),
+        json!({"orientation": "sideways"}),
+        json!({"margins": -1}),
+        json!({"margins": 150.5}),
+        json!({"margins": "wide"}),
+        json!({"margins": {"up": 1}}),
+        json!({"margins": {"top": "a"}}),
+        json!({"margins": {"top": 5, "left": 1e300}}),
+        json!({"header": 7}),
+        json!({"header": {"left": 7}}),
+        json!({"footer": {"under": "x"}}),
+        json!({"paper": "a5", "footer": []}),
+    ] {
+        assert!(matches!(s.run("file.pageSetup", &bad), Err(EngineError::BadParams(_))), "{bad}");
+        assert_eq!(s.page_setup, kept, "{bad}");
+    }
+
+    // The names a header or footer may ask for: the day and time of printing, where the
+    // owner is, whose mailbox it is, and the message's subject.
+    run(&mut s, "file.pageSetup", json!({"reset": true, "header": {"left": "[Subject]"}}));
+    assert_eq!(s.page_setup, Setup { header: ["[Subject]".into(), String::new(), String::new()], ..Setup::default() });
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let item = s.open.clone().unwrap();
+    let job = |tz: i32| crate::print::Job {
+        owner: "Alex Morgan",
+        tz_offset_min: tz,
+        now: mailcraft_model::time::from_civil(2026, 10, 12, 23, 5, 0, 0),
+        setup: &kept,
+        links: crate::print::Links::default(),
+    };
+    let words = crate::print::words(&item, &job(0));
+    let word = |words: &[(String, String)], name: &str| words.iter().find(|w| w.0 == name).unwrap().1.clone();
+    assert_eq!((word(&words, "Date"), word(&words, "Time")), ("October 12, 2026".to_string(), "11:05 PM".to_string()));
+    assert_eq!((word(&words, "User"), word(&words, "Subject")), ("Alex Morgan".to_string(), item.subject()));
+    let east = crate::print::words(&item, &job(120));
+    assert_eq!((word(&east, "Date"), word(&east, "Time")), ("October 13, 2026".to_string(), "1:05 AM".to_string()));
+
+    // Printing uses the setup, and what a print asks for is for that print only. Through the
+    // command there is a file, or the word that no font is installed.
+    let dir = std::env::temp_dir().join(format!("mailcraft-setup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let has = |file: &[u8], needle: &str| file.windows(needle.len()).any(|w| w == needle.as_bytes());
+    let kept = s.page_setup.clone();
+    for (params, sheet) in [
+        (json!({}), "/MediaBox [0 0 595.28 841.89]"),
+        (json!({"paper": "letter", "orientation": "landscape", "margins": 30, "footer": ""}), "/MediaBox [0 0 792 612]"),
+        (json!({"paper": "a5"}), "/MediaBox [0 0 419.53 595.28]"),
+    ] {
+        let path = dir.join("setup.pdf");
+        let mut params = params;
+        params["path"] = json!(path);
+        match s.run("file.print", &params) {
+            Ok(_) => {
+                let file = std::fs::read(&path).unwrap();
+                assert!(has(&file, sheet), "{sheet}");
+                std::fs::remove_file(&path).unwrap();
+            }
+            Err(e) => assert!(matches!(e, EngineError::Format(_)) && !path.exists(), "{e}"),
+        }
+        assert_eq!(s.page_setup, kept);
+    }
+    assert!(matches!(s.run("file.print", &json!({"path": dir.join("p.pdf"), "margins": -3})), Err(EngineError::BadParams(_))));
+    assert!(!dir.join("p.pdf").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

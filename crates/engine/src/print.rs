@@ -3,9 +3,10 @@
 use mailcraft_fonts::Library;
 use mailcraft_formats::links::{self, Concern};
 use mailcraft_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style};
-use mailcraft_layout::{Fonts, LayoutError, Line, Memo, Paper, Printed};
+use mailcraft_layout::{Fonts, LayoutError, Line, MM, Memo, Paper, Printed, Setup};
 use mailcraft_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, time};
 use mailcraft_pdf::{Piece, Stroke, Writer};
+use serde_json::{Value, json};
 
 use crate::pictures::{self, Pixels};
 use crate::{EngineError, attachments};
@@ -197,6 +198,115 @@ impl Pictures {
     }
 }
 
+/// What a print is made for: whose mailbox, when, and on what pages.
+pub struct Job<'a> {
+    /// Whose mailbox the message is printed from.
+    pub owner: &'a str,
+    /// Minutes east of UTC for the dates on the pages.
+    pub tz_offset_min: i32,
+    /// "Now" as UTC FILETIME ticks, for a header or footer that asks for the date or time.
+    pub now: i64,
+    pub setup: &'a Setup,
+    pub links: Links,
+}
+
+/// The widest margin that may be asked for, and the most characters of one part of a header
+/// or footer.
+const MAX_MARGIN_MM: f64 = 150.0;
+const MAX_EDGE_CHARS: usize = 400;
+
+/// The three parts of a header or footer as `value` gives them: a text is the middle part,
+/// and `{"left", "center", "right"}` names each; a part not named stays as it is in `now`.
+fn edge(now: &[String; 3], value: &Value, key: &str) -> Result<[String; 3], EngineError> {
+    let clean = |text: &str| text.chars().filter(|c| !c.is_control()).take(MAX_EDGE_CHARS).collect::<String>();
+    let bad = || EngineError::BadParams(format!("\"{key}\" is a text, or {{\"left\", \"center\", \"right\"}} with a text each"));
+    match value {
+        Value::String(text) => Ok([String::new(), clean(text), String::new()]),
+        Value::Object(parts) => {
+            let mut out = now.clone();
+            for (name, part) in parts {
+                let at = match name.as_str() {
+                    "left" => 0,
+                    "center" | "centre" | "middle" => 1,
+                    "right" => 2,
+                    _ => return Err(bad()),
+                };
+                if let Some(slot) = out.get_mut(at) {
+                    *slot = clean(part.as_str().ok_or_else(bad)?);
+                }
+            }
+            Ok(out)
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// `setup` with what the parameters ask for changed: `"paper"`, `"orientation"`,
+/// `"margins"` (millimetres: one number for every edge, or `{"top", "right", "bottom",
+/// "left"}`), `"header"` and `"footer"`.
+pub fn setup_with(setup: &Setup, p: &Value) -> Result<Setup, EngineError> {
+    let mut out = setup.clone();
+    if let Some(name) = p.get("paper").and_then(Value::as_str) {
+        out.paper =
+            Paper::named(name).ok_or_else(|| EngineError::BadParams(format!("unknown paper {name:?}: one of {}", Paper::NAMES.join(", "))))?;
+    }
+    if let Some(way) = p.get("orientation").and_then(Value::as_str) {
+        out.landscape = match way.to_ascii_lowercase().as_str() {
+            "portrait" => false,
+            "landscape" => true,
+            _ => return Err(EngineError::BadParams(format!("unknown orientation {way:?}: portrait or landscape"))),
+        };
+    }
+    if let Some(value) = p.get("margins") {
+        let bad = || {
+            EngineError::BadParams(format!(
+                "\"margins\" is millimetres from 0 to {MAX_MARGIN_MM}: one number, or {{\"top\", \"right\", \"bottom\", \"left\"}} with a number each"
+            ))
+        };
+        let points = |v: &Value| v.as_f64().filter(|mm| (0.0..=MAX_MARGIN_MM).contains(mm)).map(|mm| mm as f32 * MM).ok_or_else(bad);
+        match value {
+            Value::Object(edges) => {
+                for (name, v) in edges {
+                    let at = match name.as_str() {
+                        "top" => 0,
+                        "right" => 1,
+                        "bottom" => 2,
+                        "left" => 3,
+                        _ => return Err(bad()),
+                    };
+                    if let Some(slot) = out.margins.get_mut(at) {
+                        *slot = points(v)?;
+                    }
+                }
+            }
+            v => out.margins = [points(v)?; 4],
+        }
+    }
+    if let Some(value) = p.get("header") {
+        out.header = edge(&out.header, value, "header")?;
+    }
+    if let Some(value) = p.get("footer") {
+        out.footer = edge(&out.footer, value, "footer")?;
+    }
+    Ok(out)
+}
+
+/// A page setup as commands give it back: sizes in millimetres.
+pub fn setup_json(setup: &Setup) -> Value {
+    let mm = |points: f32| (f64::from(points / MM) * 10.0).round() / 10.0;
+    let parts = |parts: &[String; 3]| json!({"left": parts[0], "center": parts[1], "right": parts[2]});
+    let [top, right, bottom, left] = setup.margins;
+    json!({
+        "paper": setup.paper.name(),
+        "width_mm": mm(setup.paper.width),
+        "height_mm": mm(setup.paper.height),
+        "orientation": if setup.landscape { "landscape" } else { "portrait" },
+        "margins": {"top": mm(top), "right": mm(right), "bottom": mm(bottom), "left": mm(left)},
+        "header": parts(&setup.header),
+        "footer": parts(&setup.footer),
+    })
+}
+
 /// A message laid out, with the pictures its pages show.
 pub struct Laid {
     /// Links listed after the body.
@@ -246,8 +356,23 @@ pub(crate) fn body(item: &Item) -> (Doc, bool) {
     (Doc::plain(&item.body_text()), true)
 }
 
-/// Lay `item` out on `paper` in the fonts of `library`.
-pub fn layout(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, which: Links, library: &Library) -> Result<Laid, EngineError> {
+/// What a header or footer may ask for by name. The subject is the message's own text: the
+/// layout does not look through it for names.
+pub(crate) fn words(item: &Item, job: &Job) -> Vec<(String, String)> {
+    let now = time::civil(job.now, job.tz_offset_min);
+    vec![
+        ("Date".to_string(), format!("{} {}, {}", now.month_name(), now.day, now.year)),
+        ("Time".to_string(), now.time_short()),
+        ("User".to_string(), job.owner.to_string()),
+        ("Subject".to_string(), item.subject()),
+    ]
+}
+
+/// Lay `item` out for `job` in the fonts of `library`.
+pub fn layout(item: &Item, job: &Job, library: &Library) -> Result<Laid, EngineError> {
+    let Job { owner, tz_offset_min, links: which, .. } = *job;
+    let mut setup = job.setup.clone();
+    setup.words = words(item, job);
     // Each attachment under the name it would be saved as, with its size.
     let attachments: Vec<String> =
         item.visible_attachments().map(|a| format!("{} ({})", attachments::file_name(a), attachments::size_words(a.size()))).collect();
@@ -267,7 +392,7 @@ pub fn layout(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, which:
     let sizes = |picture: &Picture| pictures.get(picture).map(|pixels| pixels.natural);
     let mut fonts = Fonts::new(library);
     let printed =
-        mailcraft_layout::memo(&Memo { owner, fields: &fields, body: &doc, plain, sizes: &sizes }, paper, &mut fonts).map_err(|e| match e {
+        mailcraft_layout::memo(&Memo { owner, fields: &fields, body: &doc, plain, sizes: &sizes }, setup, &mut fonts).map_err(|e| match e {
             LayoutError::NoFont => EngineError::Format(e.to_string()),
         })?;
     Ok(Laid { links, printed, pictures })
@@ -333,7 +458,7 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
 }
 
 /// Print `item` to a PDF file's bytes, in the installed fonts.
-pub fn pdf(item: &Item, owner: &str, tz_offset_min: i32, paper: Paper, which: Links) -> Result<Print, EngineError> {
-    let Laid { links, printed, pictures } = layout(item, owner, tz_offset_min, paper, which, library())?;
+pub fn pdf(item: &Item, job: &Job) -> Result<Print, EngineError> {
+    let Laid { links, printed, pictures } = layout(item, job, library())?;
     Ok(Print { file: write(&printed, &pictures, &item.subject())?, pages: printed.pages.len(), truncated: printed.truncated, links })
 }

@@ -5,15 +5,18 @@ use std::sync::Arc;
 
 use mailcraft_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Picture, Run, Style, Table, TableWidth};
 
-use crate::flow::{Base, FOOT, Flow};
+use crate::flow::{Base, FOOT, Flow, HEAD};
 use crate::fonts::Fonts;
-use crate::{LayoutError, Paper, Printed, Text};
+use crate::{LayoutError, Printed, Setup, Text};
 
 /// Fields a header shows, and characters of one field.
 const MAX_FIELDS: usize = 32;
 const MAX_FIELD_CHARS: usize = 20_000;
 /// Width of the column of field names, in pixels.
 const NAMES: u16 = 110;
+/// Characters of one part of a header or footer, and names looked through for it.
+const MAX_EDGE_CHARS: usize = 400;
+const MAX_WORDS: usize = 32;
 
 const HEAD_FONT: &str = "Segoe UI, Arial, Liberation Sans, sans-serif";
 const BODY_FONT: &str = "Times New Roman, Liberation Serif, serif";
@@ -65,43 +68,111 @@ fn head(memo: &Memo) -> Vec<Block> {
     blocks
 }
 
-/// The page's number, in the middle of its foot; with the number of pages there are when there
-/// is more than one, so that a loose page tells whether the rest is with it.
-fn number(flow: &mut Flow, page: usize, pages: usize) {
-    const SIZE: f32 = 8.0;
-    let mut chain = flow.fonts.chain(HEAD_FONT, false, false, false);
-    let mut set = Vec::new();
-    let words = if pages > 1 { format!("{} of {pages}", page + 1) } else { (page + 1).to_string() };
-    for ch in words.chars() {
-        if let Some((pick, glyph)) = flow.fonts.resolve(&mut chain, ch) {
-            let advance = flow.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, SIZE));
-            set.push((pick, glyph, ch, advance));
+/// A part of a header or footer with the names in it filled in, as [`Setup`] says.
+fn filled(template: &str, page: usize, pages: usize, words: &[(String, String)]) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('[') {
+        out.push_str(before);
+        let found = after.split_once(']').and_then(|(name, then)| {
+            let name = name.trim();
+            let value = if name.eq_ignore_ascii_case("page") {
+                Some(page.saturating_add(1).to_string())
+            } else if name.eq_ignore_ascii_case("pages") {
+                Some(pages.to_string())
+            } else if name.eq_ignore_ascii_case("page of pages") {
+                // With how many there are, a loose page tells whether the rest is with it.
+                Some(if pages > 1 { format!("{} of {pages}", page.saturating_add(1)) } else { page.saturating_add(1).to_string() })
+            } else {
+                words.iter().take(MAX_WORDS).find(|(word, _)| word.eq_ignore_ascii_case(name)).map(|(_, value)| value.clone())
+            };
+            value.map(|value| (value, then))
+        });
+        match found {
+            Some((value, then)) => {
+                out.extend(value.chars().take(MAX_EDGE_CHARS));
+                rest = then;
+            }
+            // No name of ours: the bracket stands as it is.
+            None => {
+                out.push('[');
+                rest = after;
+            }
+        }
+        if out.len() > MAX_EDGE_CHARS * 4 {
+            break;
         }
     }
-    let wide: f32 = set.iter().map(|s| s.3).sum();
-    let mut x = flow.left() + (flow.width() - wide) / 2.0;
-    let y = flow.paper.height - flow.paper.margin - (FOOT - SIZE) / 2.0;
-    let Some(page) = flow.pages.get_mut(page) else { return };
-    for (pick, glyph, ch, advance) in set {
-        page.texts.push(Text {
-            x,
-            y,
-            face: pick.face,
-            size: SIZE,
-            color: [0, 0, 0],
-            glyphs: vec![(glyph, ch)],
-            width: advance,
-            kerns: Vec::new(),
-            bold: pick.bold,
-            slant: pick.slant,
-        });
-        x += advance;
+    out.push_str(rest);
+    out.chars().filter(|c| !c.is_control()).take(MAX_EDGE_CHARS).collect()
+}
+
+/// The header (`over`) or the footer of a page: three parts on one line, at the left, in the
+/// middle and at the right. A part longer than its share of the line is cut.
+fn edge(flow: &mut Flow, parts: &[String; 3], words: &[(String, String)], page: usize, pages: usize, over: bool) {
+    const SIZE: f32 = 8.0;
+    let y = if over { flow.margins[0] + (HEAD - SIZE) / 2.0 + SIZE * 0.8 } else { flow.paper.height - flow.margins[2] - (FOOT - SIZE) / 2.0 };
+    let (left, width) = (flow.left(), flow.width());
+    let asked = parts.iter().filter(|part| !part.trim().is_empty()).count().max(1);
+    let share = width / asked as f32 - if asked > 1 { SIZE } else { 0.0 };
+    for (n, part) in parts.iter().enumerate() {
+        let words = filled(part, page, pages, words);
+        let mut chain = flow.fonts.chain(HEAD_FONT, false, false, false);
+        let mut set = Vec::new();
+        let mut wide = 0.0f32;
+        let mut cut = false;
+        for ch in words.trim().chars() {
+            if let Some((pick, glyph)) = flow.fonts.resolve(&mut chain, ch) {
+                let advance = flow.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, SIZE));
+                if wide + advance > share + 0.01 && !set.is_empty() {
+                    cut = true;
+                    break;
+                }
+                wide += advance;
+                set.push((pick, glyph, ch, advance));
+            }
+        }
+        if cut {
+            // The last glyph makes way for the mark that says there was more.
+            if let Some((pick, glyph)) = flow.fonts.resolve(&mut chain, '\u{2026}') {
+                let advance = flow.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, SIZE));
+                while wide + advance > share + 0.01 {
+                    let Some(last) = set.pop() else { break };
+                    wide -= last.3;
+                }
+                wide += advance;
+                set.push((pick, glyph, '\u{2026}', advance));
+            }
+        }
+        let mut x = match n {
+            0 => left,
+            1 => left + (width - wide) / 2.0,
+            _ => left + width - wide,
+        };
+        let Some(page) = flow.pages.get_mut(page) else { return };
+        for (pick, glyph, ch, advance) in set {
+            page.texts.push(Text {
+                x,
+                y,
+                face: pick.face,
+                size: SIZE,
+                color: [0, 0, 0],
+                glyphs: vec![(glyph, ch)],
+                width: advance,
+                kerns: Vec::new(),
+                bold: pick.bold,
+                slant: pick.slant,
+            });
+            x += advance;
+        }
     }
 }
 
-/// Lay a message out in Memo Style.
-pub fn memo(memo: &Memo, paper: Paper, fonts: &mut Fonts) -> Result<Printed, LayoutError> {
-    let mut flow = Flow::new(fonts, paper, Base { family: HEAD_FONT.into(), size: 8.0 }, memo.sizes);
+/// Lay a message out in Memo Style, on pages set up as `setup` says: a [`Setup`], or a
+/// [`crate::Paper`] for the sheet upright with its margin and each page's number at its foot.
+pub fn memo(memo: &Memo, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<Printed, LayoutError> {
+    let setup: Setup = setup.into();
+    let mut flow = Flow::new(fonts, &setup, Base { family: HEAD_FONT.into(), size: 8.0 }, memo.sizes);
     let (x, width) = (flow.left(), flow.width());
     let start = flow.start();
     let at = flow.blocks(&head(memo), x, width, start, 0);
@@ -112,7 +183,12 @@ pub fn memo(memo: &Memo, paper: Paper, fonts: &mut Fonts) -> Result<Printed, Lay
     }
     let pages = flow.pages.len();
     for page in 0..pages {
-        number(&mut flow, page, pages);
+        if flow.head > 0.0 {
+            edge(&mut flow, &setup.header, &setup.words, page, pages, true);
+        }
+        if flow.foot > 0.0 {
+            edge(&mut flow, &setup.footer, &setup.words, page, pages, false);
+        }
     }
     let truncated = flow.full || memo.body.truncated;
     let mut pages = std::mem::take(&mut flow.pages);

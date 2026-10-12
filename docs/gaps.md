@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 29 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 30 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -35,8 +35,8 @@
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
-   complex-script shaping and right-to-left text, Table Style and other print styles, page setup
-   beyond A4 and Letter (margins, headers and footers, orientation), sending pages to a printer,
+   complex-script shaping and right-to-left text, Table Style and other print styles, a window for the page setup (`file.pageSetup` has paper,
+   orientation, margins, headers and footers) and keeping it between runs, sending pages to a printer,
    print preview, and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`mailcraft-cli mcp`, `--control`) are not built.
@@ -71,6 +71,7 @@
 
 ## Revision history
 
+- 30 · 2026-10-12 — page setup for print (item 3).
 - 29 · 2026-10-12 — text beside side pictures and kerning in print (item 3).
 - 28 · 2026-10-12 — opening a link after a question (item 3).
 - 27 · 2026-10-12 — fills behind blocks and padding on each side (item 3).
