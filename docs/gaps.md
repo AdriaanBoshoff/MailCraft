@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 16 · 2026-10-11 · ranked: the top of the list is what hurts most.
+**Status:** revision 17 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -27,10 +27,10 @@
    ([MS-OXRTFCP], and the HTML or text they wrap, [MS-OXRTFEX]) are decoded and drawn with character
    styles, fonts by name, colours, alignment, indents, links, pictures written into the body (PNG,
    JPEG, bitmaps, metafiles that hold only one bitmap, and metafiles of either kind that are drawings of
-   lines, curves and filled shapes, [MS-WMF] 2.3.3 and [MS-EMF] 2.3.5), attachments in their places in the text
+   lines, curves, filled shapes and text in an installed font, [MS-WMF] 2.3.3 and [MS-EMF] 2.3.5), attachments in their places in the text
    (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object by the best picture it has, [MS-OLEDS]
    2.3.4 and 2.3.6, any other by name),
-   and tables with each cell's own lines, fill, place and merge down; not yet: a metafile with text, a bitmap beside its drawing or a patterned brush in it
+   and tables with each cell's own lines, fill, place and merge down; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
    (a placeholder), an icon beside an
    attachment named in the text, `\bin` picture data, list numbering beyond the text the writer left, nested tables,
    cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
@@ -73,6 +73,7 @@
 
 ## Revision history
 
+- 17 · 2026-10-12 — text in metafiles is drawn, and is the picture's own text (item 3).
 - 16 · 2026-10-11 — enhanced metafiles that are drawings are drawn (item 3).
 - 15 · 2026-10-11 — Windows metafiles that are drawings are drawn (item 3).
 - 14 · 2026-10-11 — attached objects of other programs are kept through `.msg` and shown by their own pictures (item 3).

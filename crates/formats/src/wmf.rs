@@ -1,12 +1,17 @@
-//! A Windows metafile that is a drawing of lines and filled shapes, drawn onto a page of pixels
-//! ([MS-WMF] 2.3.3 drawing records, 2.3.4 object records, 2.3.5 state records). A metafile that
-//! asks for anything this does not draw (text, bitmaps, patterned brushes, regions) is not
-//! drawn at all: half a picture is worse than its place.
+//! A Windows metafile that is a drawing of lines, filled shapes and text, drawn onto a page of
+//! pixels ([MS-WMF] 2.3.3 drawing records, 2.3.4 object records, 2.3.5 state records). A
+//! metafile that asks for anything this does not draw (bitmaps, patterned brushes, regions,
+//! text in a font nobody here knows) is not drawn at all: half a picture is worse than its
+//! place.
 
 use std::f32::consts::TAU;
+use std::sync::Arc;
+
+use mailcraft_fonts::Lettering;
 
 use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
-use crate::metafile::{size_at, u16_at, u32_at};
+use crate::metafile::{Drawn, size_at, u16_at, u32_at};
+use crate::words::{self, Font, Line};
 
 /// Records one drawing is read through.
 const MAX_RECORDS: usize = 50_000;
@@ -17,10 +22,12 @@ const MAX_OBJECTS: usize = 4096;
 /// States that may be saved one on another.
 const MAX_SAVED: usize = 64;
 
-/// Records that change nothing that is drawn here: colours and ways of text and of bitmaps,
+/// Bytes of text in one line.
+const MAX_LINE: usize = 4096;
+
+/// Records that change nothing that is drawn here: ways of bitmaps and of spacing text out,
 /// the palette, and what is said to a printer ([MS-WMF] 2.3.5, 2.3.6).
-const IGNORED: [u16; 17] =
-    [0x0035, 0x0037, 0x0102, 0x0103, 0x0105, 0x0107, 0x0108, 0x012E, 0x0139, 0x0149, 0x0201, 0x0209, 0x020A, 0x0231, 0x0234, 0x0436, 0x0626];
+const IGNORED: [u16; 13] = [0x0035, 0x0037, 0x0103, 0x0105, 0x0107, 0x0108, 0x0139, 0x0149, 0x020A, 0x0231, 0x0234, 0x0436, 0x0626];
 
 fn i16_at(data: &[u8], at: usize) -> Option<i16> {
     let bytes = data.get(at..at.checked_add(2)?)?;
@@ -39,10 +46,11 @@ fn colour_at(data: &[u8], at: usize) -> Option<Rgb> {
 /// A pen is its width in the drawing's own units and its colour; none draws no line.
 type Pen = Option<(f32, Rgb)>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Object {
     Pen(Pen),
     Brush(Brush),
+    Font(Arc<Font>),
     Other,
 }
 
@@ -58,6 +66,14 @@ struct State {
     at: Point,
     /// On the page; `None` is all of it.
     clip: Option<(f32, f32, f32, f32)>,
+    /// What text is written in; `None` is the device's own font, which nobody here knows.
+    font: Option<Arc<Font>>,
+    /// The colour of letters, the colour behind them, and whether that is filled in.
+    ink: Rgb,
+    back: Rgb,
+    opaque: bool,
+    /// [MS-WMF] 2.1.2.3, TextAlignmentMode.
+    align: u32,
 }
 
 /// From the drawing's units to the page's pixels.
@@ -73,7 +89,11 @@ impl Map {
     }
 }
 
-struct Page {
+struct Page<'a> {
+    /// Who gives the shapes of letters, when anybody does.
+    letters: Option<&'a dyn Lettering>,
+    /// What the drawing's text says.
+    words: String,
     /// The size it will be shown at, in pixels, when that is known.
     want: Option<(u32, u32)>,
     /// The size the metafile says it has, in pixels.
@@ -86,7 +106,7 @@ struct Page {
     drew: bool,
 }
 
-impl Page {
+impl Page<'_> {
     /// The page's pixels, made when the first thing is drawn: by then the window is known.
     fn ready(&mut self) -> Option<Map> {
         let (ex, ey) = self.state.extent?;
@@ -124,6 +144,60 @@ impl Page {
                 canvas.stroke(ring, closed, (width * map.scale.0.abs()).max(1.0), colour)?;
             }
         }
+        self.drew = true;
+        Some(())
+    }
+
+    /// Write a line of text, set by `at` in the drawing's units. `bytes` are in the font's
+    /// character set; `dx` is how far each is from the next; `frame` is the box that
+    /// `options` say is filled or cut to ([MS-WMF] 2.3.3.5, META_EXTTEXTOUT).
+    fn say(&mut self, at: Point, bytes: &[u8], dx: Option<Vec<f32>>, frame: Option<(f32, f32, f32, f32)>, options: u32) -> Option<()> {
+        if options & words::UNDRAWN != 0 || self.state.align & words::RIGHT_TO_LEFT != 0 {
+            return None;
+        }
+        let map = self.ready()?;
+        let State { ink, back, opaque, align, .. } = self.state;
+        let frame = frame.map(|(l, t, r, b)| {
+            let (a, b) = (map.at((l, t)), map.at((r, b)));
+            (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))
+        });
+        if options & words::OPAQUE != 0
+            && let Some((l, t, r, b)) = frame
+        {
+            self.canvas.as_mut()?.fill(&[vec![(l, t), (r, t), (r, b), (l, b)]], true, back)?;
+            self.drew = true;
+        }
+        if bytes.is_empty() {
+            return Some(());
+        }
+        let (lettering, font) = (self.letters?, self.state.font.clone()?);
+        let text = font.read(bytes)?;
+        self.count(bytes.len())?;
+        let from = if align & words::UPDATE_PLACE != 0 { self.state.at } else { at };
+        let canvas = self.canvas.as_mut()?;
+        let all = canvas.clip;
+        if options & words::CLIPPED != 0
+            && let Some((l, t, r, b)) = frame
+        {
+            canvas.clip = (l.max(all.0), t.max(all.1), r.min(all.2), b.min(all.3));
+        }
+        let line = Line {
+            at: map.at(from),
+            scale: (map.scale.0.abs(), map.scale.1.abs()),
+            text: &text,
+            dx: dx.as_deref(),
+            align,
+            colour: ink,
+            back: opaque.then_some(back),
+        };
+        let long = words::write(canvas, lettering, &font, &line);
+        canvas.clip = all;
+        // The next line starts where this one ended, when the drawing keeps its place.
+        if align & words::UPDATE_PLACE != 0 && align & 6 == 0 && map.scale.0 != 0.0 {
+            self.state.at.0 += long? / map.scale.0.abs();
+        }
+        long?;
+        words::note(&mut self.words, &text);
         self.drew = true;
         Some(())
     }
@@ -200,15 +274,68 @@ impl Page {
                 };
                 self.make(Object::Brush(brush))?;
             }
-            // Brushes of a pattern; a font, a palette and a region, which only take a place.
+            // Brushes of a pattern; a palette and a region, which only take a place.
             0x0142 | 0x01F9 => self.make(Object::Brush(Brush::Unknown))?,
-            0x02FB | 0x00F7 | 0x06FF => self.make(Object::Other)?,
+            0x00F7 | 0x06FF => self.make(Object::Other)?,
+            // [MS-WMF] 2.2.1.2, Font: its height, how it is turned, how heavy it is, whether it
+            // leans, is underlined or struck out, its character set, and its name.
+            0x02FB => {
+                let byte = |at: usize| record.get(at).copied();
+                let name = record.get(24..)?;
+                let name = name.get(..name.iter().position(|&b| b == 0).unwrap_or(name.len()).min(32))?;
+                let font = Font {
+                    height: word(0)?,
+                    turn: word(2)?,
+                    bold: i16_at(record, 14)? >= 600,
+                    italic: byte(16)? != 0,
+                    underline: byte(17)? != 0,
+                    strike: byte(18)? != 0,
+                    charset: byte(19)?,
+                    family: mailcraft_model::codepage::decode(1252, name),
+                };
+                self.make(Object::Font(Arc::new(font)))?;
+            }
             // META_SELECTOBJECT, META_DELETEOBJECT.
-            0x012D => match (*self.objects.get(usize::from(u16_at(record, 6)?))?)? {
+            0x012D => match self.objects.get(usize::from(u16_at(record, 6)?))?.clone()? {
                 Object::Pen(pen) => self.state.pen = pen,
                 Object::Brush(brush) => self.state.brush = brush,
+                Object::Font(font) => self.state.font = Some(font),
                 Object::Other => {}
             },
+            // META_SETTEXTCOLOR, META_SETBKCOLOR, META_SETBKMODE, META_SETTEXTALIGN.
+            0x0209 => self.state.ink = colour_at(record, 6)?,
+            0x0201 => self.state.back = colour_at(record, 6)?,
+            0x0102 => self.state.opaque = u16_at(record, 6)? == 2,
+            0x012E => self.state.align = u32::from(u16_at(record, 6)?),
+            // META_TEXTOUT: how many bytes, the bytes made up to a whole word, and the point.
+            0x0521 => {
+                let count = usize::from(u16_at(record, 6)?);
+                if count > MAX_LINE {
+                    return None;
+                }
+                let after = 8 + count + count % 2;
+                let at = (f32::from(i16_at(record, after + 2)?), f32::from(i16_at(record, after)?));
+                self.say(at, record.get(8..8 + count)?, None, None, 0)?;
+            }
+            // META_EXTTEXTOUT: the point, how many bytes, what to do with the box, the box when
+            // there is one, the bytes, and how far each is from the next when that is given.
+            0x0A32 => {
+                let (at, count, options) = ((word(1)?, word(0)?), usize::from(u16_at(record, 10)?), u32::from(u16_at(record, 12)?));
+                if count > MAX_LINE {
+                    return None;
+                }
+                let mut next = 14;
+                let mut frame = None;
+                if options & (words::OPAQUE | words::CLIPPED) != 0 {
+                    let side = |i: usize| i16_at(record, 14 + 2 * i).map(f32::from);
+                    frame = Some((side(0)?, side(1)?, side(2)?, side(3)?));
+                    next = 22;
+                }
+                let bytes = record.get(next..next + count)?;
+                next += count + count % 2;
+                let dx = (0..count).map(|i| i16_at(record, next + 2 * i).map(f32::from)).collect::<Option<Vec<f32>>>();
+                self.say(at, bytes, dx.filter(|dx| !dx.is_empty()), frame, options)?;
+            }
             0x01F0 => *self.objects.get_mut(usize::from(u16_at(record, 6)?))? = None,
             // META_MOVETO, META_LINETO.
             0x0214 => self.state.at = (word(1)?, word(0)?),
@@ -310,9 +437,10 @@ impl Page {
     }
 }
 
-/// A Windows metafile that draws lines and filled shapes and nothing else → a BMP file of it,
-/// for showing at `want` pixels when that is known.
-pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u8>> {
+/// A Windows metafile that draws lines, filled shapes and text and nothing else → a BMP file of
+/// it, for showing at `want` pixels when that is known. Text is drawn in the fonts `letters`
+/// knows; with nobody to ask, a metafile with text in it is not drawn.
+pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option<&dyn Lettering>) -> Option<Drawn> {
     let mut state = State {
         origin: (0.0, 0.0),
         extent: None,
@@ -321,6 +449,11 @@ pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u
         winding: false,
         at: (0.0, 0.0),
         clip: None,
+        font: None,
+        ink: [0; 3],
+        back: [255; 3],
+        opaque: true,
+        align: 0,
     };
     let mut natural = None;
     let mut at = 0usize;
@@ -342,7 +475,8 @@ pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u
         return None;
     }
     at += 18;
-    let mut page = Page { want, natural, canvas: None, state, saved: Vec::new(), objects: Vec::new(), points: 0, drew: false };
+    let mut page =
+        Page { letters, words: String::new(), want, natural, canvas: None, state, saved: Vec::new(), objects: Vec::new(), points: 0, drew: false };
     for _ in 0..MAX_RECORDS {
         let size = size_at(data, at)?.checked_mul(2)?;
         let function = u16_at(data, at.checked_add(4)?)?;
@@ -352,7 +486,8 @@ pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u
         let record = data.get(at..at.checked_add(size)?)?;
         // META_EOF: a drawing of nothing is no picture.
         if function == 0 {
-            return if page.drew { page.canvas?.bmp() } else { None };
+            let file = if page.drew { page.canvas?.bmp()? } else { return None };
+            return Some(Drawn { file, words: page.words });
         }
         page.record(function, record)?;
         at = at.checked_add(size)?;

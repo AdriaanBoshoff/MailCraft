@@ -106,6 +106,14 @@ pub fn settle(doc: &mut Doc, item: &Item) {
     settle_blocks(blocks, written, &list, 0);
 }
 
+/// The fonts installed on this machine, and the shapes of text in them for pictures that are
+/// kept as drawings. One for the whole program: the fonts are listed when first asked for,
+/// which takes a moment, and a face that was read is remembered.
+pub fn lettering() -> &'static mailcraft_fonts::Scribe {
+    static SCRIBE: mailcraft_fonts::Scribe = mailcraft_fonts::Scribe::system();
+    &SCRIBE
+}
+
 /// A picture file for an attached object, from the best source that can be read: the object's
 /// own data when that is a picture, the pictures it keeps of itself ([MS-OLEDS] 2.3.4), and last
 /// the small picture the message keeps of it ([MS-OXCMSG] 2.2.2.17).
@@ -115,10 +123,12 @@ fn object_picture(attachment: &Attachment, object: Option<&mailcraft_msg::ole::O
     let own = object.into_iter().flat_map(|o| &o.pictures).find_map(|p| match p.shape {
         Shape::File => decode(&p.data).map(|_| p.data.clone()),
         Shape::Bitmap => metafile::dib_file(&p.data),
-        Shape::Metafile => metafile::wmf_picture(&p.data, None),
-        Shape::Enhanced => metafile::emf_picture(&p.data, None),
+        Shape::Metafile => metafile::wmf_drawn(&p.data, None, Some(lettering())).map(|drawn| drawn.file),
+        Shape::Enhanced => metafile::emf_drawn(&p.data, None, Some(lettering())).map(|drawn| drawn.file),
     });
-    own.or_else(|| attachment.props.bin(pid::ATTACH_RENDERING).and_then(|kept| metafile::wmf_picture(kept, None)))
+    own.or_else(|| {
+        attachment.props.bin(pid::ATTACH_RENDERING).and_then(|kept| metafile::wmf_drawn(kept, None, Some(lettering()))).map(|drawn| drawn.file)
+    })
 }
 
 fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&Attachment], depth: usize) {

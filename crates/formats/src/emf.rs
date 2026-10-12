@@ -1,13 +1,17 @@
-//! An enhanced metafile that is a drawing of lines, curves and filled shapes, drawn onto a page
-//! of pixels ([MS-EMF] 2.3.5 drawing records, 2.3.7 and 2.3.8 objects, 2.3.10 the path bracket,
-//! 2.3.11 state, 2.3.12 transforms, 2.3.2 clipping). A metafile that asks for anything this
-//! does not draw (text, bitmaps, patterned brushes, regions of many boxes) is not drawn at all:
-//! half a picture is worse than its place.
+//! An enhanced metafile that is a drawing of lines, curves, filled shapes and text, drawn onto
+//! a page of pixels ([MS-EMF] 2.3.5 drawing records, 2.3.7 and 2.3.8 objects, 2.3.10 the path
+//! bracket, 2.3.11 state, 2.3.12 transforms, 2.3.2 clipping). A metafile that asks for anything
+//! this does not draw (bitmaps, patterned brushes, regions of many boxes, text in a font nobody
+//! here knows) is not drawn at all: half a picture is worse than its place.
 
 use std::f32::consts::TAU;
+use std::sync::Arc;
+
+use mailcraft_fonts::Lettering;
 
 use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
-use crate::metafile::{size_at, u32_at};
+use crate::metafile::{Drawn, size_at, u32_at};
+use crate::words::{self, Font, Line};
 
 /// Records one drawing is read through.
 const MAX_RECORDS: usize = 50_000;
@@ -20,9 +24,12 @@ const MAX_SAVED: usize = 64;
 /// Straight pieces one curve is drawn as.
 const CURVE: usize = 16;
 
-/// Records that change nothing that is drawn here: colours and ways of text and of bitmaps,
-/// the palette, colour matching, comments ([MS-EMF] 2.3.11, 2.3.3).
-const IGNORED: [u32; 17] = [13, 16, 18, 21, 22, 23, 24, 25, 28, 48, 50, 51, 52, 58, 70, 98, 100];
+/// Characters of text in one line.
+const MAX_LINE: usize = 4096;
+
+/// Records that change nothing that is drawn here: ways of bitmaps, the palette, colour
+/// matching, comments ([MS-EMF] 2.3.11, 2.3.3).
+const IGNORED: [u32; 13] = [13, 16, 21, 23, 28, 48, 50, 51, 52, 58, 70, 98, 100];
 
 /// A whole number of the record, as a measure.
 fn num(data: &[u8], at: usize) -> Option<f32> {
@@ -106,10 +113,11 @@ struct Pen {
     colour: Rgb,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Object {
     Pen(Option<Pen>),
     Brush(Brush),
+    Font(Arc<Font>),
     Other,
     /// A pen that draws a pattern: a drawing that selects it is not drawn.
     Unknown,
@@ -133,12 +141,25 @@ struct State {
     at: Point,
     /// On the page; `None` is all of it.
     clip: Option<Clip>,
+    /// What text is written in; `None` is one of the device's own fonts, which nobody here
+    /// knows.
+    font: Option<Arc<Font>>,
+    /// The colour of letters, the colour behind them, and whether that is filled in.
+    ink: Rgb,
+    back: Rgb,
+    opaque: bool,
+    /// [MS-WMF] 2.1.2.3, TextAlignmentMode.
+    align: u32,
 }
 
 /// Points on the page, and whether the line through them goes back to the first.
 type Figure = (Vec<Point>, bool);
 
-struct Page {
+struct Page<'a> {
+    /// Who gives the shapes of letters, when anybody does.
+    letters: Option<&'a dyn Lettering>,
+    /// What the drawing's text says.
+    words: String,
     canvas: Canvas,
     /// From the device's units to the page's pixels.
     frame: Turn,
@@ -176,7 +197,7 @@ fn boxed(a: Point, b: Point) -> Clip {
     (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))
 }
 
-impl Page {
+impl Page<'_> {
     /// From the drawing's units to the page's pixels: the world's turn, the window onto the
     /// viewport, the device onto the page.
     fn total(&self) -> Turn {
@@ -281,8 +302,69 @@ impl Page {
             6 => self.state.pen = pen(255),
             7 | 19 => self.state.pen = pen(0),
             8 => self.state.pen = None,
+            10..=14 | 16 | 17 => self.state.font = None,
             _ => {}
         }
+    }
+
+    /// Write the line of text of an EMR_EXTTEXTOUTA or EMR_EXTTEXTOUTW record, whose
+    /// characters are `wide` or bytes ([MS-EMF] 2.2.5, EmrText: the point the line is set by,
+    /// how many characters, where they are, what to do with the box, the box, and where the
+    /// spaces from each character to the next are).
+    fn say(&mut self, record: &[u8], wide: bool) -> Option<()> {
+        let (at, count, start, options) = (point(record, 36)?, size_at(record, 44)?, size_at(record, 48)?, u32_at(record, 52)?);
+        // 0x0200: the characters are bytes although the record says otherwise.
+        if options & (words::UNDRAWN | 0x0200) != 0 || self.state.align & words::RIGHT_TO_LEFT != 0 || self.building || count > MAX_LINE {
+            return None;
+        }
+        // 0x0100: there is no box.
+        let (frame, spaces) =
+            if options & 0x0100 != 0 { (None, size_at(record, 56)?) } else { (Some((point(record, 56)?, point(record, 64)?)), size_at(record, 72)?) };
+        let total = self.total();
+        if !total.straight() {
+            return None;
+        }
+        let State { ink, back, opaque, align, clip, .. } = self.state;
+        let all = clip.unwrap_or(self.all());
+        self.canvas.clip = all;
+        let frame = frame.map(|(a, b)| boxed(total.at(a), total.at(b)));
+        if options & words::OPAQUE != 0
+            && let Some((l, t, r, b)) = frame
+        {
+            self.canvas.fill(&[vec![(l, t), (r, t), (r, b), (l, b)]], true, back)?;
+            self.drew = true;
+        }
+        if count == 0 {
+            return Some(());
+        }
+        let (lettering, font) = (self.letters?, self.state.font.clone()?);
+        let bytes = record.get(start..start.checked_add(count.checked_mul(if wide { 2 } else { 1 })?)?)?;
+        let text = if wide {
+            let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+            String::from_utf16(&units).ok()?
+        } else {
+            font.read(bytes)?
+        };
+        self.count(count)?;
+        let dx = if spaces == 0 { None } else { (0..count).map(|i| num(record, spaces.checked_add(4 * i)?)).collect::<Option<Vec<f32>>>() };
+        let from = if align & words::UPDATE_PLACE != 0 { self.state.at } else { at };
+        if options & words::CLIPPED != 0
+            && let Some((l, t, r, b)) = frame
+        {
+            self.canvas.clip = (l.max(all.0), t.max(all.1), r.min(all.2), b.min(all.3));
+        }
+        let scale = (total.0[0].abs(), total.0[3].abs());
+        let line = Line { at: total.at(from), scale, text: &text, dx: dx.as_deref(), align, colour: ink, back: opaque.then_some(back) };
+        let long = words::write(&mut self.canvas, lettering, &font, &line);
+        self.canvas.clip = all;
+        // The next line starts where this one ended, when the drawing keeps its place.
+        if align & words::UPDATE_PLACE != 0 && align & 6 == 0 && scale.0 != 0.0 {
+            self.state.at.0 += long? / scale.0;
+        }
+        long?;
+        words::note(&mut self.words, &text);
+        self.drew = true;
+        Some(())
     }
 
     /// Cut what is drawn from here on down to `to`, or to that and what it was cut to before.
@@ -463,9 +545,10 @@ impl Page {
                 if which & 0x8000_0000 != 0 {
                     self.stock(which & 0x7FFF_FFFF);
                 } else {
-                    match (*self.objects.get(usize::try_from(which).ok()?)?)? {
+                    match self.objects.get(usize::try_from(which).ok()?)?.clone()? {
                         Object::Pen(pen) => self.state.pen = pen,
                         Object::Brush(brush) => self.state.brush = brush,
+                        Object::Font(font) => self.state.font = Some(font),
                         Object::Other => {}
                         Object::Unknown => return None,
                     }
@@ -503,9 +586,40 @@ impl Page {
                 };
                 self.keep(record, object)?;
             }
-            // Brushes of a pattern; a font, a palette and a colour space, which only take a place.
+            // Brushes of a pattern; a palette and a colour space, which only take a place.
             93 | 94 => self.keep(record, Object::Brush(Brush::Unknown))?,
-            49 | 82 | 99 | 122 => self.keep(record, Object::Other)?,
+            49 | 99 | 122 => self.keep(record, Object::Other)?,
+            // EMR_EXTCREATEFONTINDIRECTW ([MS-EMF] 2.2.13, LogFont): its height, how it is
+            // turned, how heavy it is, whether it leans, is underlined or struck out, its
+            // character set, and its name in up to 32 characters.
+            82 => {
+                let byte = |at: usize| record.get(at).copied();
+                let name: Vec<u16> = record
+                    .get(40..)?
+                    .chunks_exact(2)
+                    .take(32)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .take_while(|&unit| unit != 0)
+                    .collect();
+                let font = Font {
+                    height: num(record, 12)?,
+                    turn: num(record, 20)?,
+                    bold: u32_at(record, 28)?.cast_signed() >= 600,
+                    italic: byte(32)? != 0,
+                    underline: byte(33)? != 0,
+                    strike: byte(34)? != 0,
+                    charset: byte(35)?,
+                    family: String::from_utf16_lossy(&name),
+                };
+                self.keep(record, Object::Font(Arc::new(font)))?;
+            }
+            // EMR_SETBKMODE, EMR_SETTEXTALIGN, EMR_SETTEXTCOLOR, EMR_SETBKCOLOR.
+            18 => self.state.opaque = u32_at(record, 8)? == 2,
+            22 => self.state.align = u32_at(record, 8)?,
+            24 => self.state.ink = colour_at(record, 8)?,
+            25 => self.state.back = colour_at(record, 8)?,
+            // EMR_EXTTEXTOUTA, EMR_EXTTEXTOUTW.
+            83 | 84 => self.say(record, kind == 84)?,
             // EMR_DELETEOBJECT.
             40 => {
                 if let Some(place) = self.objects.get_mut(size_at(record, 8)?) {
@@ -613,9 +727,10 @@ impl Page {
     }
 }
 
-/// An enhanced metafile that draws lines, curves and filled shapes and nothing else → a BMP
-/// file of it, for showing at `want` pixels when that is known.
-pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u8>> {
+/// An enhanced metafile that draws lines, curves, filled shapes and text and nothing else → a
+/// BMP file of it, for showing at `want` pixels when that is known. Text is drawn in the fonts
+/// `letters` knows; with nobody to ask, a metafile with text in it is not drawn.
+pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option<&dyn Lettering>) -> Option<Drawn> {
     // [MS-EMF] 2.2.9, Header: the box that was drawn in, in the device's units; the picture's
     // frame, in hundredths of a millimetre; and the device's size both ways.
     if u32_at(data, 0)? != 1 || u32_at(data, 40)? != 0x464D_4520 {
@@ -655,8 +770,25 @@ pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u
         clockwise: false,
         at: (0.0, 0.0),
         clip: None,
+        font: None,
+        ink: [0; 3],
+        back: [255; 3],
+        opaque: true,
+        align: 0,
     };
-    let mut page = Page { canvas, frame, state, saved: Vec::new(), objects: Vec::new(), path: Vec::new(), building: false, points: 0, drew: false };
+    let mut page = Page {
+        letters,
+        words: String::new(),
+        canvas,
+        frame,
+        state,
+        saved: Vec::new(),
+        objects: Vec::new(),
+        path: Vec::new(),
+        building: false,
+        points: 0,
+        drew: false,
+    };
     for _ in 0..MAX_RECORDS {
         // [MS-EMF] 2.3: a record's type and its size in bytes.
         let (kind, size) = (u32_at(data, at)?, size_at(data, at.checked_add(4)?)?);
@@ -666,7 +798,8 @@ pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u
         let record = data.get(at..at.checked_add(size)?)?;
         // EMR_EOF: a drawing of nothing is no picture.
         if kind == 14 {
-            return if page.drew { page.canvas.bmp() } else { None };
+            let file = if page.drew { page.canvas.bmp()? } else { return None };
+            return Some(Drawn { file, words: page.words });
         }
         page.record(kind, record)?;
         at = at.checked_add(size)?;

@@ -1336,7 +1336,7 @@ fn an_enhanced_metafile_that_cannot_be_drawn_whole_is_not_drawn() {
     assert!(with((18, longs(&[1]))).is_some());
     // Text, a bitmap beside the drawing, a region filled, a pen that inverts, a mapping mode in
     // parts of a millimetre, a box cut out, a drawing from right to left.
-    assert_eq!(with((84, vec![0; 68])), None);
+    assert_eq!(with(emf_text((10, 40), "A", 0)), None);
     assert_eq!(with((81, vec![0; 72])), None);
     assert_eq!(with((71, vec![0; 24])), None);
     assert_eq!(with((20, longs(&[6]))), None);
@@ -1432,4 +1432,318 @@ fn rtf_shows_an_enhanced_metafile_that_is_a_drawing() {
     assert_eq!((run.picture.clone(), run.extent), (Some(Picture::Inline(Some(0))), (40, 40)));
     assert_eq!(bmp_size(&doc.written[0]), (80, 80));
     assert_eq!(pixel(&doc.written[0], 40, 40), RED);
+}
+
+/// A font of boxes, which stands for whatever font a drawing names: every letter is a box
+/// from 0.05 to 0.45 of the em across and 0.7 of it high, half an em from the next.
+fn boxes(chars: &str) -> mailcraft_fonts::Face {
+    mailcraft_fonts::Face { data: mailcraft_fonts::boxes::font(chars), index: 0 }
+}
+
+const BLUE: [u8; 3] = [0, 0, 255];
+
+/// META_CREATEFONTINDIRECT for a font this high, turned so many tenths of a degree, with these
+/// four bytes for italic, underlined, struck out and its character set.
+fn wmf_font(height: i16, turn: i16, ways: [u8; 4]) -> (u16, Vec<u8>) {
+    let mut body = words(&[height, 0, turn, 0, 400]);
+    body.extend(ways);
+    body.extend([0; 4]);
+    body.extend(b"Box\0");
+    (0x02FB, body)
+}
+
+/// A window of a hundred units each way, a font twenty units high that is selected, red
+/// letters and nothing filled in behind them.
+fn lettered(font: (u16, Vec<u8>)) -> Vec<(u16, Vec<u8>)> {
+    vec![(0x020B, words(&[0, 0])), (0x020C, words(&[100, 100])), font, (0x012D, words(&[0])), (0x0209, vec![255, 0, 0, 0]), (0x0102, words(&[1]))]
+}
+
+/// META_EXTTEXTOUT of `text` at a point, with these options and what follows the text.
+fn ext_text(at: (i16, i16), text: &[u8], options: i16, after: &[i16]) -> (u16, Vec<u8>) {
+    let mut body = words(&[at.1, at.0, i16::try_from(text.len()).unwrap(), options]);
+    body.extend(text);
+    if text.len() % 2 == 1 {
+        body.push(0);
+    }
+    body.extend(words(after));
+    (0x0A32, body)
+}
+
+#[test]
+fn text_in_a_metafile_is_drawn() {
+    use crate::metafile::{wmf_drawn, wmf_picture};
+    let face = boxes("AB ");
+    let draw = |font: (u16, Vec<u8>), more: Vec<(u16, Vec<u8>)>| {
+        let mut records = lettered(font);
+        records.extend(more);
+        wmf_drawn(&wmf(&records), Some((50, 50)), Some(&face))
+    };
+    let plain = || wmf_font(-20, 0, [0, 0, 0, 0]);
+
+    // Two letters whose top left corner is the point given: boxes fourteen high that stand on
+    // the line sixteen below it.
+    let drawn = draw(plain(), vec![ext_text((10, 40), b"AB", 0, &[])]).unwrap();
+    assert_eq!((bmp_size(&drawn.file), drawn.words.as_str()), ((100, 100), "AB"));
+    for (x, y, colour) in [(15, 50, RED), (25, 50, RED), (20, 50, WHITE), (15, 40, WHITE), (15, 58, WHITE), (35, 50, WHITE)] {
+        assert_eq!(pixel(&drawn.file, x, y), colour, "{x} {y}");
+    }
+    // With nobody to ask for the letters the drawing is not made at all.
+    let mut records = lettered(plain());
+    records.push(ext_text((10, 40), b"AB", 0, &[]));
+    assert_eq!(wmf_picture(&wmf(&records), Some((50, 50))), None);
+
+    // The colour behind the letters is filled in unless the drawing says not.
+    let drawn = draw(plain(), vec![(0x0201, vec![0, 0, 255, 0]), (0x0102, words(&[2])), ext_text((10, 40), b"AB", 0, &[])]).unwrap();
+    assert_eq!((pixel(&drawn.file, 20, 50), pixel(&drawn.file, 15, 50), pixel(&drawn.file, 20, 62)), (BLUE, RED, WHITE));
+
+    // The drawing's own spacing is kept: the second letter thirty units on.
+    let drawn = draw(plain(), vec![ext_text((10, 40), b"AB", 0, &[30, 30])]).unwrap();
+    assert_eq!((pixel(&drawn.file, 45, 50), pixel(&drawn.file, 25, 50)), (RED, WHITE));
+
+    // Set by its middle and by the line it stands on.
+    let drawn = draw(plain(), vec![(0x012E, words(&[6 | 24])), ext_text((50, 50), b"AB", 0, &[])]).unwrap();
+    assert_eq!((pixel(&drawn.file, 45, 45), pixel(&drawn.file, 55, 45), pixel(&drawn.file, 45, 52)), (RED, RED, WHITE));
+    // Set by its right end and its bottom.
+    let drawn = draw(plain(), vec![(0x012E, words(&[2 | 8])), ext_text((50, 50), b"AB", 0, &[])]).unwrap();
+    assert_eq!((pixel(&drawn.file, 35, 40), pixel(&drawn.file, 45, 40), pixel(&drawn.file, 55, 40)), (RED, RED, WHITE));
+
+    // A line turned a quarter round runs up the page.
+    let drawn = draw(wmf_font(-20, 900, [0, 0, 0, 0]), vec![ext_text((50, 80), b"A", 0, &[])]).unwrap();
+    assert_eq!((pixel(&drawn.file, 60, 75), pixel(&drawn.file, 45, 75), pixel(&drawn.file, 60, 85)), (RED, WHITE, WHITE));
+
+    // A font given by the height of its lines, underlined and struck out.
+    let drawn = draw(wmf_font(20, 0, [0, 1, 1, 0]), vec![ext_text((10, 40), b"A B", 0, &[])]).unwrap();
+    assert_eq!(
+        (pixel(&drawn.file, 15, 50), pixel(&drawn.file, 22, 58), pixel(&drawn.file, 22, 50), pixel(&drawn.file, 22, 54)),
+        (RED, RED, RED, WHITE)
+    );
+    assert_eq!(drawn.words, "A B");
+
+    // META_TEXTOUT, and lines that each start where the last one ended.
+    let text_out = |text: &[u8; 1], at: (i16, i16)| {
+        let mut body = words(&[1]);
+        body.extend([text[0], 0]);
+        body.extend(words(&[at.1, at.0]));
+        (0x0521, body)
+    };
+    let drawn = draw(plain(), vec![text_out(b"A", (10, 40)), text_out(b"B", (60, 10))]).unwrap();
+    assert_eq!((pixel(&drawn.file, 15, 50), pixel(&drawn.file, 65, 20), drawn.words.as_str()), (RED, RED, "A B"));
+    let kept = vec![(0x0214, words(&[40, 10])), (0x012E, words(&[1])), text_out(b"A", (0, 0)), text_out(b"B", (0, 0))];
+    let drawn = draw(plain(), kept).unwrap();
+    assert_eq!((pixel(&drawn.file, 15, 50), pixel(&drawn.file, 25, 50), pixel(&drawn.file, 5, 10)), (RED, RED, WHITE));
+
+    // The box of a line is filled, and the letters are cut to it.
+    let boxed = vec![(0x0201, vec![0, 0, 255, 0]), ext_text((10, 40), b"AB", 2 | 4, &[])];
+    let mut boxed_line = boxed.clone();
+    boxed_line[1] = {
+        let mut body = words(&[40, 10, 2, 2 | 4, 5, 35, 17, 65]);
+        body.extend(b"AB");
+        (0x0A32, body)
+    };
+    let drawn = draw(plain(), boxed_line).unwrap();
+    assert_eq!(
+        (pixel(&drawn.file, 7, 37), pixel(&drawn.file, 14, 50), pixel(&drawn.file, 18, 50), pixel(&drawn.file, 25, 50)),
+        (BLUE, RED, WHITE, WHITE)
+    );
+    // A box with no text is only filled, and needs nobody who knows letters.
+    let mut records = lettered(plain());
+    records.push((0x0201, vec![0, 0, 255, 0]));
+    records.push((0x0A32, words(&[0, 0, 0, 2, 20, 20, 80, 80])));
+    let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+    assert_eq!((pixel(&bmp, 50, 50), pixel(&bmp, 10, 10)), (BLUE, WHITE));
+}
+
+#[test]
+fn text_that_cannot_be_drawn_whole_is_not_drawn() {
+    use crate::metafile::wmf_drawn;
+    let face = boxes("AB ");
+    let draw = |font: Option<(u16, Vec<u8>)>, more: Vec<(u16, Vec<u8>)>| {
+        let mut records = lettered(font.clone().unwrap_or_else(|| (0x02FA, vec![0, 0, 1, 0, 0, 0, 0, 0, 0, 0])));
+        records.extend(more);
+        wmf_drawn(&wmf(&records), Some((50, 50)), Some(&face))
+    };
+    let plain = |set: u8| Some(wmf_font(-20, 0, [0, 0, 0, set]));
+    assert!(draw(plain(0), vec![ext_text((10, 40), b"AB", 0, &[])]).is_some());
+    // No font was chosen; a letter the font lacks; a font of symbols; a character set nobody
+    // knows; a font of no height.
+    assert_eq!(draw(None, vec![ext_text((10, 40), b"AB", 0, &[])]), None);
+    assert_eq!(draw(plain(0), vec![ext_text((10, 40), b"AZ", 0, &[])]), None);
+    assert_eq!(draw(plain(2), vec![ext_text((10, 40), b"AB", 0, &[])]), None);
+    assert_eq!(draw(plain(77), vec![ext_text((10, 40), b"A\xE9", 0, &[])]), None);
+    assert_eq!(draw(Some(wmf_font(0, 0, [0; 4])), vec![ext_text((10, 40), b"AB", 0, &[])]), None);
+    // Letters that are joined or run right to left (Hebrew and Arabic, by their sets); a line
+    // said to read right to left; numbers of glyphs in place of characters.
+    assert_eq!(draw(plain(177), vec![ext_text((10, 40), b"\xE0\xE1", 0, &[])]), None);
+    assert_eq!(draw(plain(178), vec![ext_text((10, 40), b"\xC7\xC8", 0, &[])]), None);
+    assert_eq!(draw(plain(0), vec![(0x012E, words(&[256])), ext_text((10, 40), b"AB", 0, &[])]), None);
+    assert_eq!(draw(plain(0), vec![ext_text((10, 40), b"AB", 0x10, &[])]), None);
+    assert_eq!(draw(plain(0), vec![ext_text((10, 40), b"AB", 0x80, &[])]), None);
+    // More text than the record holds.
+    assert_eq!(draw(plain(0), vec![(0x0A32, words(&[40, 10, 300, 0, 0x4141]))]), None);
+    assert_eq!(draw(plain(0), vec![(0x0521, words(&[300, 0x4141, 40, 10]))]), None);
+}
+
+/// EMR_EXTCREATEFONTINDIRECTW for object 2: a font this high, turned so many tenths of a
+/// degree.
+fn emf_font(height: i32, turn: i32) -> (u32, Vec<u8>) {
+    let mut body = longs(&[2, height, 0, turn, 0, 400]);
+    body.extend([0; 8]);
+    let mut name: Vec<u8> = "Box".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    name.resize(64, 0);
+    body.extend(name);
+    (82, body)
+}
+
+/// EMR_EXTTEXTOUTW of `text` at a point, each character ten units from the next.
+fn emf_text(at: (i32, i32), text: &str, options: i32) -> (u32, Vec<u8>) {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let count = i32::try_from(units.len()).unwrap();
+    let after = 76 + 2 * count + (2 * count) % 4;
+    let mut body = longs(&[0, 0, 0, 0, 1, 0, 0, at.0, at.1, count, 76, options, 5, 35, 17, 65, after]);
+    body.extend(units.iter().flat_map(|unit| unit.to_le_bytes()));
+    body.resize(usize::try_from(after).unwrap() - 8, 0);
+    body.extend(longs(&vec![10; units.len()]));
+    (84, body)
+}
+
+/// The font chosen, red letters and nothing filled in behind them.
+fn emf_lettered(font: (u32, Vec<u8>)) -> Vec<(u32, Vec<u8>)> {
+    vec![font, (37, longs(&[2])), (24, vec![255, 0, 0, 0]), (18, longs(&[1]))]
+}
+
+#[test]
+fn text_in_an_enhanced_metafile_is_drawn() {
+    use crate::metafile::{emf_drawn, emf_picture};
+    let face = boxes("AB ");
+    let draw = |font: (u32, Vec<u8>), more: Vec<(u32, Vec<u8>)>| {
+        let mut records = emf_lettered(font);
+        records.extend(more);
+        emf_drawn(&emf_of(&records), Some((50, 50)), Some(&face))
+    };
+    let drawn = draw(emf_font(-20, 0), vec![emf_text((10, 40), "AB", 0)]).unwrap();
+    assert_eq!((bmp_size(&drawn.file), drawn.words.as_str()), ((100, 100), "AB"));
+    for (x, y, colour) in [(15, 50, RED), (25, 50, RED), (20, 50, WHITE), (15, 40, WHITE), (15, 58, WHITE)] {
+        assert_eq!(pixel(&drawn.file, x, y), colour, "{x} {y}");
+    }
+    let mut records = emf_lettered(emf_font(-20, 0));
+    records.push(emf_text((10, 40), "AB", 0));
+    assert_eq!(emf_picture(&emf_of(&records), Some((50, 50))), None);
+
+    // Text in bytes, in the font's character set.
+    let mut bytes = longs(&[0, 0, 0, 0, 1, 0, 0, 10, 40, 2, 76, 0, 0, 0, 0, 0, 80]);
+    bytes.extend(b"AB\0\0");
+    bytes.extend(longs(&[30, 30]));
+    let drawn = draw(emf_font(-20, 0), vec![(83, bytes)]).unwrap();
+    assert_eq!((pixel(&drawn.file, 15, 50), pixel(&drawn.file, 45, 50), pixel(&drawn.file, 25, 50)), (RED, RED, WHITE));
+
+    // The colour behind, the box filled and the letters cut to it.
+    let drawn = draw(emf_font(-20, 0), vec![(25, vec![0, 0, 255, 0]), emf_text((10, 40), "AB", 2 | 4)]).unwrap();
+    assert_eq!(
+        (pixel(&drawn.file, 7, 37), pixel(&drawn.file, 14, 50), pixel(&drawn.file, 18, 50), pixel(&drawn.file, 25, 50)),
+        (BLUE, RED, WHITE, WHITE)
+    );
+    let drawn = draw(emf_font(-20, 0), vec![(25, vec![0, 0, 255, 0]), (18, longs(&[2])), emf_text((10, 40), "AB", 0)]).unwrap();
+    assert_eq!((pixel(&drawn.file, 20, 50), pixel(&drawn.file, 15, 50)), (BLUE, RED));
+
+    // Set by its middle and the line it stands on; turned a quarter round.
+    let drawn = draw(emf_font(-20, 0), vec![(22, longs(&[6 | 24])), emf_text((50, 50), "AB", 0)]).unwrap();
+    assert_eq!((pixel(&drawn.file, 45, 45), pixel(&drawn.file, 55, 45), pixel(&drawn.file, 45, 52)), (RED, RED, WHITE));
+    let drawn = draw(emf_font(-20, 900), vec![emf_text((50, 80), "A", 0)]).unwrap();
+    assert_eq!((pixel(&drawn.file, 60, 75), pixel(&drawn.file, 45, 75)), (RED, WHITE));
+
+    // The world made twice as large: letters twice the size, twice as far along.
+    let twice: Vec<u8> = [2f32, 0.0, 0.0, 2.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let drawn = draw(emf_font(-20, 0), vec![(35, twice), emf_text((5, 10), "AB", 0)]).unwrap();
+    assert_eq!(
+        (pixel(&drawn.file, 20, 40), pixel(&drawn.file, 40, 40), pixel(&drawn.file, 30, 40), pixel(&drawn.file, 20, 22)),
+        (RED, RED, WHITE, WHITE)
+    );
+
+    // Not drawn: a world that is turned; a letter the font lacks; right to left; numbers of
+    // glyphs; text in a path; one of the device's own fonts; more text than the record holds.
+    let turned: Vec<u8> = [0f32, 1.0, -1.0, 0.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    assert_eq!(draw(emf_font(-20, 0), vec![(35, turned), emf_text((10, 40), "AB", 0)]), None);
+    assert_eq!(draw(emf_font(-20, 0), vec![emf_text((10, 40), "AZ", 0)]), None);
+    assert_eq!(draw(emf_font(-20, 0), vec![emf_text((10, 40), "\u{5d0}\u{5d1}", 0)]), None);
+    assert_eq!(draw(emf_font(-20, 0), vec![emf_text((10, 40), "AB", 0x10)]), None);
+    assert_eq!(draw(emf_font(-20, 0), vec![(59, Vec::new()), emf_text((10, 40), "AB", 0)]), None);
+    assert_eq!(draw(emf_font(-20, 0), vec![(37, 0x8000_000Du32.to_le_bytes().to_vec()), emf_text((10, 40), "AB", 0)]), None);
+    let mut long = emf_text((10, 40), "AB", 0);
+    long.1[36..40].copy_from_slice(&5000i32.to_le_bytes());
+    assert_eq!(draw(emf_font(-20, 0), vec![long]), None);
+}
+
+#[test]
+fn hostile_text_in_drawings_never_panics() {
+    use crate::metafile::{emf_drawn, wmf_drawn};
+    let face = boxes("AB ");
+    let mut records = lettered(wmf_font(-20, 450, [1, 1, 1, 0]));
+    records.extend([
+        (0x0201, vec![0, 0, 255, 0]),
+        (0x012E, words(&[6 | 24])),
+        ext_text((50, 50), b"AB", 0, &[]),
+        (0x0A32, {
+            let mut body = words(&[40, 10, 3, 2 | 4, 5, 35, 17, 65]);
+            body.extend(b"A B\0");
+            body.extend(words(&[9, 9, 9]));
+            body
+        }),
+        (0x0521, words(&[2, 0x4241, 40, 10])),
+    ]);
+    let file = wmf(&records);
+    assert!(wmf_drawn(&file, Some((40, 40)), Some(&face)).is_some());
+    for end in 0..file.len() {
+        let _ = wmf_drawn(&file[..end], Some((24, 24)), Some(&face));
+        for with in [file[end] ^ 0xFF, 0xFF, 0x80, 0] {
+            let mut changed = file.clone();
+            changed[end] = with;
+            if let Some(drawn) = wmf_drawn(&changed, Some((24, 24)), Some(&face)) {
+                let (w, h) = bmp_size(&drawn.file);
+                assert!(w <= 800 && h <= 800 && drawn.words.chars().count() <= 2000);
+            }
+        }
+    }
+    let mut records = emf_lettered(emf_font(-20, 450));
+    records.extend([(25, vec![0, 0, 255, 0]), (22, longs(&[6 | 24])), emf_text((50, 50), "A B", 2 | 4), emf_text((10, 40), "AB", 0)]);
+    let file = emf_of(&records);
+    assert!(emf_drawn(&file, Some((40, 40)), Some(&face)).is_some());
+    for end in 0..file.len() {
+        let _ = emf_drawn(&file[..end], Some((24, 24)), Some(&face));
+        for with in [file[end] ^ 0xFF, 0xFF, 0x80, 0] {
+            let mut changed = file.clone();
+            changed[end] = with;
+            if let Some(drawn) = emf_drawn(&changed, Some((24, 24)), Some(&face)) {
+                let (w, h) = bmp_size(&drawn.file);
+                assert!(w <= 800 && h <= 800 && drawn.words.chars().count() <= 2000);
+            }
+        }
+    }
+    // A great many lines of text say no more than is kept.
+    let mut records = lettered(wmf_font(-20, 0, [0; 4]));
+    records.extend((0..2000).map(|_| ext_text((10, 40), b"AB AB", 0, &[])));
+    let drawn = wmf_drawn(&wmf(&records), Some((24, 24)), Some(&face)).unwrap();
+    assert!(drawn.words.chars().count() <= 2000 && drawn.words.starts_with("AB AB AB"));
+    // A font that is not one, and one cut short, give no letters.
+    for bad in [&b"not a font"[..], &face.data[..face.data.len() / 2], &[]] {
+        let broken = mailcraft_fonts::Face { data: bad.to_vec(), index: 0 };
+        let mut records = lettered(wmf_font(-20, 0, [0; 4]));
+        records.push(ext_text((10, 40), b"AB", 0, &[]));
+        assert_eq!(wmf_drawn(&wmf(&records), Some((24, 24)), Some(&broken)), None);
+    }
+}
+
+#[test]
+fn rtf_shows_the_text_of_a_drawing_and_says_what_it_says() {
+    let face = boxes("Bay14 ");
+    let mut records = lettered(wmf_font(-20, 0, [0; 4]));
+    records.push(ext_text((10, 40), b"Bay 14", 0, &[]));
+    let rtf = format!("{{\\rtf1\\ansi\\pard a{{\\pict\\wmetafile8\\picwgoal750\\pichgoal750 {}}}b\\par}}", hexed(&wmf(&records)));
+    let doc = crate::rtf::parse_with(rtf.as_bytes(), Some(&face));
+    let run = paras(&doc)[0].runs.iter().find(|r| r.picture.is_some()).unwrap();
+    assert_eq!((run.picture.clone(), run.text.as_str()), (Some(Picture::Inline(Some(0))), "Bay 14"));
+    assert_eq!(pixel(&doc.written[0], 15, 50), RED);
+    // With nobody who knows letters the picture keeps its place and says nothing.
+    let doc = crate::rtf::parse(rtf.as_bytes());
+    let run = paras(&doc)[0].runs.iter().find(|r| r.picture.is_some()).unwrap();
+    assert_eq!((run.picture.clone(), run.text.as_str(), doc.written.len()), (Some(Picture::Inline(None)), "", 0));
 }

@@ -1,7 +1,5 @@
 //! Printing: the open message laid out in Memo Style and written as a PDF file.
 
-use std::sync::OnceLock;
-
 use mailcraft_fonts::Library;
 use mailcraft_formats::links::{self, Concern};
 use mailcraft_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style};
@@ -219,8 +217,7 @@ pub struct Print {
 
 /// The installed fonts, looked up once: reading them all takes a moment.
 fn library() -> &'static Library {
-    static LIBRARY: OnceLock<Library> = OnceLock::new();
-    LIBRARY.get_or_init(Library::system)
+    pictures::lettering().library()
 }
 
 fn mailbox(name: &str, email: &str) -> String {
@@ -240,7 +237,7 @@ fn body(item: &Item) -> (Doc, bool) {
         }
     }
     if let Some(rtf) = item.body_rtf() {
-        let mut doc = mailcraft_formats::rtf::parse(&rtf);
+        let mut doc = mailcraft_formats::rtf::parse_with(&rtf, Some(pictures::lettering()));
         pictures::settle(&mut doc, item);
         if !doc.is_empty() {
             return (doc, false);

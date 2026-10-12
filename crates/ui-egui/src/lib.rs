@@ -392,7 +392,7 @@ impl MailUi {
                 let doc = if html {
                     mailcraft_formats::html::parse(&item.body_html()?)
                 } else {
-                    let mut doc = mailcraft_formats::rtf::parse(&item.body_rtf()?);
+                    let mut doc = mailcraft_formats::rtf::parse_with(&item.body_rtf()?, Some(mailcraft_engine::pictures::lettering()));
                     mailcraft_engine::pictures::settle(&mut doc, item);
                     doc
                 };

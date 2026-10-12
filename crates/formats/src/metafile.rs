@@ -1,8 +1,10 @@
 //! Pictures in the older Windows forms an RTF body and an attachment's rendering are kept in: a
 //! bitmap without a file's header ([MS-WMF] 2.2.2.9, DeviceIndependentBitmap), and a metafile
 //! whose only drawing is one such bitmap ([MS-WMF], [MS-EMF]). Each becomes the bytes of a BMP
-//! file, undecoded. A metafile that is a drawing of lines and filled shapes is drawn (`wmf`,
+//! file, undecoded. A metafile that is a drawing of lines, filled shapes and text is drawn (`wmf`,
 //! `emf`); one that draws anything else is not read: half a picture is worse than its place.
+
+use mailcraft_fonts::Lettering;
 
 /// Records one metafile is searched through.
 const MAX_RECORDS: usize = 4096;
@@ -114,10 +116,23 @@ pub fn wmf_bitmap(data: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// A metafile as a picture file, and the words that are written in it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Drawn {
+    pub file: Vec<u8>,
+    /// The text the drawing shows, in the order it is drawn; it comes from the message.
+    pub words: String,
+}
+
 /// A Windows metafile → a picture file: the one bitmap it holds, as it is; else its drawing,
-/// made for showing at `want` pixels when that is known.
+/// made for showing at `want` pixels when that is known. A drawing with text in it is not made.
 pub fn wmf_picture(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u8>> {
-    wmf_bitmap(data).or_else(|| crate::wmf::wmf_drawing(data, want))
+    wmf_drawn(data, want, None).map(|drawn| drawn.file)
+}
+
+/// As [`wmf_picture`], with the text of a drawing drawn in the fonts `letters` knows.
+pub fn wmf_drawn(data: &[u8], want: Option<(u32, u32)>, letters: Option<&dyn Lettering>) -> Option<Drawn> {
+    wmf_bitmap(data).map(|file| Drawn { file, words: String::new() }).or_else(|| crate::wmf::wmf_drawing(data, want, letters))
 }
 
 /// EMF records that set things up and draw nothing ([MS-EMF] 2.3.11 state records, 2.3.7 object
@@ -173,7 +188,12 @@ pub fn emf_bitmap(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// An enhanced metafile → a picture file: the one bitmap it holds, as it is; else its drawing,
-/// made for showing at `want` pixels when that is known.
+/// made for showing at `want` pixels when that is known. A drawing with text in it is not made.
 pub fn emf_picture(data: &[u8], want: Option<(u32, u32)>) -> Option<Vec<u8>> {
-    emf_bitmap(data).or_else(|| crate::emf::emf_drawing(data, want))
+    emf_drawn(data, want, None).map(|drawn| drawn.file)
+}
+
+/// As [`emf_picture`], with the text of a drawing drawn in the fonts `letters` knows.
+pub fn emf_drawn(data: &[u8], want: Option<(u32, u32)>, letters: Option<&dyn Lettering>) -> Option<Drawn> {
+    emf_bitmap(data).map(|file| Drawn { file, words: String::new() }).or_else(|| crate::emf::emf_drawing(data, want, letters))
 }

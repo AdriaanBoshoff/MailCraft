@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 26 · 2026-10-11
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 27 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 152, all passing |
+| Tests | 159, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -60,9 +60,9 @@
     the best picture it has.
 13. Done: a pass over what is already built, to make each feature better than the one it
     follows (M2.13 to M2.21).
-14. Done: Windows metafiles and enhanced metafiles that are drawings of lines, curves and
-    filled shapes are drawn.
-15. Next: text in metafiles; then an icon beside an attachment named in the text.
+14. Done: Windows metafiles and enhanced metafiles that are drawings of lines, curves,
+    filled shapes and text are drawn.
+15. Next: an icon beside an attachment named in the text; then `\bin` picture data.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -287,3 +287,25 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   drawn (text, bitmaps, patterned brushes and pens, regions of many boxes, a mapping mode in
   parts of an inch, right-to-left layout) keeps its place, and so does one whose drawing is all
   in its comments. Not yet: text in metafiles.
+- **2026-10-12** - M2.24: text in metafiles ([MS-WMF] 2.3.3.5 and 2.3.3.20, 2.2.1.2; [MS-EMF]
+  2.3.5.7 and 2.3.5.8, 2.2.5, 2.2.13). A chart or a diagram with labels on it is now drawn, not
+  left as a placeholder. The letters are filled as shapes, from the outlines of an installed
+  font (nothing is bundled and nothing is fetched; a name from a message is only ever looked up
+  among installed fonts): the font the drawing names, or an open font of the same measures
+  where that one is not installed; bold and italic faces where the family has them, the upright
+  face leaning where it has no italic. Read: fonts by the height of the em or of the line,
+  turned lines (a label up the side of a chart), underlining and striking out, the colour of
+  the letters and the colour behind them, lines set by their left, middle or right and by
+  their top, bottom or the line they stand on, lines that each start where the last ended,
+  the box that is filled or cut to, text in bytes in the font's character set and text in
+  UTF-16. A line that cannot be drawn right keeps the whole picture a placeholder, as before:
+  no font answers, the font lacks a letter, letters that join or run right to left, numbers of
+  glyphs in place of characters, a font of symbols, a world that is turned (enhanced
+  metafiles). The installed fonts are now listed once for the whole program (reading, print
+  and drawings shared three lists before). Beyond Outlook: the spacing the drawing gives for
+  each letter is kept, so labels stay where they were meant even when another font stands in;
+  letters are smoothed and made at twice the size shown, so they stay sharp on a dense screen
+  and on paper; and what a drawing says becomes the picture's own text, so it is there for a
+  screen reader, for the tooltip and for anything that reads the message as words. Not yet: a bitmap beside a drawing, patterned
+  brushes.
+

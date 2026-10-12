@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 use egui::{Context, FontData, FontDefinitions, FontFamily};
 use mailcraft_fonts::Library;
@@ -38,9 +37,6 @@ pub(crate) struct Picked {
 
 #[derive(Default)]
 pub(crate) struct Faces {
-    /// The installed fonts are listed off the interface thread, once.
-    listing: Option<JoinHandle<Library>>,
-    library: Option<Library>,
     /// What egui has been given: the interface fonts and every face loaded since.
     defs: FontDefinitions,
     /// The message whose lists were last looked up.
@@ -58,8 +54,12 @@ pub(crate) struct Faces {
 impl Faces {
     /// `defs` is what egui was given for the interface. The installed fonts start being listed.
     pub(crate) fn new(defs: FontDefinitions) -> Self {
-        let listing = std::thread::Builder::new().name("fonts".to_string()).spawn(Library::system).ok();
-        Self { listing, defs, ..Self::default() }
+        // The installed fonts are listed off the interface thread, once for the whole program;
+        // where no thread can be had they are listed when first asked for.
+        let _ = std::thread::Builder::new().name("fonts".to_string()).spawn(|| {
+            mailcraft_engine::pictures::lettering().library();
+        });
+        Self { defs, ..Self::default() }
     }
 
     /// What to draw text with that asks for the fonts in `list`. `None` is the reader's own.
@@ -103,12 +103,8 @@ impl Faces {
     }
 
     /// The installed fonts, listed by now or listed here.
-    fn library(&mut self) -> &Library {
-        self.library.get_or_insert_with(|| match self.listing.take() {
-            // A listing that failed leaves no fonts to find; the reader's own are used.
-            Some(listing) => listing.join().unwrap_or_default(),
-            None => Library::system(),
-        })
+    fn library(&self) -> &'static Library {
+        mailcraft_engine::pictures::lettering().library()
     }
 
     /// The installed family a list of names comes to.

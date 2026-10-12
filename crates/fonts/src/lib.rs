@@ -11,6 +11,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod boxes;
+mod letters;
+
+pub use letters::{Letter, Lettering, Letters, Ring, Scribe, letters};
 
 use std::collections::HashMap;
 
@@ -274,6 +277,51 @@ mod tests {
                     // One face is never handed out as another.
                     assert!(!faces.contains(&face), "{name} {bold} {italic}");
                     faces.push(face);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn text_becomes_the_shapes_of_its_letters() {
+        let face = Face { data: boxes::font("ab "), index: 0 };
+        let line = face.letters("Any Name", true, true, "a b").unwrap();
+        assert_eq!((line.ascent, line.descent), (0.8, 0.2));
+        assert_eq!(line.each.iter().map(|l| (l.rings.len(), l.advance)).collect::<Vec<_>>(), [(1, 0.5), (0, 0.25), (1, 0.5)]);
+        // A box from 0.05 to 0.45 of the em across, 0.7 of it high, standing on the line.
+        let reach =
+            |ring: &Ring| ring.iter().fold((1.0f32, 1.0f32, -1.0f32, -1.0f32), |r, p| (r.0.min(p.0), r.1.min(p.1), r.2.max(p.0), r.3.max(p.1)));
+        assert_eq!(reach(&line.each[0].rings[0]), (0.05, -0.7, 0.45, 0.0));
+        // Leaning: the top is further along than the foot.
+        let leaning = letters(&face.data, 0, true, "a").unwrap();
+        assert!(reach(&leaning.each[0].rings[0]).2 > 0.55);
+        // A character that only moves the line on draws nothing; another kind of space is a space.
+        assert_eq!(face.letters("", false, false, "a\tb\u{a0}").unwrap().each.iter().map(|l| l.rings.len()).collect::<Vec<_>>(), [1, 0, 1, 0]);
+
+        // No letters: a character the font lacks; letters that join or run right to left; a mark
+        // that stands on another letter; more text than a line holds; a file that is no font.
+        for text in ["az", "a\u{5d0}", "a\u{627}", "a\u{301}", "a\u{915}", "a\u{200f}b", &"a".repeat(5000)] {
+            assert_eq!(face.letters("", false, false, text), None, "{}", text.len());
+        }
+        assert_eq!(letters(b"not a font", 0, false, "a"), None);
+        assert_eq!(letters(&face.data, 9, false, "a"), None);
+        for cut in [0, 11, 12, 100, face.data.len() / 2, face.data.len() - 1] {
+            let _ = letters(face.data.get(..cut).unwrap_or_default(), 0, false, "ab ");
+        }
+    }
+
+    #[test]
+    fn a_scribe_draws_only_in_fonts_of_its_library() {
+        let none = Scribe::with(Library::empty());
+        assert_eq!(none.letters("Arial", false, false, "a"), None);
+        assert_eq!(none.letters("", true, true, "a"), None);
+        // Whatever this machine has: a name is only looked up, and is asked for again from memory.
+        let system = Scribe::system();
+        for name in ["..\\..\\Windows\\win.ini", "C:\\Windows\\Fonts\\arial.ttf", &"y".repeat(10_000), "Arial", "Arial"] {
+            for (bold, italic) in [(false, false), (true, true)] {
+                if let Some(line) = system.letters(name, bold, italic, "Ab 1") {
+                    assert_eq!(line.each.len(), 4);
+                    assert!(line.ascent > 0.0 && line.each.iter().all(|l| l.advance.is_finite()));
                 }
             }
         }

@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use mailcraft_fonts::Lettering;
 use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
 
 use crate::html;
@@ -34,10 +35,16 @@ const MAX_OBJECTS: usize = 256;
 const MAX_PICTURE_SIDE: i64 = 4096;
 
 pub fn parse(rtf: &[u8]) -> Doc {
+    parse_with(rtf, None)
+}
+
+/// As [`parse`], with the text in pictures that are kept as drawings drawn in the fonts
+/// `letters` knows. Without it such a picture keeps its place and is not shown.
+pub fn parse_with(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
     match encapsulated(rtf) {
         Some(Wrapped::Html(h)) => html::parse(&h),
         Some(Wrapped::Text(t)) => plain(&t),
-        None => formatted(rtf),
+        None => formatted(rtf, letters),
     }
 }
 
@@ -135,7 +142,9 @@ struct Chars {
 }
 
 #[derive(Default)]
-struct Builder {
+struct Builder<'a> {
+    /// Who gives the shapes of the letters in a drawing, when anybody does.
+    letters: Option<&'a dyn Lettering>,
     blocks: Vec<Block>,
     /// The table being read: finished rows, the open row's cells, the open cell's blocks.
     rows: Vec<Vec<Cell>>,
@@ -168,8 +177,8 @@ struct Builder {
     truncated: bool,
 }
 
-fn formatted(rtf: &[u8]) -> Doc {
-    let mut b = Builder::default();
+fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
+    let mut b = Builder { letters, ..Builder::default() };
     let mut scope = Scope::new(Chars::default());
     let mut reader = Reader::new(rtf);
     while let Some(event) = reader.next() {
@@ -270,7 +279,7 @@ fn formatted(rtf: &[u8]) -> Doc {
     Doc { blocks: b.blocks, truncated: b.truncated || reader.truncated(), written: b.written, objects: b.objects, ..Doc::default() }
 }
 
-impl Builder {
+impl Builder<'_> {
     fn word(&mut self, cur: &mut Chars, word: &str, param: Option<i32>, star: bool) {
         let on = param != Some(0);
         let color = |colors: &[Option<Rgb>]| usize::try_from(param.unwrap_or(0)).ok().and_then(|i| colors.get(i).copied()).flatten();
@@ -496,13 +505,21 @@ impl Builder {
         let extent = (side(pict.goal.0, pict.scale.0), side(pict.goal.1, pict.scale.1));
         let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes);
         let want = Some((u32::from(extent.0), u32::from(extent.1)));
+        // What a drawing's text says is what the picture is called.
+        let mut words = String::new();
+        let mut drawing = |drawn: Option<crate::metafile::Drawn>| {
+            drawn.map(|drawn| {
+                words = drawn.words;
+                drawn.file
+            })
+        };
         let file = match pict.kind {
             _ if !whole => None,
             Kind::Unread => None,
             Kind::File => Some(pict.bytes),
             Kind::Bitmap => crate::metafile::dib_file(&pict.bytes),
-            Kind::Wmf => crate::metafile::wmf_picture(&pict.bytes, want),
-            Kind::Emf => crate::metafile::emf_picture(&pict.bytes, want),
+            Kind::Wmf => drawing(crate::metafile::wmf_drawn(&pict.bytes, want, self.letters)),
+            Kind::Emf => drawing(crate::metafile::emf_drawn(&pict.bytes, want, self.letters)),
         };
         let place = file.filter(|file| file.len() <= room).and_then(|file| match self.written.iter().position(|kept| **kept == *file) {
             Some(same) => Some(same),
@@ -513,7 +530,8 @@ impl Builder {
             }
             None => None,
         });
-        self.push(Run { style: pict.style, picture: Some(Picture::Inline(place)), extent, ..Run::default() });
+        let text = if place.is_some() { words } else { String::new() };
+        self.push(Run { text, style: pict.style, picture: Some(Picture::Inline(place)), extent, ..Run::default() });
     }
 
     /// The name of a font of the font table, as a list of one.

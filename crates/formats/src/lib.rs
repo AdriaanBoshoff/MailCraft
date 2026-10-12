@@ -10,6 +10,7 @@ pub mod metafile;
 pub mod rich;
 pub mod rtf;
 mod wmf;
+mod words;
 
 #[cfg(test)]
 mod tests;

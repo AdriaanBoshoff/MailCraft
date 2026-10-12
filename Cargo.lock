@@ -1846,6 +1846,7 @@ dependencies = [
 name = "mailcraft-formats"
 version = "0.1.0"
 dependencies = [
+ "mailcraft-fonts",
  "mailcraft-model",
 ]
 

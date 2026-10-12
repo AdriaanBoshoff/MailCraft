@@ -9,4 +9,5 @@ description = "MailCraft body formats: HTML and RTF message bodies read into a f
 workspace = true
 
 [dependencies]
+mailcraft-fonts = { workspace = true }
 mailcraft-model = { workspace = true }
