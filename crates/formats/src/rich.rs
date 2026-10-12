@@ -51,6 +51,44 @@ pub struct Para {
     /// Where text after a tab goes on to, from the nearest on. Past the last of them, and
     /// where there are none, a tab goes on to the next of the stops every paragraph has.
     pub tabs: Vec<Tab>,
+    /// How tall the paragraph's lines are.
+    pub leading: Leading,
+}
+
+/// How tall a paragraph's lines are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Leading {
+    /// As tall as what stands in them.
+    #[default]
+    Own,
+    /// Hundredths of their own height.
+    Times(u16),
+    /// Their own height, and no less than this many pixels.
+    AtLeast(u16),
+    /// This many pixels, whatever stands in them.
+    Exactly(u16),
+}
+
+/// The least and the most a line's height may be multiplied by, in hundredths.
+pub const LEADING_TIMES: (u16, u16) = (50, 1000);
+/// The most pixels a line may be told to be tall.
+pub const LEADING_PX: u16 = 1024;
+
+impl Leading {
+    /// The height of a line whose own height is `own`; `scale` is the measure of `own` to
+    /// the pixel. Never less than nothing, and `own` where the numbers are none.
+    pub fn tall(self, own: f32, scale: f32) -> f32 {
+        let own = if own.is_finite() { own.max(0.0) } else { 0.0 };
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let px = |v: u16| f32::from(v.clamp(1, LEADING_PX)) * scale;
+        let tall = match self {
+            Leading::Own => own,
+            Leading::Times(n) => own * f32::from(n.clamp(LEADING_TIMES.0, LEADING_TIMES.1)) / 100.0,
+            Leading::AtLeast(v) => own.max(px(v)),
+            Leading::Exactly(v) => px(v),
+        };
+        if tall.is_finite() { tall } else { own }
+    }
 }
 
 /// A place text after a tab goes on to.

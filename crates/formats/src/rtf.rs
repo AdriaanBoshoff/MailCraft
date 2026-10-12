@@ -14,7 +14,8 @@ use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipp
 
 use crate::html;
 use crate::rich::{
-    Align, Block, Cell, Doc, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Tab, TabKind, Table, VAlign, any_edge,
+    Align, Block, Cell, Doc, Edge, Edges, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Tab,
+    TabKind, Table, VAlign, any_edge,
 };
 
 const MAX_BLOCKS: usize = 50_000;
@@ -211,6 +212,10 @@ struct Chars {
     left: i32,
     tabs: Vec<(i32, TabKind)>,
     tab_kind: TabKind,
+    /// The height of the paragraph's lines (`\sl`), and whether it counts in 240ths of
+    /// their own height (`\slmult1`) and not in twips.
+    sl: i32,
+    sl_times: bool,
 }
 
 #[derive(Default)]
@@ -432,7 +437,11 @@ impl Builder<'_> {
                 (cur.side, cur.pad, cur.before, cur.after) = (None, 0, 0, 0);
                 (cur.left, cur.tab_kind) = (0, TabKind::Left);
                 cur.tabs.clear();
+                (cur.sl, cur.sl_times) = (0, false);
             }
+            // Line spacing (RTF 1.9.1, "Spacing").
+            "sl" => cur.sl = param.unwrap_or(0),
+            "slmult" => cur.sl_times = param == Some(1),
             // Twips, 15 to the pixel.
             "sb" => cur.before = pixels(param, MAX_ABOVE),
             "sa" => cur.after = pixels(param, MAX_ABOVE),
@@ -779,7 +788,7 @@ impl Builder<'_> {
             None => ParaKind::Body,
         };
         let tabs = if runs.iter().any(|r| r.picture.is_none() && r.text.contains('\t')) { tabs(cur) } else { Vec::new() };
-        let para = Block::Para(Para { runs, kind, align: cur.align, indent, frame, above, tabs, ..Para::default() });
+        let para = Block::Para(Para { runs, kind, align: cur.align, indent, frame, above, tabs, leading: leading(cur), ..Para::default() });
         if depth > 0 {
             self.open_cell().push(para);
         } else {
@@ -813,6 +822,23 @@ fn marker(written: &str) -> Option<String> {
         _ => text.chars().take(MAX_MARKER).collect(),
     };
     Some(marker)
+}
+
+/// The height a paragraph asks of its lines (RTF 1.9.1, "Spacing"): `\sl` is in 240ths of
+/// a line's own height where `\slmult1` says so; otherwise twips, the least a line is where
+/// positive and all it is where negative. None, or one line, is the lines' own height.
+fn leading(cur: &Chars) -> Leading {
+    let most = i32::from(LEADING_PX);
+    let px = |twips: i32| u16::try_from((twips / 15).clamp(1, most)).unwrap_or(1);
+    match (cur.sl, cur.sl_times) {
+        (0, _) | (240, true) => Leading::Own,
+        (n, true) => {
+            let times = (i64::from(n.unsigned_abs()) * 100 / 240).clamp(i64::from(LEADING_TIMES.0), i64::from(LEADING_TIMES.1));
+            Leading::Times(u16::try_from(times).unwrap_or(100))
+        }
+        (n, false) if n > 0 => Leading::AtLeast(px(n)),
+        (n, false) => Leading::Exactly(px(i32::try_from(n.unsigned_abs()).unwrap_or(i32::MAX))),
+    }
 }
 
 /// A paragraph's tab stops as the model keeps them: in pixels from where its text starts, the

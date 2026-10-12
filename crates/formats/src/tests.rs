@@ -2121,3 +2121,74 @@ fn rtf_paragraphs_have_tab_stops() {
     let tabs = &paras(&doc)[0].tabs;
     assert!(tabs.len() <= 32 && tabs.iter().all(|t| (1..=4096).contains(&t.at)) && tabs.windows(2).all(|w| w[0].at < w[1].at));
 }
+
+#[test]
+fn paragraphs_say_how_tall_their_lines_are() {
+    use crate::rich::Leading;
+    // RTF 1.9.1, "Spacing": 240ths of a line with `\slmult1`, otherwise twips; a negative
+    // height is all the line is, a positive one the least it is.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi\\pard\\sl360\\slmult1 a\\par b\\par \
+          \\pard\\sl-300\\slmult0 c\\par \\pard\\sl300 d\\par \
+          \\pard\\sl240\\slmult1 e\\par \\pard\\sl480\\slmult1{\\sl-15 f\\par}g\\par \
+          \\pard h\\par \\pard\\sl2147483647\\slmult1 i\\par \\pard\\sl-2147483648 j\\par \
+          \\pard\\sl-2147483648\\slmult1 k\\par \\pard\\sl1\\slmult1 l\\par \\pard\\sl2147483647 m\\par}",
+    );
+    let got: Vec<Leading> = paras(&doc).iter().map(|p| p.leading).collect();
+    assert_eq!(
+        got,
+        [
+            Leading::Times(150),
+            Leading::Times(150),
+            Leading::Exactly(20),
+            Leading::AtLeast(20),
+            Leading::Own,
+            Leading::Times(50),
+            Leading::Times(200),
+            Leading::Own,
+            Leading::Times(1000),
+            Leading::Exactly(1024),
+            Leading::Times(1000),
+            Leading::Times(50),
+            Leading::AtLeast(1024),
+        ]
+    );
+
+    // CSS 2.1, 10.8.1: a number or a percentage of the size of the text, or a length.
+    let html = |style: &str| paras(&parse(&format!("<p style=\"line-height:{style}\">a</p><p>b</p>"))).iter().map(|p| p.leading).collect::<Vec<_>>();
+    assert_eq!(html("1.15"), [Leading::Times(100), Leading::Own]);
+    assert_eq!(html("200%"), [Leading::Times(174), Leading::Own]);
+    assert_eq!(html("2.3em"), [Leading::Times(200), Leading::Own]);
+    assert_eq!(html("20px"), [Leading::Exactly(20), Leading::Own]);
+    assert_eq!(html("15pt"), [Leading::Exactly(20), Leading::Own]);
+    assert_eq!(html("normal"), [Leading::Own, Leading::Own]);
+    for junk in ["", "-3", "0", "nan", "inf", "1e99", "99999999999999999999px", "0.0001", "3furlongs", "\u{e9}px", "9999999pt"] {
+        let got = html(junk);
+        assert!(matches!(got[0], Leading::Own | Leading::Times(50..=1000) | Leading::Exactly(1..=1024)), "{junk}: {got:?}");
+    }
+    // What a paragraph says holds for the paragraphs inside it, and stops with it.
+    let doc = parse("<div style=\"line-height:30px\"><p>a</p><p style=\"line-height:normal\">b</p></div><p>c</p>");
+    assert_eq!(paras(&doc).iter().map(|p| p.leading).collect::<Vec<_>>(), [Leading::Exactly(30), Leading::Own, Leading::Own]);
+
+    // The height itself, in the measure of the line's own.
+    assert_eq!(Leading::Own.tall(16.0, 1.0), 16.0);
+    assert_eq!(Leading::Times(150).tall(16.0, 1.0), 24.0);
+    assert_eq!(Leading::AtLeast(20).tall(16.0, 1.0), 20.0);
+    assert_eq!(Leading::AtLeast(20).tall(30.0, 1.0), 30.0);
+    assert_eq!(Leading::Exactly(20).tall(30.0, 0.75), 15.0);
+    for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -4.0, f32::MAX, 0.0] {
+        for leading in [
+            Leading::Own,
+            Leading::Times(0),
+            Leading::Times(u16::MAX),
+            Leading::AtLeast(0),
+            Leading::AtLeast(u16::MAX),
+            Leading::Exactly(0),
+            Leading::Exactly(u16::MAX),
+        ] {
+            for tall in [leading.tall(wild, 1.0), leading.tall(12.0, wild), leading.tall(wild, wild)] {
+                assert!(tall.is_finite() && tall >= 0.0, "{wild} {leading:?} {tall}");
+            }
+        }
+    }
+}

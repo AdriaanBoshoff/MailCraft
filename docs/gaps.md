@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 23 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 24 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -33,7 +33,7 @@
    paragraph borders and the room paragraphs ask for above and below,
    and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
    (a placeholder), list numbers worked out from the list tables where the writer left none,
-   tab leaders, line spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
+   tab leaders and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn; not yet: text beside a picture at the side (it is
    printed in the line), pictures on a server (never fetched; their place is named), kerning,
@@ -73,6 +73,7 @@
 
 ## Revision history
 
+- 24 · 2026-10-12 — Line spacing in RTF and HTML bodies (item 3).
 - 23 · 2026-10-12 — RTF tab stops: left, centre, right and decimal (item 3).
 - 22 · 2026-10-12 — RTF list paragraphs are list items with the writer's number or bullet (item 3).
 - 21 · 2026-10-12 — paragraph borders and paragraph spacing are read (item 3).

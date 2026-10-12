@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 33 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 34 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 169, all passing |
+| Tests | 171, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -68,7 +68,11 @@
 18. Done: paragraph borders and the room paragraphs ask for above and below, in RTF bodies.
 19. Done: list paragraphs of RTF bodies have their numbers and bullets as markers.
 20. Done: tab stops in RTF bodies (left, centre, right, decimal).
-21. Next: line spacing and the rest of M2's formatted reading.
+21. Done: line spacing in RTF and HTML bodies.
+22. Next: what is left of M2, in this order: tab leaders and lines between paragraphs; list numbers
+    from the list tables; backgrounds and padding on HTML blocks, and opening a link; text
+    beside pictures and kerning in print; page setup, Table Style and a print preview;
+    metafiles with a bitmap beside the drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -380,4 +384,12 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   the lines a long paragraph wraps onto. Preformatted text has a stop every eight characters
   in print. The sample receipt has two lines set
   with a decimal stop. Nothing here goes beyond Outlook.
-
+- **2026-10-12** - M2.31: a paragraph's lines are as tall as it says, on screen and in print. In RTF
+  (`\sl` and `\slmult`; RTF 1.9.1, "Spacing") that is a multiple of the lines' own height,
+  a least height or an exact one; in HTML it is `line-height` (CSS 2.1, 10.8.1) as a number, a
+  percentage or a length, and it holds for the paragraphs inside the element that says it.
+  What a line gains or loses is below its text. A multiple is kept between a half and ten,
+  a height to 1024 pixels, a printed line is never taller than its page (a line told to be
+  taller was set off the sheet: found by the hostile test and fixed with it), and a line is
+  never shorter than a picture standing in it. Not compared with Outlook's own spacing yet,
+  so where the room goes within a line is ours. Nothing here goes beyond Outlook.

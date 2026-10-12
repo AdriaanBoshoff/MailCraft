@@ -69,7 +69,7 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard\\intbl\\cell\\pard\\intbl\\cell\\row\r\n\
 \\pard\\sb240\\sa120\\li720\\brdrl\\brdrs\\brdrw45\\brdrcf1\\brsp120 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
 \\pard To use the permit:\\par\r\n\
-{\\listtext\\pard\\plain 1.\\tab}\\pard\\fi-360\\li720 Print the card below.\\par\r\n\
+{\\listtext\\pard\\plain 1.\\tab}\\pard\\fi-360\\li720\\sl360\\slmult1 Print the card below.\\par\r\n\
 {\\listtext\\pard\\plain 2.\\tab}Leave it where it can be read through the windscreen.\\par\r\n\
 \\pard\\sb120\\tx2100\\tqdec\\tx4800 Next payment\\tab 1 November\\tab 62.00\\par\r\n\
 \\pard\\tx2100\\tqdec\\tx4800 Late fee\\tab after the 5th\\tab 7.50\\par\r\n\

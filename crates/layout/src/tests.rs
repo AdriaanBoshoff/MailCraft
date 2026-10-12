@@ -413,3 +413,32 @@ fn text_after_a_tab_stands_at_its_stop() {
     ]);
     within(&print(&body, SMALL), SMALL);
 }
+
+#[test]
+fn lines_are_as_tall_as_their_paragraph_says() {
+    use mailcraft_formats::rich::Leading;
+    let two = |leading| Block::Para(Para { leading, ..para("aa\nbb") });
+    // Four paragraphs of two lines: the step from the first line to the second.
+    let body = doc(vec![two(Leading::Own), two(Leading::Times(200)), two(Leading::Exactly(40)), two(Leading::AtLeast(4)), two(Leading::Exactly(4))]);
+    let printed = print(&body, Paper::A4);
+    let page = &printed.pages[0];
+    let ys = |text: &str| page.texts.iter().filter(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).map(|t| t.y).collect::<Vec<f32>>();
+    let (a, b) = (ys("aa"), ys("bb"));
+    assert_eq!((a.len(), b.len()), (5, 5));
+    let step: Vec<f32> = a.iter().zip(&b).map(|(a, b)| b - a).collect();
+    let own = step[0];
+    assert!(own > 1.0);
+    assert!((step[1] - own * 2.0).abs() < 0.01, "{step:?}");
+    assert!((step[2] - 30.0).abs() < 0.01, "{step:?}");
+    assert!((step[3] - own).abs() < 0.01, "{step:?}");
+    assert!((step[4] - 3.0).abs() < 0.01, "{step:?}");
+    // What a line gains stands below its text: the paragraph after a doubled one starts lower.
+    let gap = |n: usize| a[n] - b[n - 1];
+    assert!((gap(2) - gap(1) - own).abs() < 0.01 && (gap(3) - gap(1) - (30.0 - own)).abs() < 0.01);
+
+    // Hostile: heights out of any range, on a small sheet, with more lines than a page.
+    for leading in [Leading::Times(0), Leading::Times(u16::MAX), Leading::AtLeast(u16::MAX), Leading::Exactly(u16::MAX), Leading::Exactly(0)] {
+        let body = doc(vec![Block::Para(Para { leading, ..para(&"word ".repeat(400)) })]);
+        within(&print(&body, SMALL), SMALL);
+    }
+}

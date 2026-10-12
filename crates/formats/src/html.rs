@@ -12,7 +12,8 @@
 //! is kept as bytes for the reader to decode; nothing else about it is trusted.
 
 use crate::rich::{
-    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, TableWidth, VAlign, any_edge,
+    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style,
+    Table, TableWidth, VAlign, any_edge,
 };
 use mailcraft_model::html::entity;
 use std::collections::HashMap;
@@ -171,6 +172,7 @@ struct Fmt {
     hidden: bool,
     /// The border the paragraphs here stand inside.
     frame: Option<Arc<Frame>>,
+    leading: Leading,
 }
 
 struct Open {
@@ -221,6 +223,7 @@ struct ParaHead {
     gap: bool,
     frame: Option<Arc<Frame>>,
     clear: bool,
+    leading: Leading,
 }
 
 #[derive(Default)]
@@ -308,6 +311,7 @@ impl Builder {
             gap: std::mem::take(&mut self.gap),
             frame: self.fmt.frame.clone(),
             clear: std::mem::take(&mut self.clear),
+            leading: self.fmt.leading,
         });
         self.last_space = true;
     }
@@ -353,6 +357,7 @@ impl Builder {
             clear: head.clear,
             above: 0,
             tabs: Vec::new(),
+            leading: head.leading,
         }));
     }
 
@@ -806,6 +811,11 @@ impl Builder {
                 "text-align" => {
                     if let Some(a) = align(v) {
                         self.fmt.align = a;
+                    }
+                }
+                "line-height" => {
+                    if let Some(leading) = line_height(v) {
+                        self.fmt.leading = leading;
                     }
                 }
                 "display" if v.starts_with("none") => self.fmt.hidden = true,
@@ -1463,6 +1473,37 @@ fn page_or(c: Rgb) -> Option<Rgb> {
 }
 
 /// A CSS font size in points. Zero means the text is hidden.
+/// A CSS `line-height` (CSS 2.1 section 10.8.1): a number or a percentage multiplies the
+/// lines' own height, a length is the height itself.
+fn line_height(v: &str) -> Option<Leading> {
+    let v = v.trim();
+    if v == "normal" {
+        return Some(Leading::Own);
+    }
+    let split = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+    let n = v.get(..split)?.parse::<f32>().ok()?;
+    if !n.is_finite() || n <= 0.0 {
+        return None;
+    }
+    // A line of text is about 1.15 times its size tall: that is what "1" would cut into.
+    const OWN: f32 = 1.15;
+    // `as` saturates, and the numbers are clamped where they are used.
+    let times = |of_size: f32| Leading::Times((of_size / OWN * 100.0).round().clamp(f32::from(LEADING_TIMES.0), f32::from(LEADING_TIMES.1)) as u16);
+    let exactly = |px: f32| Leading::Exactly(px.round().clamp(1.0, f32::from(LEADING_PX)) as u16);
+    Some(match v.get(split..).unwrap_or("").trim() {
+        "" => times(n),
+        "%" => times(n / 100.0),
+        "em" | "rem" => times(n),
+        "px" => exactly(n),
+        "pt" => exactly(n * 4.0 / 3.0),
+        "pc" => exactly(n * 16.0),
+        "in" => exactly(n * 96.0),
+        "cm" => exactly(n * 37.8),
+        "mm" => exactly(n * 3.78),
+        _ => return None,
+    })
+}
+
 fn font_size(v: &str, current: f32) -> Option<f32> {
     let v = v.trim();
     let keyword = match v {

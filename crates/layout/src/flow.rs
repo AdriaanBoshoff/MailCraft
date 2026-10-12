@@ -495,7 +495,14 @@ impl<'f, 'l> Flow<'f, 'l> {
             if line.is_empty() {
                 (ascent, descent, gap) = self.base_line(own_size);
             }
-            let tall = ascent + descent + gap;
+            // A line told how tall to be has what it gains or loses below its text, as it has
+            // on screen; a picture is never cut into.
+            let own = ascent + descent + gap;
+            let tall = match line.iter().filter(|g| g.picture.is_some()).map(|g| g.tall).reduce(f32::max) {
+                Some(picture) => para.leading.tall(own, PX).max(picture),
+                // No line is taller than a page has room for.
+                None => para.leading.tall(own, PX).min((self.bottom() - self.top()).max(own)),
+            };
             at = self.room(at, tall);
             if self.full {
                 break;

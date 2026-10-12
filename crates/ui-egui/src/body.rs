@@ -659,6 +659,14 @@ fn job<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> 
     let mut ends: Vec<usize> = Vec::with_capacity(runs.len());
     let mut placed: Vec<Placed> = Vec::new();
     let mut chars = 0usize;
+    // A line told how tall to be: each piece of text asks for that height, counted from
+    // its own.
+    let told = |format: &mut TextFormat| {
+        if para.leading != rich::Leading::Own {
+            let own = ui.ctx().fonts_mut(|fonts| fonts.row_height(&format.font_id));
+            format.line_height = Some(para.leading.tall(own, 1.0).max(1.0));
+        }
+    };
     for (at, run) in runs.iter().enumerate() {
         let held = shown(run, look.pictures).and_then(|stand| {
             let size = match stand {
@@ -679,6 +687,7 @@ fn job<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> 
                 if run.picture.is_none() && mailcraft_formats::links::concern_at(runs, at).is_some() {
                     format.underline = Stroke::new(2.0, look.t.danger);
                 }
+                told(&mut format);
                 (text, format)
             }
         };
