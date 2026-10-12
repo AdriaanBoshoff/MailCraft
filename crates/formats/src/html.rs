@@ -186,9 +186,16 @@ struct Open {
     list: bool,
     /// The element leaves a margin after it.
     gap: bool,
+    /// The marks that begin and end what the element says of the way its text runs (see
+    /// `turning`).
+    turn: Option<(char, char)>,
+    /// The paragraph the opening mark was last written in; 0 for none.
+    said: u64,
 }
 
 struct TableBuild {
+    /// Written from the right: `dir` on the table or on what it stands in.
+    rtl: bool,
     rows: Vec<Vec<Cell>>,
     border: bool,
     width: TableWidth,
@@ -250,6 +257,10 @@ struct Builder {
     gap: bool,
     blocks: usize,
     run_count: usize,
+    /// How many paragraphs have been started.
+    para_no: u64,
+    /// The paragraph being written has a mark in it that turns letters round one by one.
+    overridden: bool,
     bytes: usize,
     written_bytes: usize,
     full: bool,
@@ -323,6 +334,8 @@ impl Builder {
             rtl: self.fmt.rtl,
             by_text: self.fmt.by_text,
         });
+        self.para_no = self.para_no.saturating_add(1);
+        self.overridden = false;
         self.last_space = true;
     }
 
@@ -417,6 +430,9 @@ impl Builder {
                 last_space = false;
             }
         }
+        if self.fmt.style.link.is_some() {
+            buf.retain(|c| !OVERRIDES.contains(&c));
+        }
         if buf.is_empty() {
             return;
         }
@@ -434,7 +450,7 @@ impl Builder {
         self.append_sized(text, picture, (0, 0), Float::None);
     }
 
-    fn append_sized(&mut self, text: String, picture: Option<Picture>, extent: (u16, u16), float: Float) {
+    fn append_sized(&mut self, mut text: String, picture: Option<Picture>, extent: (u16, u16), float: Float) {
         self.bytes = self.bytes.saturating_add(text.len());
         if self.bytes > MAX_TEXT || self.run_count >= MAX_RUNS {
             self.full = true;
@@ -442,6 +458,27 @@ impl Builder {
             return;
         }
         self.start_para();
+        // An element that says which way its text runs says so in every paragraph it has text
+        // in, before the first of it.
+        let (floor, para) = (self.floor(), self.para_no);
+        let mut marks = String::new();
+        for o in self.open.iter_mut().skip(floor) {
+            if let Some((opener, _)) = o.turn
+                && o.said != para
+            {
+                o.said = para;
+                marks.push(opener);
+            }
+        }
+        self.overridden |= text.contains(OVERRIDES) || marks.contains(OVERRIDES);
+        if !marks.is_empty() {
+            if picture.is_none() {
+                text.insert_str(0, &marks);
+            } else {
+                self.run_count += 1;
+                self.runs.push(Run { text: marks, style: self.fmt.style.clone(), ..Run::default() });
+            }
+        }
         if picture.is_none()
             && let Some(last) = self.runs.last_mut()
             && last.picture.is_none()
@@ -637,7 +674,7 @@ impl Builder {
         if self.open.len() >= MAX_DEPTH {
             return;
         }
-        self.open.push(Open { name: name.to_string(), saved: self.fmt.clone(), list: false, gap: false });
+        self.open.push(Open { name: name.to_string(), saved: self.fmt.clone(), list: false, gap: false, turn: None, said: 0 });
         let mut gap = GAP.contains(&name);
         let style = &mut self.fmt.style;
         match name {
@@ -761,8 +798,22 @@ impl Builder {
         if gap {
             self.gap = true;
         }
+        let mut turn = turning(name, block, attrs, &self.sheet.declarations(name, attrs), self.fmt.rtl);
+        // The words of a link are read as they are written: nothing turns their letters round
+        // one by one, so a link cannot be made to show another name than the one it has. What
+        // is set apart starts with nothing turned (UAX #9, X5a to X5c).
+        if self.fmt.style.link.is_some() {
+            let floor = self.floor();
+            let turned = self.overridden || self.open.iter().skip(floor).any(|o| o.turn.is_some_and(|(opener, _)| OVERRIDES.contains(&opener)));
+            turn = match turn {
+                Some((opener, _)) if OVERRIDES.contains(&opener) => None,
+                None if name == "a" && turned => Some(('\u{2068}', '\u{2069}')),
+                turn => turn,
+            };
+        }
         if let Some(o) = self.open.last_mut() {
             o.gap = gap;
+            o.turn = turn;
         }
     }
 
@@ -990,6 +1041,14 @@ impl Builder {
             if o.list {
                 self.lists.pop();
             }
+            // Only in the paragraph it was begun in: the end of a paragraph ends whatever was
+            // begun in it (UAX #9, X8).
+            if let Some((_, closer)) = o.turn
+                && o.said == self.para_no
+                && self.head.is_some()
+            {
+                self.append(closer.to_string(), None);
+            }
             self.fmt = o.saved;
         }
     }
@@ -1000,9 +1059,11 @@ impl Builder {
             return;
         }
         self.ensure_cell();
-        self.open.push(Open { name: "table".to_string(), saved: self.fmt.clone(), list: false, gap: false });
-        // Alignment of the table itself is not inherited by its text.
-        self.fmt.align = Align::Left;
+        self.open.push(Open { name: "table".to_string(), saved: self.fmt.clone(), list: false, gap: false, turn: None, said: 0 });
+        // Alignment of the table itself is not inherited by its text, which stands at the side
+        // it is read from. The table stands at the side the text around it is read from.
+        let around = self.fmt.rtl;
+        self.fmt.align = if around { Align::Right } else { Align::Left };
         let thick = attr(attrs, "border").and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0);
         let border = thick.is_some();
         // What stands outside the table does not put its border round the table's paragraphs.
@@ -1022,9 +1083,11 @@ impl Builder {
         let table_align = match attr(attrs, "align").and_then(align) {
             Some(a) => a,
             None if auto("margin") || (auto("margin-left") && auto("margin-right")) => Align::Center,
+            None if around => Align::Right,
             None => Align::Left,
         };
         self.tables.push(TableBuild {
+            rtl: self.fmt.rtl,
             rows: Vec::new(),
             border,
             width: table_width(attrs, &css),
@@ -1129,6 +1192,7 @@ impl Builder {
                 line: t.line,
                 snug: false,
                 repeat: false,
+                rtl: t.rtl,
             }));
         }
         self.gap = true;
@@ -1287,6 +1351,49 @@ fn is_zero(v: &str) -> bool {
 }
 
 /// `start` and `end` are sides of the way the text is written (CSS Text 3, 7.1).
+/// The marks after which every letter runs one way, whatever it is (UAX #9, 2.2).
+const OVERRIDES: [char; 2] = ['\u{202D}', '\u{202E}'];
+
+/// The marks that stand for an element that says which way the text in it runs: the one that
+/// begins it and the one that ends it. `bdo`, `bdi` and `dir` on an element inside a line are
+/// what HTML says they are (HTML 15.3.5, "Bidirectional text": `[dir]` is `unicode-bidi:
+/// isolate`, `bdo` `isolate-override`, `bdi` and `dir=auto` isolate by their own first letter),
+/// and `unicode-bidi` is CSS Writing Modes 3, 2.2, whose values are defined by the characters
+/// of UAX #9, 2.1 to 2.4, that are written here. `rtl` is the direction the element has come to.
+fn turning(name: &str, block: bool, attrs: &[(String, String)], css: &str, rtl: bool) -> Option<(char, char)> {
+    let dir = attr(attrs, "dir").map(|v| v.trim().to_ascii_lowercase());
+    let bidi = css_value(css, "unicode-bidi").map(|v| v.trim().to_ascii_lowercase());
+    let apart = |rtl: Option<bool>| {
+        let opener = match rtl {
+            Some(true) => '\u{2067}',
+            Some(false) => '\u{2066}',
+            // The way its own first letter is written.
+            None => '\u{2068}',
+        };
+        Some((opener, '\u{2069}'))
+    };
+    let over = Some((if rtl { '\u{202E}' } else { '\u{202D}' }, '\u{202C}'));
+    match bidi.as_deref() {
+        // Every letter runs the way that is said, whatever it is.
+        Some("bidi-override" | "isolate-override") => over,
+        Some("normal") => None,
+        // A block's own direction is its paragraphs': there is nothing to set apart.
+        _ if block => None,
+        Some("embed") => Some((if rtl { '\u{202B}' } else { '\u{202A}' }, '\u{202C}')),
+        Some("plaintext") => apart(None),
+        Some("isolate") => apart(Some(rtl)),
+        _ if name == "bdo" => over,
+        _ => match dir.as_deref() {
+            Some("rtl") => apart(Some(true)),
+            Some("ltr") => apart(Some(false)),
+            Some("auto") => apart(None),
+            // A name that may be in any writing is kept apart from what is around it.
+            _ if name == "bdi" => apart(None),
+            _ => None,
+        },
+    }
+}
+
 fn sided(a: Align, v: &str, rtl: bool) -> Align {
     match (v.trim(), rtl) {
         ("start", true) => Align::Right,

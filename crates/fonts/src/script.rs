@@ -67,16 +67,20 @@ fn blank(c: char) -> bool {
 
 /// The order one line is drawn in: for each place from the left, which of the line's characters
 /// stands there. `levels` are those of the line's characters and `base` the paragraph's (0 or
-/// 1). Blanks at the end of the line stand at the paragraph's end, whatever they followed.
+/// 1). Blanks at the end of the line stand at the paragraph's end, whatever they followed, and
+/// a tab with the blanks before it stands between what is before it and what is after it the
+/// way the paragraph is read, whatever is written on either side.
 pub fn order(chars: &[char], levels: &[u8], base: u8) -> Vec<usize> {
     let count = chars.len().min(levels.len());
     let mut depth: Vec<u8> = levels.iter().take(count).copied().collect();
-    // L1: blanks at the end of the line take the paragraph's level.
+    // L1: a tab, the blanks before a tab and the blanks at the end of the line take the
+    // paragraph's level.
+    let mut ends = true;
     for (level, c) in depth.iter_mut().zip(chars.iter().take(count)).rev() {
-        if !blank(*c) {
-            break;
+        ends = *c == '\t' || (ends && blank(*c));
+        if ends {
+            *level = base;
         }
-        *level = base;
     }
     let mut places: Vec<usize> = (0..count).collect();
     let highest = depth.iter().copied().max().unwrap_or(0);
@@ -395,5 +399,23 @@ mod tests {
         assert!(levels(&long, None).iter().all(|level| *level == 0));
         let long: Vec<char> = long.chars().collect();
         assert_eq!(joined(&long, &mut |_| true).len(), long.len());
+    }
+
+    #[test]
+    fn a_tab_stands_between_what_is_on_either_side_the_way_the_paragraph_is_read() {
+        let places = |text: &str, rtl: bool| {
+            let chars: Vec<char> = text.chars().collect();
+            order(&chars, &levels(text, Some(rtl)), u8::from(rtl))
+        };
+        // Latin on both sides in a paragraph read from the right: the first stands at the right.
+        assert_eq!(places("ab\tcd", true), [3, 4, 2, 0, 1]);
+        // The blanks before the tab go with it.
+        assert_eq!(places("a \tb", true), [3, 2, 1, 0]);
+        // Hebrew on both sides in a paragraph read from the left: the first stays at the left.
+        assert_eq!(places("\u{5d0}\u{5d1}\t\u{5d2}", false), [1, 0, 2, 3]);
+        // A blank that is no tab still stands inside the words around it.
+        assert_eq!(places("\u{5d0} \u{5d1}", false), [2, 1, 0]);
+        assert_eq!(places("\t\t", true), [1, 0]);
+        assert_eq!(order(&['\t'], &[9], 0), [0]);
     }
 }

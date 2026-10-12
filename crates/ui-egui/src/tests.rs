@@ -1229,3 +1229,70 @@ fn a_line_that_is_typed_keeps_its_cursor_where_the_text_is_seen() {
     let (_, _, lost) = field_frame(&ctx, &mut text, vec![key(Key::Enter, none)]);
     assert!(lost && text == "\u{4f60}");
 }
+
+#[test]
+fn text_told_which_way_to_run_is_drawn_that_way() {
+    // The stored characters of a line, from the left as they are seen.
+    let seen = |html: &str| -> Vec<(usize, usize)> {
+        let (_, rows) = turned_text(html, 600.0).unwrap();
+        rows[0].iter().map(|(.., chars)| *chars).collect()
+    };
+    // "ab ", the mark, "cde", the mark that ends it, " fg": the letters between the marks are
+    // handed over turned round, and stand where they stood.
+    let (text, rows) = turned_text("<p>ab <bdo dir=rtl>cde</bdo> fg</p>", 600.0).unwrap();
+    assert!(text.contains("edc") && !text.contains("cde"), "{text:?}");
+    assert_eq!(rows.len(), 1);
+    // Hebrew told to run from the left is handed over turned, for the shaper to turn back.
+    let (text, _) = turned_text("<p><bdo dir=ltr>\u{5d0}\u{5d1}\u{5d2}</bdo></p>", 600.0).unwrap();
+    assert!(text.contains("\u{5d2}\u{5d1}\u{5d0}"), "{text:?}");
+    // A name set apart keeps the digits after it from standing before it.
+    let plain = seen("<p>\u{5d0}\u{5d1}: 3</p>");
+    let apart = seen("<p><bdi>\u{5d0}\u{5d1}</bdi>: 3</p>");
+    assert!(plain.first().is_some_and(|first| first.0 > 0), "the digit stands first: {plain:?}");
+    assert!(apart.last().is_some_and(|last| last.1 == 7), "the digit stands last: {apart:?}");
+    // Text with nothing from the right in it but a name set apart is drawn as it is stored.
+    assert!(turned_text("<p>a <bdi>b</bdi> c</p>", 600.0).is_none());
+}
+
+#[test]
+fn tabs_in_a_line_read_from_the_right_are_met_from_the_left_in_another_order() {
+    use openmailclient_formats::rich::Para;
+    // The pieces of a line as they are seen from the left, and which of the text's tabs each
+    // tab met is: a tab is a section of its own, as `job` makes it.
+    let seen = |rtl: bool, pieces: &[&str]| {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let para = Para { rtl, ..Para::default() };
+        let mut out = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut job = egui::text::LayoutJob::default();
+            job.wrap.max_width = 2000.0;
+            for piece in pieces {
+                let size = if *piece == "\t" { 1.0 } else { 16.0 };
+                let lead = if *piece == "\t" { 40.0 } else { 0.0 };
+                job.append(piece, lead, egui::TextFormat { font_id: font(size), ..egui::TextFormat::default() });
+            }
+            out = body::turned(ui, &para, &job).map(|turned| {
+                let chars: Vec<(usize, usize)> = turned.rows.iter().flatten().map(|(.., chars)| *chars).collect();
+                // The room a tab takes is kept, and stands with the tab.
+                let tab_rooms = turned.job.sections.iter().filter(|s| s.leading_space == 40.0).count();
+                (chars, turned.tabs.clone(), tab_rooms)
+            });
+        });
+        output.textures_delta.clear();
+        out
+    };
+    // Read from the right: the first text at the right, the first tab the last one met.
+    let (chars, tabs, rooms) = seen(true, &["ab", "\t", "cd", "\t", "ef"]).unwrap();
+    assert_eq!(chars, [(6, 8), (5, 6), (3, 5), (2, 3), (0, 2)]);
+    assert_eq!((tabs, rooms), (vec![1, 0], 2));
+    // Hebrew on both sides of a tab in a line read from the left: nothing changes sides.
+    let (chars, tabs, _) = seen(false, &["\u{5d0}\u{5d1}", "\t", "\u{5d2}"]).unwrap();
+    assert_eq!(chars, [(0, 2), (2, 3), (3, 4)]);
+    assert_eq!(tabs, [0]);
+    // Hostile: nothing but tabs, and more than is worked on.
+    let many = vec!["\t"; 3000];
+    let (_, tabs, _) = seen(true, &["\t", "\t", "\t"]).unwrap();
+    assert_eq!(tabs, [2, 1, 0]);
+    let _ = seen(true, &many);
+}

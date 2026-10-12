@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 60 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 61 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 266, all passing |
+| Tests | 274, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -95,7 +95,8 @@
 44. Done: a paragraph written from the right has its indent, its list marker and its quotation bars at the right, on screen and in print (M3b.6).
 45. Done: the journal of unsaved changes is kept in a folder of our own when it cannot be kept beside the data file, is forced to disk once a second, and says exactly how many changes a damaged journal lost when that can be known (M3b.7).
 46. Done: a line that is typed (the search box, a folder's new name, the address and subject lines, a page's head and foot) is seen in the order it is read while it is typed, with the cursor, the selection and a click where the text is seen (M3b.8).
-47. Next: M3b.9: the rest of the M3b list, taking what is left of a right-to-left paragraph next (tab stops and leaders, a frame's indent, table columns, `<bdo>`).
+47. Done: what was left of a paragraph written from the right: tab stops and their leaders are counted from the right, a border's own indent is at the right, text stands beside a picture on the right side of it, the columns of a table written from the right start at the right, and `<bdo>`, `<bdi>`, `dir` on a piece of a line and `unicode-bidi` say which way their text runs, on screen and in print (M3b.9).
+48. Next: M3b.10: the rest of the M3b list (copying text out of our PDFs tried in readers; a save that does not write the whole file again and does not hold the window; what is not understood on an attachment kept).
 
 ## Do later (from M2)
 
@@ -113,7 +114,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Right-to-left text while it is typed in the body of a message being written (the toolkit's box draws it as stored; the body gets its own editor with the item windows) | M5 |
 | A right-to-left line in the list, the header and the folder pane set from the right of its cell | M5, with views |
 | ~~For a right-to-left paragraph: list markers, indents and quotation bars at the right~~ | done: M3b.6 |
-| For a right-to-left paragraph: tab stops and their leaders counted from the right; a frame's own indent at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
+| ~~For a right-to-left paragraph: tab stops and their leaders counted from the right; a frame's own indent at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi`~~ | done: M3b.9 |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | ~~Keeping the page setup between runs~~ | done: M3.5 |
 | Rules kept between runs (there are no rules yet; they are kept in the data file as Outlook keeps them, and in the settings for accounts without one) | M5, with rules |
@@ -880,3 +881,22 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   window headlessly: `ui_shot` scripts can now click and type. Not yet, and listed: the body
   of a message being written is still the toolkit's box; it gets its own editor with the
   item windows (M5), where its text also stops being plain.
+- **2026-10-12** - M3b.9: what was left of a paragraph written from the right. A tab now stands between what
+  is on either side of it the way the paragraph is read (UAX #9, L1: a tab and the blanks
+  before it take the paragraph's direction), so its stops are counted from the right and the
+  dots or line that fill its room lie between the two texts, in print and on screen. A
+  border set in from the side is set in from the side its paragraphs start at. The room a
+  picture at the side takes is taken from the right side of the lines beside it. A table
+  written from the right (`dir=rtl` on it or around it, `\rtlrow` in RTF) has its first
+  column at the right, cells that cover several columns over the same ones, and stands at
+  the right when the text around it is read from the right; its lines stay where they were.
+  `<bdo>`, `<bdi>`, `dir` on a piece of a line and `unicode-bidi` (embed, isolate,
+  bidi-override, isolate-override, plaintext) are carried as the marks Unicode has for them,
+  opened again in every paragraph the element goes on in and closed where it ends, so the
+  screen and the page read them the same way. Found and put right on the way: the leaders
+  of tabs were never drawn on screen in a line with right-to-left text; the text of a cell
+  in a table inside right-to-left text was put back at the left; the room beside a picture
+  counted the paragraph's indent on the wrong side. Made better: the words of a link cannot
+  be turned letter by letter (an override element or mark inside a link is dropped, and a
+  link inside overridden text is set apart from it), so an address that is shown reads as
+  it is written. Looked at headlessly, window and page. Not compared with Outlook.

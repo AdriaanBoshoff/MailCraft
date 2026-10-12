@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 50 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 51 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -42,7 +42,7 @@
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
-   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) and what is left of what a right-to-left paragraph moves to the right (tab leaders, frames, tables) (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, sending pages to a printer,
+   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 51 · 2026-10-12 — M3b.9: tab stops, leaders, a border's indent, text beside a picture and table columns follow a paragraph written from the right; `<bdo>`, `<bdi>` and `unicode-bidi` are read.
 - 50 · 2026-10-12 — M3b.8: fields of one line are our own; right-to-left text reads right, and the cursor follows it, while it is typed.
 - 49 · 2026-10-12 — M3b.7: the journal is kept elsewhere when the folder cannot be written, forced to disk once a second, and counts what it lost exactly.
 - 48 · 2026-10-12 — M3b.6: a right-to-left paragraph's indent, list marker and quotation bars stand at the right.

@@ -213,7 +213,13 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
     }
     let top = ui.cursor().top();
     let mut full = ui.available_rect_before_wrap();
-    full.min.x += (f32::from(frame.indent.min(12)) * INDENT).min(full.width() * 0.6);
+    // Set in on the side its paragraphs start at.
+    let inset = (f32::from(frame.indent.min(12)) * INDENT).min(full.width() * 0.6);
+    if matches!(paras.first(), Some(Block::Para(p)) if p.rtl) {
+        full.max.x -= inset;
+    } else {
+        full.min.x += inset;
+    }
     let (near, far) = frame_room(frame);
     let left = (full.left() + near.x).min(full.right());
     let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0), top + near.y));
@@ -532,9 +538,13 @@ fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: L
         None => piece(ui, para, &rest, look, Spot { left, width: narrow, min_height: 0.0, marker: true }),
     };
     let bottom = rect.top() + size.y + FLOAT_GAP / 2.0;
-    let standing = (bottom > ui.cursor().top()).then_some(Aside { left: run.float == Float::Left, width: inset + size.x + FLOAT_GAP, bottom });
+    // The paragraph is set in on the side it starts at; a picture at that side stands inside
+    // what it is set in by.
+    let (at_left, lead) = (run.float == Float::Left, if para.rtl { 0.0 } else { inset });
+    let beside_inset = if at_left != para.rtl { inset } else { 0.0 };
+    let standing = (bottom > ui.cursor().top()).then_some(Aside { left: at_left, width: beside_inset + size.x + FLOAT_GAP, bottom });
 
-    let x = rect.left() + inset + if run.float == Float::Right { width - size.x } else { 0.0 };
+    let x = rect.left() + lead + if at_left { 0.0 } else { width - size.x };
     let spot = Rect::from_min_size(pos2(x.round(), rect.top().round()), size);
     if ui.is_rect_visible(spot) {
         picture(ui, run, stand, spot, look);
@@ -863,6 +873,9 @@ pub(crate) struct Turned {
     /// The pictures in the order they are met line by line from the left: for each, which of
     /// the paragraph's pictures it is.
     pictures: Vec<usize>,
+    /// The tabs in the order they are met line by line from the left: for each, which of the
+    /// text's tabs it is.
+    pub(crate) tabs: Vec<usize>,
 }
 
 /// Whether the text shaper takes `text` to be written from right to left: it goes by the
@@ -961,9 +974,30 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
     out.wrap.max_width = f32::INFINITY;
     let mut rows = Vec::with_capacity(lines.len());
     let mut pictures = Vec::new();
+    let mut tabs = Vec::new();
+    // A tab is a piece of its own: it has a look of its own (`tab_format`).
+    let is_tab = |word: &Word| word.part == Part::Blank && chars.get(word.chars.0) == Some(&'\t');
+    let tab_of: Vec<usize> = {
+        let mut met = 0usize;
+        words
+            .iter()
+            .map(|word| {
+                if !is_tab(word) {
+                    return usize::MAX;
+                }
+                met += 1;
+                met - 1
+            })
+            .collect()
+    };
     let mut last_section = 0usize;
     for (n, line) in lines.iter().enumerate() {
-        let stand_ins: Vec<char> = line.iter().map(|w| if words.get(*w).is_some_and(|word| word.part == Part::Blank) { ' ' } else { 'a' }).collect();
+        let stand_in = |w: &usize| match words.get(*w) {
+            Some(word) if is_tab(word) => '\t',
+            Some(word) if word.part == Part::Blank => ' ',
+            _ => 'a',
+        };
+        let stand_ins: Vec<char> = line.iter().map(stand_in).collect();
         let depth: Vec<u8> = line.iter().map(|w| words.get(*w).map_or(0, |word| word.level)).collect();
         let wide: f32 = line.iter().filter_map(|w| words.get(*w)).map(|word| word.wide).sum();
         let mut x = match job.halign {
@@ -982,13 +1016,16 @@ pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
             if let Ok(nth) = holders.binary_search(&at) {
                 pictures.push(nth);
             }
+            if is_tab(word) {
+                tabs.push(tab_of.get(at).copied()?);
+            }
         }
         rows.push(row);
         if n + 1 < lines.len() {
             section_of_its_own(&mut out, "\n", 0.0, job.sections.get(last_section)?.format.clone());
         }
     }
-    Some(Turned { job: out, rows, pictures })
+    Some(Turned { job: out, rows, pictures, tabs })
 }
 
 /// Whether a section of a text to lay out is the space that holds a picture's place
@@ -1021,8 +1058,10 @@ fn spots_turned(galley: &egui::Galley, placed: &[Placed], order: &[usize]) -> Ve
 }
 
 /// What fills the room of the tabs of a laid out text: marks from the end of what is before
-/// each tab to the tab, on the line of the letters. `pos` is the text's own corner.
-fn draw_leaders(ui: &Ui, galley: &egui::Galley, leaders: &[Lead], pos: egui::Pos2, color: Color32) {
+/// each tab to the tab, on the line of the letters. `pos` is the text's own corner. `order`
+/// says which of the text's tabs each tab met is, for a text drawn in another order than it
+/// is stored.
+fn draw_leaders(ui: &Ui, galley: &egui::Galley, leaders: &[Lead], order: Option<&[usize]>, pos: egui::Pos2, color: Color32) {
     if leaders.is_empty() {
         return;
     }
@@ -1033,7 +1072,10 @@ fn draw_leaders(ui: &Ui, galley: &egui::Galley, leaders: &[Lead], pos: egui::Pos
             if glyph.chr != '\t' {
                 continue;
             }
-            let this = nth;
+            let this = match order {
+                Some(order) => order.get(nth).copied().unwrap_or(usize::MAX),
+                None => nth,
+            };
             nth = nth.saturating_add(1);
             let Some(lead) = leaders.iter().find(|l| l.nth == this) else { continue };
             let (room, size) = (lead.room, lead.size.clamp(8.0, 64.0));
@@ -1240,11 +1282,12 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             }
         }
     }
-    if turned.is_some() {
+    if let Some(turned) = &turned {
+        draw_leaders(ui, &galley, &leaders, Some(&turned.tabs), pos, look.text());
         // Selecting would copy the letters in the order they are drawn: not offered yet.
         ui.painter().galley(pos, galley, look.text());
     } else {
-        draw_leaders(ui, &galley, &leaders, pos, look.text());
+        draw_leaders(ui, &galley, &leaders, None, pos, look.text());
         LabelSelectionState::label_text_selection(ui, &response, pos, galley, look.text(), Stroke::NONE);
     }
     for (p, at) in placed.iter().zip(&spots) {
@@ -1524,12 +1567,7 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
     let room_left = ui.cursor().left();
     let left = room_left + shift;
     let table_top = ui.cursor().top();
-    let mut lefts: Vec<f32> = Vec::with_capacity(columns);
-    let mut x = left + rim + gap;
-    for w in &widths {
-        lefts.push(x);
-        x += w + gap;
-    }
+    let lefts = table.lefts(&widths, left + rim + gap, left + target - rim - gap, gap);
 
     // Where each cell stands: a cell may cover several columns, and several rows.
     struct Slot<'a> {
@@ -1549,7 +1587,8 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
     let mut slots: Vec<Slot> = Vec::new();
     for (r, (row, starts)) in table.rows.iter().zip(&places).enumerate() {
         for (c, (cell, col)) in row.iter().zip(starts).enumerate() {
-            let Some(x) = lefts.get(*col).copied() else { continue };
+            let span = usize::from(cell.span.max(1)).min(columns.saturating_sub(*col));
+            let Some(x) = lefts.get(table.left_column(*col, span, columns)).copied() else { continue };
             let covered = widths.iter().skip(*col).take(usize::from(cell.span.max(1)));
             let w: f32 = covered.clone().sum::<f32>() + gap * (covered.count().max(1) - 1) as f32;
             if w <= 0.0 {

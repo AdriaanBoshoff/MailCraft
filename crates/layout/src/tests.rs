@@ -1454,3 +1454,114 @@ fn a_paragraph_written_from_the_right_is_set_in_at_the_right() {
         assert!(page.texts.iter().all(|t| t.x >= -0.01 && t.x + t.width <= 400.01 && t.x.is_finite()));
     }
 }
+
+#[test]
+fn text_told_which_way_to_run_is_printed_that_way() {
+    let body = doc(vec![
+        // Letters written from the left, told to run from the right.
+        Block::Para(para("ab \u{202e}cde\u{202c} fg")),
+        // Hebrew told to run from the left stands as it is stored; the word before it is turned.
+        Block::Para(para("\u{5d0}\u{5d1} \u{202d}\u{5d2}\u{5d3}\u{202c}")),
+        // What is set apart takes no room and leaves no mark of its own on the page.
+        Block::Para(para("a\u{2068}b\u{2069}c\u{2066}d\u{2069}\u{2067}\u{2069}")),
+        // Set apart, the digits do not follow the Hebrew before them as they otherwise would.
+        Block::Para(para("\u{5d0} 12")),
+        Block::Para(para("\u{2068}\u{5d0}\u{2069} 12")),
+    ]);
+    let printed = print_in(boxes::font(BOTH_WAYS), &body, SMALL);
+    within(&printed, SMALL);
+    let lines = seen_lines(&printed.pages[0]);
+    assert_eq!(lines[0], "ab edc fg");
+    assert_eq!(lines[1], "\u{5d1}\u{5d0} \u{5d2}\u{5d3}");
+    assert_eq!(lines[2], "abcd");
+    assert_eq!(lines[3], "12 \u{5d0}");
+    assert_eq!(lines[4], "\u{5d0} 12");
+    // What is read from the page is the text without the marks.
+    let read = body_lines(&printed.pages[0]);
+    assert_eq!(read[0], "ab cde fg");
+    assert_eq!(read[2], "abcd");
+}
+
+#[test]
+fn what_stands_in_a_paragraph_written_from_the_right_is_counted_from_the_right() {
+    use openmailclient_formats::rich::{Leader, Line, Tab, TabKind};
+    let paper = Paper { width: 400.0, height: 300.0, margin: 20.0 };
+    let said = |t: &Text| t.glyphs.iter().map(|(_, c)| *c).collect::<String>();
+    let set = |blocks: Vec<Block>| print_in(boxes::font(BOTH_WAYS), &doc(blocks), paper);
+    // Where a piece of text stands: its left and its right.
+    let of = |printed: &Printed, what: &str| {
+        let text = printed.pages[0].texts.iter().find(|t| said(t) == what).unwrap_or_else(|| panic!("{what} is on the page"));
+        (text.x, text.x + text.width, text.y)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+
+    // A tab stop is as far from the right as it is from the left in a paragraph written from
+    // the left, and what fills its room stands between the two texts.
+    let tabbed = |rtl: bool, text: &str| {
+        let stop = Tab { at: 160, kind: TabKind::Left, lead: Leader::Dots };
+        Block::Para(Para { rtl, align: if rtl { Align::Right } else { Align::Left }, tabs: vec![stop], ..para(text) })
+    };
+    let (ltr, rtl) = (set(vec![tabbed(false, "ab\tcd")]), set(vec![tabbed(true, "ab\tcd")]));
+    let (first, second) = (of(&ltr, "ab"), of(&ltr, "cd"));
+    let (first_r, second_r) = (of(&rtl, "ab"), of(&rtl, "cd"));
+    assert!(near(first.0, paper.margin) && near(second.0, paper.margin + 120.0), "{first:?} {second:?}");
+    assert!(near(first_r.1, paper.width - first.0), "{first_r:?}");
+    assert!(near(second_r.1, paper.width - second.0), "{second_r:?}");
+    let dots = |printed: &Printed| printed.pages[0].rules.iter().filter(|r| r.line == Line::Dotted).map(|r| (r.from.0, r.to.0)).collect::<Vec<_>>();
+    let (led, led_r) = (dots(&ltr), dots(&rtl));
+    assert_eq!((led.len(), led_r.len()), (1, 1));
+    assert!(led[0].0 > first.1 && led[0].1 < second.0, "{led:?}");
+    assert!(led_r[0].0 > second_r.1 && led_r[0].1 < first_r.0, "{led_r:?}");
+    // Hebrew on both sides of a tab in a paragraph written from the left: the first stays first.
+    let mixed = set(vec![tabbed(false, "\u{5d0}\u{5d1}\t\u{5d2}\u{5d3}")]);
+    let (first_h, second_h) = (of(&mixed, "\u{5d1}\u{5d0}"), of(&mixed, "\u{5d3}\u{5d2}"));
+    assert!(near(first_h.0, paper.margin) && near(second_h.0, paper.margin + 120.0), "{first_h:?} {second_h:?}");
+
+    // The columns of a table written from the right are counted from the right, and a cell
+    // that covers several stands over the same ones.
+    let table = |rtl: bool| {
+        let wide = Cell { span: 2, ..cell("gh") };
+        let rows = vec![vec![cell("ab"), cell("cd"), cell("ef")], vec![wide, cell("12")]];
+        Block::Table(Table { rows, border: true, width: TableWidth::Fill, rtl, ..Table::default() })
+    };
+    let (ltr, rtl) = (set(vec![table(false)]), set(vec![table(true)]));
+    let x = |printed: &Printed, what: &str| of(printed, what).0;
+    assert!(x(&ltr, "ab") < x(&ltr, "cd") && x(&ltr, "cd") < x(&ltr, "ef"));
+    assert!(x(&rtl, "ab") > x(&rtl, "cd") && x(&rtl, "cd") > x(&rtl, "ef"));
+    assert!(near(x(&ltr, "gh"), x(&ltr, "ab")) && near(x(&ltr, "12"), x(&ltr, "ef")));
+    assert!(near(x(&rtl, "gh"), x(&rtl, "cd")) && near(x(&rtl, "12"), x(&rtl, "ef")));
+    // The lines of the table are where they were: only what stands between them changed sides.
+    let uprights = |printed: &Printed| {
+        let mut at: Vec<i32> = printed.pages[0].rules.iter().filter(|r| r.from.0 == r.to.0).map(|r| (r.from.0 * 10.0).round() as i32).collect();
+        at.sort_unstable();
+        at.dedup();
+        at
+    };
+    let mirrored: Vec<i32> = uprights(&ltr).iter().rev().map(|x| (paper.width * 10.0).round() as i32 - x).collect();
+    assert_eq!(uprights(&rtl), mirrored);
+    within(&rtl, paper);
+
+    // A border set in is set in from the side its paragraphs start at.
+    let boxed = |rtl: bool| {
+        let edge = Edge { width: 1, color: None, line: Line::Solid };
+        let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 2, between: Edge::default(), fill: None });
+        Block::Para(Para { rtl, frame: Some(frame), ..para("ab") })
+    };
+    let sides = |printed: &Printed| {
+        let xs: Vec<f32> = printed.pages[0].rules.iter().filter(|r| r.from.0 == r.to.0).map(|r| r.from.0).collect();
+        (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max))
+    };
+    let (ltr, rtl) = (sides(&set(vec![boxed(false)])), sides(&set(vec![boxed(true)])));
+    assert!(ltr.0 > rtl.0 + 10.0 && near(ltr.0 - rtl.0, ltr.1 - rtl.1), "{ltr:?} {rtl:?}");
+    assert!(near(rtl.0 - paper.margin, paper.width - paper.margin - ltr.1), "{ltr:?} {rtl:?}");
+
+    // Hostile: a table written from the right with spans past its columns, and none.
+    let wild = |span: u16, rows: u16| Cell { span, rows, ..cell("a") };
+    let rows = vec![vec![wild(u16::MAX, 1), wild(0, u16::MAX), wild(3, 2)], vec![], vec![wild(2, 0), wild(1, 1), wild(9, 9), wild(1, 1)]];
+    let hostile = set(vec![
+        Block::Table(Table { rows, border: true, rtl: true, repeat: true, ..Table::default() }),
+        Block::Table(Table { rtl: true, ..Table::default() }),
+        tabbed(true, &"\t\u{5d0}\t ab \t".repeat(200)),
+    ]);
+    within(&hostile, paper);
+}

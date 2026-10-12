@@ -711,7 +711,13 @@ impl<'f, 'l> Flow<'f, 'l> {
                     // A space that does not end a line.
                     '\u{a0}' => (' ', Kind::Ink, 1.0),
                     // Marks that take no room and draw nothing.
-                    '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{fe00}'..='\u{fe0f}' | '\u{feff}' => {
+                    '\u{ad}'
+                    | '\u{200b}'..='\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{2069}'
+                    | '\u{fe00}'..='\u{fe0f}'
+                    | '\u{feff}' => {
                         continue;
                     }
                     c if c.is_control() => continue,
@@ -1354,7 +1360,9 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
         let (near, far) = frame_room(frame);
         let inset = (f32::from(frame.indent.min(12)) * INDENT * PX).min(width * 0.6);
-        let (x, width) = (x + inset, width - inset);
+        // Set in on the side its paragraphs start at.
+        let rtl = matches!(paras.first(), Some(Block::Para(p)) if p.rtl);
+        let (x, width) = (if rtl { x } else { x + inset }, width - inset);
         let start = self.room(at, near.1 + self.base.size * 1.3);
         let mut inner = At { page: start.page, y: start.y + near.1 };
         let left = (x + near.0).min(x + width);
@@ -1440,8 +1448,8 @@ impl<'f, 'l> Flow<'f, 'l> {
         let mut set: Vec<(&Cell, f32, f32)> = Vec::new();
         let mut end = at;
         for (cell, col) in row.iter().zip(starts) {
-            let Some(left) = lefts.get(*col).copied() else { continue };
-            let span = usize::from(cell.span.max(1));
+            let span = usize::from(cell.span.max(1)).min(lefts.len().saturating_sub(*col));
+            let Some(left) = lefts.get(table.left_column(*col, span, lefts.len())).copied() else { continue };
             let wide: f32 = widths.iter().skip(*col).take(span).sum::<f32>() + gap * (span.saturating_sub(1) as f32);
             let pad = padding(table, cell);
             let below = self.blocks(&cell.blocks, left + pad.0, (wide - pad.0 * 2.0).max(6.0), At { page: at.page, y: at.y + pad.1 }, depth + 1);
@@ -1506,12 +1514,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             Align::Center => ((width - target) / 2.0).max(0.0),
             Align::Right => (width - target).max(0.0),
         };
-        let mut lefts: Vec<f32> = Vec::with_capacity(columns);
-        let mut pen = x + rim + gap;
-        for w in &widths {
-            lefts.push(pen);
-            pen += w + gap;
-        }
+        let lefts = table.lefts(&widths, x + rim + gap, x + target - rim - gap, gap);
 
         let lined = Edge { width: 1, color: Some(table.line.unwrap_or(GREY)), line: Line::Solid };
         let fill_depth = u16::try_from(depth).unwrap_or(u16::MAX - 1).saturating_add(1).min(u16::MAX - 1);
@@ -1536,8 +1539,8 @@ impl<'f, 'l> Flow<'f, 'l> {
                 headed = headed.max(row_start.page);
             }
             for (cell, col) in row.iter().zip(starts) {
-                let Some(left) = lefts.get(*col).copied() else { continue };
                 let span = usize::from(cell.span.max(1)).min(columns - (*col).min(columns));
+                let Some(left) = lefts.get(table.left_column(*col, span, columns)).copied() else { continue };
                 let wide: f32 = widths.iter().skip(*col).take(span).sum::<f32>() + gap * (span.saturating_sub(1) as f32);
                 let pad = padding(table, cell);
                 let before = self.mark(row_start.page);

@@ -2789,3 +2789,135 @@ fn hostile_directions_never_panic() {
     let plain = "\u{5d0}\n".repeat(50_000) + &"\u{202e}".repeat(300_000);
     assert!(!Doc::plain(&plain).blocks.is_empty());
 }
+
+#[test]
+fn an_element_that_says_which_way_its_text_runs_says_so_in_the_text() {
+    let texts = |html: &str| -> Vec<String> { paras(&parse(html)).iter().map(|p| p.text()).collect() };
+    // Every letter the way that is said, whatever it is.
+    assert_eq!(texts("<p>abc <bdo dir=rtl>def</bdo> ghi</p>"), ["abc \u{202e}def\u{202c} ghi"]);
+    assert_eq!(texts("<p>\u{5d0} <BDO DIR=LTR>\u{5d1}\u{5d2}</BDO></p>"), ["\u{5d0} \u{202d}\u{5d1}\u{5d2}\u{202c}"]);
+    // With no direction of its own it has the one it stands in.
+    assert_eq!(texts("<p dir=rtl><bdo>ab</bdo></p><p><bdo>ab</bdo></p>"), ["\u{202e}ab\u{202c}", "\u{202d}ab\u{202c}"]);
+    // A name that may be in any writing is kept apart from what is around it.
+    assert_eq!(texts("<p><bdi>\u{5d0}</bdi>: 3</p>"), ["\u{2068}\u{5d0}\u{2069}: 3"]);
+    assert_eq!(
+        texts("<p>a <span dir=rtl>b</span> <span dir=ltr>c</span> <span dir=auto>d</span> <span dir=up>e</span></p>"),
+        ["a \u{2067}b\u{2069} \u{2066}c\u{2069} \u{2068}d\u{2069} e"]
+    );
+    assert_eq!(
+        texts(concat!(
+            "<p>a <span style=\"unicode-bidi:embed;direction:rtl\">b</span> <span style=\"unicode-bidi: Bidi-Override\">c</span>",
+            " <i style=\"unicode-bidi:isolate;direction:rtl\">d</i> <u style=\"unicode-bidi:plaintext\">e</u>",
+            " <b style=\"unicode-bidi:isolate-override;direction:rtl\">f</b></p>"
+        )),
+        ["a \u{202b}b\u{202c} \u{202d}c\u{202c} \u{2067}d\u{2069} \u{2068}e\u{2069} \u{202e}f\u{202c}"]
+    );
+    // A direction alone turns nothing inside a line, and `normal` takes back what an element is.
+    assert_eq!(texts("<p>a <span style=\"direction:rtl\">b</span> <bdo dir=rtl style=\"unicode-bidi:normal\">c</bdo></p>"), ["a b c"]);
+    // A paragraph's direction is its own: no marks. Told to run one way, all of it does.
+    assert_eq!(texts("<p dir=rtl>b</p><div dir=auto>c</div>"), ["b", "c"]);
+    assert_eq!(
+        texts("<div style=\"unicode-bidi:bidi-override;direction:rtl\"><p>one</p><p>two</p></div><p>three</p>"),
+        ["\u{202e}one", "\u{202e}two", "three"]
+    );
+    // It is said again in every paragraph the element has text in, and ended where it ends.
+    assert_eq!(texts("<span dir=rtl>one<p>two</p>three</span> four"), ["\u{2067}one", "\u{2067}two", "\u{2067}three\u{2069} four"]);
+    // One inside another, and a picture first.
+    assert_eq!(texts("<p><bdo dir=rtl>a<bdi>b</bdi></bdo>c</p>"), ["\u{202e}a\u{2068}b\u{2069}\u{202c}c"]);
+    let pictured = parse("<p>a<bdo dir=rtl><img src=\"cid:x\" alt=\"pic\">b</bdo></p>");
+    let p = paras(&pictured);
+    assert_eq!(
+        p[0].runs.iter().map(|r| (r.text.as_str(), r.picture.is_some())).collect::<Vec<_>>(),
+        [("a", false), ("\u{202e}", false), ("pic", true), ("b\u{202c}", false)]
+    );
+    // Nothing is written for an element with no text, or with text that is not shown.
+    assert_eq!(texts("<p>a<bdo dir=rtl></bdo>b<bdo dir=rtl style=\"display:none\">x</bdo>c</p><bdo dir=rtl> </bdo>"), ["abc"]);
+    // A cell is its own: what is around the table does not reach into it.
+    let table = parse("<bdo dir=rtl>a<table border=1><tr><td>x<bdi>y</bdi></td></tr></table></bdo>");
+    let cell = table.blocks.iter().find_map(|b| if let Block::Table(t) = b { t.rows.first()?.first() } else { None }).unwrap();
+    let Some(Block::Para(inside)) = cell.blocks.first() else { panic!("a cell with a paragraph") };
+    assert_eq!(inside.text(), "x\u{2068}y\u{2069}");
+    // Hostile: far too deep, never closed, closed twice.
+    let deep = parse(&("<bdo dir=rtl><bdi>".repeat(5000) + "x" + &"</bdi></bdo>".repeat(6000) + "y"));
+    assert!(deep.text().contains('x') && deep.text().contains('y'));
+    assert!(deep.text().chars().count() < 2000);
+    parse(&"<bdo dir=rtl><p>a".repeat(3000));
+    parse("<bdo dir><bdi dir=><span dir=auto style=\"unicode-bidi:;unicode-bidi\"></p></bdo></bdo>x");
+}
+
+#[test]
+fn the_words_of_a_link_are_not_turned_letter_by_letter() {
+    let texts = |html: &str| -> Vec<String> { paras(&parse(html)).iter().map(|p| p.text()).collect() };
+    // Turned inside the link: by an element, by a style, by the mark itself.
+    assert_eq!(texts("<p><a href=\"https://x.example/\"><bdo dir=rtl>moc.knab</bdo></a></p>"), ["moc.knab"]);
+    assert_eq!(
+        texts("<p><a href=\"https://x.example/\"><span style=\"unicode-bidi:bidi-override;direction:rtl\">moc.knab</span></a></p>"),
+        ["moc.knab"]
+    );
+    assert_eq!(texts("<p><a href=\"https://x.example/\">\u{202e}moc.knab\u{202c} &#x202E;x</a></p>"), ["moc.knab\u{202c} x"]);
+    assert_eq!(texts("<p><a href=\"https://x.example/\" style=\"unicode-bidi:bidi-override;direction:rtl\">moc.knab</a></p>"), ["moc.knab"]);
+    // Turned from outside it: the link is set apart, and what is set apart starts unturned.
+    assert_eq!(
+        texts("<p><bdo dir=rtl>ab <a href=\"https://x.example/\">moc.knab</a> cd</bdo></p>"),
+        ["\u{202e}ab \u{2068}moc.knab\u{2069} cd\u{202c}"]
+    );
+    assert_eq!(texts("<p>\u{202e}ab <a href=\"https://x.example/\">moc.knab</a></p>"), ["\u{202e}ab \u{2068}moc.knab\u{2069}"]);
+    // A link keeps what sets its words apart or says which way they are read, and a link in
+    // text that nothing turns is as it was.
+    assert_eq!(
+        texts("<p>a <a href=\"https://x.example/\" dir=rtl>b <bdi>c</bdi></a> <a href=\"https://x.example/\">d</a></p>"),
+        ["a \u{2067}b \u{2068}c\u{2069}\u{2069} d"]
+    );
+    // Text that is no link is turned as it asks to be.
+    assert_eq!(texts("<p><a name=here><bdo dir=rtl>ab</bdo></a></p>"), ["\u{202e}ab\u{202c}"]);
+}
+
+#[test]
+fn a_table_written_from_the_right_says_so() {
+    use crate::rich::Table;
+    let table =
+        |html: &str| -> Table { parse(html).blocks.into_iter().find_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).expect("a table") };
+    let side = |t: &Table| -> Vec<(bool, Align)> {
+        let paras = t.rows.iter().flatten().flat_map(|c| &c.blocks);
+        paras.filter_map(|b| if let Block::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
+    };
+    let cells = "<tr><td>a<td>b</table>";
+    let t = table(&format!("<table border=1>{cells}"));
+    assert_eq!((t.rtl, t.align, side(&t)), (false, Align::Left, vec![(false, Align::Left); 2]));
+    // Its own direction turns its columns; it stands where the text around it starts.
+    let t = table(&format!("<table border=1 dir=rtl>{cells}"));
+    assert_eq!((t.rtl, t.align, side(&t)), (true, Align::Left, vec![(true, Align::Right); 2]));
+    let t = table(&format!("<div dir=rtl><table border=1>{cells}</div>"));
+    assert_eq!((t.rtl, t.align, side(&t)), (true, Align::Right, vec![(true, Align::Right); 2]));
+    let t = table(&format!("<body style=\"direction:rtl\"><table border=1 dir=ltr>{cells}"));
+    assert_eq!((t.rtl, t.align, side(&t)), (false, Align::Right, vec![(false, Align::Left); 2]));
+    // Told where to stand, it stands there.
+    let t = table(&format!("<div dir=rtl><table border=1 align=left>{cells}</div>"));
+    assert_eq!((t.rtl, t.align), (true, Align::Left));
+    let t = table(&format!("<div dir=rtl><table border=1 style=\"margin:0 auto\">{cells}</div>"));
+    assert_eq!((t.rtl, t.align), (true, Align::Center));
+    // A table inside a cell goes by what it stands in.
+    let t = table(&format!("<table border=1 dir=rtl><tr><td><table border=1>{cells}<td>c</table>"));
+    let Some(Block::Table(inner)) = t.rows[0][0].blocks.first() else { panic!("a table in the cell") };
+    assert!(t.rtl && inner.rtl && inner.align == Align::Right);
+
+    // Where each column starts, and which of them a cell's left edge is.
+    let (ltr, rtl) = (Table::default(), Table { rtl: true, ..Table::default() });
+    assert_eq!(ltr.lefts(&[10.0, 20.0, 30.0], 5.0, 75.0, 5.0), [5.0, 20.0, 45.0]);
+    assert_eq!(rtl.lefts(&[10.0, 20.0, 30.0], 5.0, 75.0, 5.0), [65.0, 40.0, 5.0]);
+    assert!(rtl.lefts(&[], 0.0, 0.0, 0.0).is_empty());
+    assert_eq!((ltr.left_column(1, 2, 3), rtl.left_column(1, 2, 3), rtl.left_column(0, 1, 3)), (1, 2, 0));
+    // Hostile: spans past the columns, no columns.
+    assert_eq!((rtl.left_column(2, usize::MAX, 3), rtl.left_column(usize::MAX, usize::MAX, 3), rtl.left_column(0, 0, 0)), (2, 2, 0));
+
+    // RTF: `\rtlrow` on the first row.
+    let rtf = |row: &str| -> bool {
+        let text = format!(
+            "{{\\rtf1 \\trowd{row}\\cellx3000\\cellx6000\\intbl a\\cell b\\cell\\row\\trowd\\cellx3000\\cellx6000\\intbl c\\cell d\\cell\\row}}"
+        );
+        let doc = crate::rtf::parse(text.as_bytes());
+        let Some(Block::Table(t)) = doc.blocks.first() else { panic!("a table") };
+        t.rtl
+    };
+    assert!(rtf("\\rtlrow") && !rtf("") && !rtf("\\ltrrow") && !rtf("\\rtlrow\\ltrrow"));
+}

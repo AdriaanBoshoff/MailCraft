@@ -197,12 +197,16 @@ struct RowDef {
     side: Option<usize>,
     /// Half the room between the text of two cells, in twips.
     half_gap: i32,
+    /// `\rtlrow`: the row's first cell stands at the right.
+    rtl: bool,
 }
 
 /// A table being read: finished rows, the open row's cells, the open cell's blocks.
 #[derive(Default)]
 struct Level {
     rows: Vec<Vec<Cell>>,
+    /// The first row is written from the right.
+    rtl: bool,
     row: Vec<Cell>,
     cell: Vec<Block>,
     /// For each finished row, each cell's right edge and its part in a cell merged down.
@@ -564,6 +568,8 @@ impl Builder<'_> {
             "itap" => cur.itap = u8::try_from(param.unwrap_or(1).clamp(0, i32::from(MAX_NEST))).unwrap_or(1),
             "trowd" => *self.def() = RowDef::default(),
             "trgaph" => self.def().half_gap = param.unwrap_or(0),
+            "rtlrow" => self.def().rtl = true,
+            "ltrrow" => self.def().rtl = false,
             // A cell's settings come before the `\cellx` that gives its right edge.
             "cellx" => {
                 let row = self.def();
@@ -602,7 +608,8 @@ impl Builder<'_> {
             }
             "row" => {
                 self.settle(1);
-                self.table.end_row(&RowDef::default());
+                let rtl = self.outer.rtl;
+                self.table.end_row(&RowDef { rtl, ..RowDef::default() });
             }
             // The sides of a cell, in the order the model keeps them: top, right, bottom, left.
             "clbrdrt" => self.sides(cur, Some(0), None),
@@ -1177,6 +1184,10 @@ impl Level {
         self.seen = 0;
         let merging = std::mem::take(&mut self.merging);
         if !self.row.is_empty() {
+            // A table is written the way its first row is.
+            if self.rows.is_empty() {
+                self.rtl = props.rtl;
+            }
             self.rows.push(std::mem::take(&mut self.row));
             self.merges.push(merging);
         }
@@ -1232,7 +1243,7 @@ impl Level {
         if self.rows.is_empty() {
             return Vec::new();
         }
-        let table = Table { rows: std::mem::take(&mut self.rows), padding: CELL_PADDING, snug: true, ..Table::default() };
+        let table = Table { rows: std::mem::take(&mut self.rows), padding: CELL_PADDING, snug: true, rtl: self.rtl, ..Table::default() };
         if table.columns() > 1 { vec![Block::Table(table)] } else { table.rows.into_iter().flatten().flat_map(|cell| cell.blocks).collect() }
     }
 }

@@ -332,6 +332,8 @@ pub struct Table {
     pub snug: bool,
     /// On paper, the first row stands again at the top of each page the table goes on to.
     pub repeat: bool,
+    /// The table is written from the right: its first column stands at the right.
+    pub rtl: bool,
 }
 
 /// How wide a table asks to be.
@@ -440,6 +442,31 @@ impl Para {
 }
 
 impl Table {
+    /// Where each column starts, for columns `widths` wide that stand `gap` apart between
+    /// `left` and `right`: the first at the left, or at the right in a table written from the
+    /// right (HTML 4.01 section 11.2.1, `dir` on a table: "columns are laid out right to left").
+    pub fn lefts(&self, widths: &[f32], left: f32, right: f32, gap: f32) -> Vec<f32> {
+        let mut lefts = Vec::with_capacity(widths.len());
+        let mut pen = if self.rtl { right } else { left };
+        for wide in widths {
+            if self.rtl {
+                pen -= wide;
+                lefts.push(pen);
+                pen -= gap;
+            } else {
+                lefts.push(pen);
+                pen += wide + gap;
+            }
+        }
+        lefts
+    }
+
+    /// Which column a cell's left edge is the left edge of: the cell starts in column `col` and
+    /// covers `span` of the table's `columns`.
+    pub fn left_column(&self, col: usize, span: usize, columns: usize) -> usize {
+        if self.rtl { col.saturating_add(span.max(1) - 1).min(columns.saturating_sub(1)) } else { col }
+    }
+
     /// Columns in the widest row, counting spans and the cells that reach down from rows above.
     pub fn columns(&self) -> usize {
         if !self.reaches_down() {
