@@ -13,7 +13,9 @@ use mailcraft_fonts::Lettering;
 use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
 
 use crate::html;
-use crate::rich::{Align, Block, Cell, Doc, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, VAlign, any_edge};
+use crate::rich::{
+    Align, Block, Cell, Doc, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Tab, TabKind, Table, VAlign, any_edge,
+};
 
 const MAX_BLOCKS: usize = 50_000;
 const MAX_RUNS: usize = 200_000;
@@ -32,6 +34,9 @@ const MAX_ROW_SPAN: u16 = 1000;
 /// The most columns one cell merged across covers, and how deep tables stand in tables.
 const MAX_SPAN: u16 = 64;
 const MAX_NEST: u8 = 8;
+/// Tab stops of one paragraph, and the furthest one may be, in pixels.
+const MAX_TABS: usize = 32;
+const MAX_TAB_AT: i32 = 4096;
 /// Characters of a list paragraph's number or bullet.
 const MAX_MARKER: usize = 12;
 /// Pixels of room a paragraph may ask for above it, and between its border and its text.
@@ -201,6 +206,11 @@ struct Chars {
     /// Pixels of room asked for above and below the paragraph (`\sb`, `\sa`).
     before: u8,
     after: u8,
+    /// Twips from the margin to the paragraph's text (`\li`), and its tab stops, in twips
+    /// from the margin, with how the stop being described holds its text.
+    left: i32,
+    tabs: Vec<(i32, TabKind)>,
+    tab_kind: TabKind,
 }
 
 #[derive(Default)]
@@ -420,6 +430,8 @@ impl Builder<'_> {
                 cur.itap = 0;
                 cur.edges = Edges::default();
                 (cur.side, cur.pad, cur.before, cur.after) = (None, 0, 0, 0);
+                (cur.left, cur.tab_kind) = (0, TabKind::Left);
+                cur.tabs.clear();
             }
             // Twips, 15 to the pixel.
             "sb" => cur.before = pixels(param, MAX_ABOVE),
@@ -429,7 +441,22 @@ impl Builder<'_> {
             "qc" => cur.align = Align::Center,
             "qr" => cur.align = Align::Right,
             // Twips; half an inch is one level.
-            "li" => cur.indent = u8::try_from((param.unwrap_or(0).max(0) / 720).min(8)).unwrap_or(0),
+            "li" => {
+                cur.left = param.unwrap_or(0).clamp(0, 31_680);
+                cur.indent = u8::try_from((cur.left / 720).min(8)).unwrap_or(0);
+            }
+            // Tab stops (RTF 1.9.1, "Tabs"): how the next one holds its text, then where it is.
+            "tqc" => cur.tab_kind = TabKind::Center,
+            "tqr" => cur.tab_kind = TabKind::Right,
+            "tqdec" => cur.tab_kind = TabKind::Decimal,
+            "tx" => {
+                let kind = std::mem::take(&mut cur.tab_kind);
+                if cur.tabs.len() < MAX_TABS {
+                    cur.tabs.push((param.unwrap_or(0), kind));
+                }
+            }
+            // A bar tab draws a line and moves nothing.
+            "tb" => cur.tab_kind = TabKind::Left,
             "intbl" => cur.in_table = true,
             "itap" => cur.itap = u8::try_from(param.unwrap_or(1).clamp(0, i32::from(MAX_NEST))).unwrap_or(1),
             "trowd" => *self.def() = RowDef::default(),
@@ -751,7 +778,8 @@ impl Builder<'_> {
             }
             None => ParaKind::Body,
         };
-        let para = Block::Para(Para { runs, kind, align: cur.align, indent, frame, above, ..Para::default() });
+        let tabs = if runs.iter().any(|r| r.picture.is_none() && r.text.contains('\t')) { tabs(cur) } else { Vec::new() };
+        let para = Block::Para(Para { runs, kind, align: cur.align, indent, frame, above, tabs, ..Para::default() });
         if depth > 0 {
             self.open_cell().push(para);
         } else {
@@ -785,6 +813,22 @@ fn marker(written: &str) -> Option<String> {
         _ => text.chars().take(MAX_MARKER).collect(),
     };
     Some(marker)
+}
+
+/// A paragraph's tab stops as the model keeps them: in pixels from where its text starts, the
+/// nearest first. A stop at or before the start of the text is none.
+fn tabs(cur: &Chars) -> Vec<Tab> {
+    let mut out: Vec<Tab> = cur
+        .tabs
+        .iter()
+        .filter_map(|(twips, kind)| {
+            let at = twips.saturating_sub(cur.left) / 15;
+            (1..=MAX_TAB_AT).contains(&at).then(|| Tab { at: u16::try_from(at).unwrap_or(u16::MAX), kind: *kind })
+        })
+        .collect();
+    out.sort_by_key(|t| t.at);
+    out.dedup_by_key(|t| t.at);
+    out
 }
 
 /// Twips as pixels, 15 to the pixel, and never more than `most`.

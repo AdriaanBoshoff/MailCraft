@@ -433,7 +433,7 @@ fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool, until: Option
     let (_, width) = room(ui, para);
     let whole = Spot { left: 0.0, width, min_height: 0.0, marker: true };
     if let Some(until) = until {
-        let (job, ends, _) = job(ui, &para.runs, look, width, para.align);
+        let (job, ends, _) = job(ui, para, &para.runs, look, width);
         let galley = ui.painter().layout_job(job);
         return match lines_beside(&galley, until - ui.cursor().top()) {
             Some(chars) => {
@@ -486,7 +486,7 @@ fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: L
     let left = if run.float == Float::Left { size.x + FLOAT_GAP } else { 0.0 };
 
     // Lay the text out beside the picture to learn where the picture ends.
-    let (job, ends, _) = job(ui, &rest, look, narrow, para.align);
+    let (job, ends, _) = job(ui, para, &rest, look, narrow);
     let galley = ui.painter().layout_job(job);
     let rect = match lines_beside(&galley, size.y) {
         Some(chars) => {
@@ -645,10 +645,13 @@ fn holder(ui: &Ui, size: Vec2) -> Option<(char, TextFormat)> {
 
 /// Runs laid out as one piece of text no wider than `wrap`; the character offset where each run
 /// ends; and the pictures that stand in the text, in order.
-fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Align) -> (LayoutJob, Vec<usize>, Vec<Placed<'a>>) {
+fn job<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> (LayoutJob, Vec<usize>, Vec<Placed<'a>>) {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap;
-    job.halign = match align {
+    // Where the text stands in its line, kept only where a tab will ask.
+    let tabbed = runs.iter().any(|r| r.picture.is_none() && r.text.contains('\t'));
+    let mut x = 0.0f32;
+    job.halign = match para.align {
         rich::Align::Left => Align::LEFT,
         rich::Align::Center => Align::Center,
         rich::Align::Right => Align::RIGHT,
@@ -664,6 +667,7 @@ fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Ali
             };
             holder(ui, size).map(|(space, format)| (stand, size, space, format))
         });
+        let wide = held.as_ref().map(|(_, size, ..)| size.x);
         let (text, format) = match held {
             Some((stand, size, space, format)) => {
                 placed.push(Placed { run, stand, size, holder: (space, size.y + BASELINE) });
@@ -680,9 +684,91 @@ fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Ali
         };
         chars = chars.saturating_add(text.chars().count());
         ends.push(chars);
-        job.append(&text, 0.0, format);
+        match wide {
+            _ if !tabbed => job.append(&text, 0.0, format),
+            Some(wide) => {
+                x += wide;
+                job.append(&text, 0.0, format);
+            }
+            None => {
+                let mut rest = text.as_str();
+                loop {
+                    let (before, after) = match rest.split_once('\t') {
+                        Some((before, after)) => (before, Some(after)),
+                        None => (rest, None),
+                    };
+                    if !before.is_empty() {
+                        let measure = |text: &str| text_width(ui.painter(), text, format.font_id.clone());
+                        x = match before.rsplit_once('\n') {
+                            Some((_, last)) => measure(last),
+                            None => x + measure(before),
+                        };
+                        job.append(before, 0.0, format.clone());
+                    }
+                    let Some(after) = after else { break };
+                    let (tab, own) = tab_format(ui, &format);
+                    // Preformatted text has a stop every eight characters.
+                    let step = if matches!(para.kind, ParaKind::Pre) {
+                        8.0 * text_width(ui.painter(), " ", format.font_id.clone())
+                    } else {
+                        f32::from(rich::TAB_STEP)
+                    };
+                    // A tab past the end of the first line stands where nothing here can say.
+                    let room = if x < wrap {
+                        let (ahead, point) = ahead(ui, runs, look, at, after, &format.font_id);
+                        rich::tab_room(&para.tabs, 1.0, step, x, ahead, point)
+                    } else {
+                        step
+                    };
+                    job.append("\t", (room - own).max(0.0), tab);
+                    x += room.max(own);
+                    rest = after;
+                }
+            }
+        }
     }
     (job, ends, placed)
+}
+
+/// How a tab is set: the tab itself in letters too small to take room, so that the room
+/// before it is all the room it takes. Gives its format and the room it takes of itself.
+fn tab_format(ui: &Ui, format: &TextFormat) -> (TextFormat, f32) {
+    let font_id = FontId::new(1.0, format.font_id.family.clone());
+    let own = ui.ctx().fonts_mut(|fonts| fonts.glyph_width(&font_id, '\t'));
+    let tab = TextFormat { font_id, underline: Stroke::NONE, strikethrough: Stroke::NONE, background: Color32::TRANSPARENT, ..format.clone() };
+    (tab, if own.is_finite() { own.max(0.0) } else { 0.0 })
+}
+
+/// The width of the text that follows a tab, up to the next tab or the end of the line, and
+/// its width up to its decimal point (all of it where it has none). `rest` is what follows
+/// the tab in run `at`, set in `font`.
+fn ahead(ui: &Ui, runs: &[Run], look: Look, at: usize, rest: &str, font: &FontId) -> (f32, f32) {
+    const RUNS_AHEAD: usize = 64;
+    let (mut wide, mut point) = (0.0f32, None);
+    // Gives whether the line or the room up to the next tab ended in `text`.
+    let mut take = |text: &str, font: &FontId| {
+        let end = text.find(['\t', '\n']);
+        let part = text.get(..end.unwrap_or(text.len())).unwrap_or_default();
+        if point.is_none()
+            && let Some(dot) = part.find('.')
+        {
+            point = Some(wide + text_width(ui.painter(), part.get(..dot).unwrap_or_default(), font.clone()));
+        }
+        wide += text_width(ui.painter(), part, font.clone());
+        end.is_some()
+    };
+    if !take(rest, font) {
+        for run in runs.iter().skip(at.saturating_add(1)).take(RUNS_AHEAD) {
+            if run.picture.is_some() {
+                continue;
+            }
+            let (text, format) = section(run, look);
+            if take(&text, &format.font_id) {
+                break;
+            }
+        }
+    }
+    (wide, point.unwrap_or(wide))
 }
 
 /// Where each picture of `placed` landed in the laid out text, from the text's own corner.
@@ -718,7 +804,7 @@ struct Spot {
 /// it took.
 fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect {
     let (inset, _) = room(ui, para);
-    let (job, ends, placed) = job(ui, runs, look, spot.width, para.align);
+    let (job, ends, placed) = job(ui, para, runs, look, spot.width);
     let galley = ui.painter().layout_job(job);
 
     let height = (galley.size().y + 2.0).max(spot.min_height);
@@ -880,7 +966,8 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
     for block in list.iter().take(MEASURED_BLOCKS) {
         let width = match block {
             Block::Para(p) => {
-                let (job, ..) = job(ui, &p.runs, look, f32::INFINITY, rich::Align::Left);
+                let (mut job, ..) = job(ui, p, &p.runs, look, f32::INFINITY);
+                job.halign = Align::LEFT;
                 let border = p.frame.as_ref().map_or(0.0, |frame| {
                     let (near, far) = frame_room(frame);
                     near.x + far.x + f32::from(frame.indent.min(12)) * INDENT

@@ -48,6 +48,59 @@ pub struct Para {
     pub clear: bool,
     /// Pixels of room asked for above the paragraph, beside any margin it has.
     pub above: u8,
+    /// Where text after a tab goes on to, from the nearest on. Past the last of them, and
+    /// where there are none, a tab goes on to the next of the stops every paragraph has.
+    pub tabs: Vec<Tab>,
+}
+
+/// A place text after a tab goes on to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tab {
+    /// Pixels from where the paragraph's text starts.
+    pub at: u16,
+    pub kind: TabKind,
+}
+
+/// How the text after a tab stands at its stop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabKind {
+    /// It starts there.
+    #[default]
+    Left,
+    /// Its middle is there.
+    Center,
+    /// It ends there.
+    Right,
+    /// Its decimal point is there.
+    Decimal,
+}
+
+/// Pixels between the stops every paragraph has: half an inch.
+pub const TAB_STEP: u16 = 48;
+
+/// The room a tab takes. `x` is where it stands in its line, `step` the distance between the
+/// stops every paragraph has, `after` the width of the text up to the next tab or the end of
+/// the line and `point` the width of that text up to its decimal point, all in one measure;
+/// `scale` is that measure to the pixel.
+pub fn tab_room(tabs: &[Tab], scale: f32, step: f32, x: f32, after: f32, point: f32) -> f32 {
+    let step = if step.is_finite() { step.max(1.0) } else { 1.0 };
+    if !x.is_finite() || x < 0.0 {
+        return step;
+    }
+    let ahead = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    let room = match tabs.iter().map(|t| (f32::from(t.at) * scale, t.kind)).find(|(at, _)| *at > x + 0.5) {
+        None => {
+            let on = ((x / step).floor() + 1.0) * step - x;
+            if on > 0.0 { on } else { step }
+        }
+        Some((at, TabKind::Left)) => at - x,
+        Some((at, TabKind::Center)) => at - x - ahead(after) / 2.0,
+        Some((at, TabKind::Right)) => at - x - ahead(after),
+        Some((at, TabKind::Decimal)) => at - x - ahead(point),
+    };
+    // A place too far along for the arithmetic to hold still takes a step.
+    if room.is_finite() { room.max(0.0) } else { step }
 }
 
 /// One side of a border.

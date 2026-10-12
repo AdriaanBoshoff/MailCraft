@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use mailcraft_formats::rich::{Align, Block, Cell, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Script, Table, TableWidth, VAlign};
+use mailcraft_formats::rich::{
+    Align, Block, Cell, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign, tab_room,
+};
 
 use crate::fonts::{Fonts, Pick};
 use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Text};
@@ -110,6 +112,41 @@ pub(crate) struct Flow<'f, 'l> {
 
 fn px(v: u16) -> f32 {
     f32::from(v) * PX
+}
+
+/// Give each tab the room that takes what follows it to its stop. A tab past the end of the
+/// first line stands where nothing here can say, and keeps the room it had.
+fn set_tabs(glyphs: &mut [Glyph], tabs: &[Tab], pre: bool, room: f32) {
+    let mut x = 0.0f32;
+    for i in 0..glyphs.len() {
+        let Some(g) = glyphs.get(i).copied() else { break };
+        if g.kind == Kind::Break {
+            x = 0.0;
+            continue;
+        }
+        if g.ch == '\t' && x < room {
+            // The text up to the next tab or the end of the line, and up to its decimal point.
+            let (mut after, mut point) = (0.0f32, None);
+            for next in glyphs.get(i + 1..).unwrap_or_default() {
+                if next.kind == Kind::Break || next.ch == '\t' {
+                    break;
+                }
+                if next.ch == '.' && point.is_none() {
+                    point = Some(after);
+                }
+                after += next.advance;
+            }
+            // Preformatted text has a stop every eight characters; a tab starts as four spaces.
+            let step = if pre { g.advance * 2.0 } else { px(TAB_STEP) };
+            let wide = tab_room(tabs, PX, step, x, after, point.unwrap_or(after));
+            if let Some(g) = glyphs.get_mut(i) {
+                g.advance = wide;
+            }
+            x += wide;
+            continue;
+        }
+        x += g.advance;
+    }
 }
 
 /// The lines of a paragraph `width` wide: where each starts and ends among its glyphs. A line
@@ -436,7 +473,8 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
         let inset = Self::inset(para, width);
         let (left, room) = (x + inset, (width - inset).max(24.0));
-        let (glyphs, looks, pictures) = self.glyphs(para, room);
+        let (mut glyphs, looks, pictures) = self.glyphs(para, room);
+        set_tabs(&mut glyphs, &para.tabs, matches!(para.kind, ParaKind::Pre), room);
         let own_size = looks.first().map_or(self.base.size, |l| l.size);
         for (n, (from, to)) in lines(&glyphs, room).into_iter().enumerate() {
             let line = glyphs.get(from..to).unwrap_or_default();

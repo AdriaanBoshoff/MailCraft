@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 32 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 33 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 167, all passing |
+| Tests | 169, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -67,7 +67,8 @@
 17. Done: tables inside the cells of tables, and cells merged across, in RTF bodies.
 18. Done: paragraph borders and the room paragraphs ask for above and below, in RTF bodies.
 19. Done: list paragraphs of RTF bodies have their numbers and bullets as markers.
-20. Next: tab stops in RTF bodies.
+20. Done: tab stops in RTF bodies (left, centre, right, decimal).
+21. Next: line spacing and the rest of M2's formatted reading.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -369,4 +370,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   screen a list marker (of HTML bodies too) is now drawn in the letters of the text it stands
   before, where it used to be in the window's own at one size. The sample receipt has a short
   numbered list. Nothing here goes beyond Outlook.
+- **2026-10-12** - M2.30: a tab in an RTF body goes to a tab stop, on screen and in print. A
+  paragraph's own stops (`\tx`, with `\tqc`, `\tqr` and `\tqdec` before it; RTF 1.9.1,
+  "Tabs") are kept from where its text starts, and the text after a tab starts at a left stop,
+  is centred on a centre stop, ends at a right stop, or has its decimal point at a decimal stop.
+  Where a paragraph has no stop ahead, a tab goes to the next half inch; before, every tab was
+  the width of four spaces. A paragraph has at most 32 stops, none further than 4096 pixels
+  along. Not yet: leaders (the dots up to a stop), bar tabs (they are no stop), and stops on
+  the lines a long paragraph wraps onto. Preformatted text has a stop every eight characters
+  in print. The sample receipt has two lines set
+  with a decimal stop. Nothing here goes beyond Outlook.
 

@@ -352,6 +352,7 @@ impl Builder {
             frame: head.frame,
             clear: head.clear,
             above: 0,
+            tabs: Vec::new(),
         }));
     }
 

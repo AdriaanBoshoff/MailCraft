@@ -151,9 +151,10 @@ fn looks_are_carried_onto_the_page() {
     assert_eq!(page.rules.iter().filter(|r| r.from.0 == r.to.0 && r.from.1 < quoted.y && r.to.1 > quoted.y).count(), 2);
     assert!(page.rules.iter().any(|r| r.from.1 == r.to.1 && (r.to.0 - r.from.0 - (Paper::A4.width - 72.0)).abs() < 0.01));
     assert_eq!(find("[picture not downloaded: a cat]").size, 9.0);
-    // A tab is room, a hard space a space; marks that draw nothing are not there.
+    // A tab is room up to the next stop (every half inch where the paragraph has none of its
+    // own), a hard space a space; marks that draw nothing are not there.
     let (a, rest) = (find("a"), find("b cd"));
-    assert!((rest.x - (a.x + 6.0 + 12.0)).abs() < 0.01);
+    assert!((rest.x - (a.x + 36.0)).abs() < 0.01);
 }
 
 #[test]
@@ -369,4 +370,46 @@ fn pictures_stand_in_the_line_at_the_size_asked_for() {
     let last_page = printed.pages.last().unwrap();
     let d = last_page.texts.iter().find(|t| t.glyphs[0].1 == 'd').unwrap();
     assert!(all[3].y + all[3].height <= d.y + 3.01 && all[3].y + all[3].height > d.y - 12.0, "{:?} {}", all[3], d.y);
+}
+
+#[test]
+fn text_after_a_tab_stands_at_its_stop() {
+    use mailcraft_formats::rich::{Tab, TabKind};
+    let stop = |at, kind| Tab { at, kind };
+    // Stops are in pixels, four to three points: 30, 90 and 120 points from the start.
+    let tabs = vec![stop(40, TabKind::Left), stop(120, TabKind::Right), stop(160, TabKind::Decimal)];
+    let body = doc(vec![
+        Block::Para(Para { tabs: tabs.clone(), ..para("a\tbb\tcc\t1.5") }),
+        // Past the last stop, and where there are none: the stops every paragraph has.
+        Block::Para(Para { tabs: vec![stop(4, TabKind::Left)], ..para("dddd\tee") }),
+        // Text too long to end at its stop starts where the tab is.
+        Block::Para(Para { tabs: vec![stop(16, TabKind::Right)], ..para("f\tgggggg") }),
+        // Every line of a paragraph starts again.
+        Block::Para(Para { tabs, ..para("h\tii\nj\tkk") }),
+    ]);
+    let printed = print(&body, Paper::A4);
+    let page = &printed.pages[0];
+    let find = |text: &str| {
+        page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap_or_else(|| panic!("{text}: {}", page.text()))
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let (a, bb, cc, num) = (find("a"), find("bb"), find("cc"), find("1.5"));
+    assert!(near(bb.x, a.x + 30.0), "{} {}", bb.x, a.x);
+    assert!(near(cc.x + cc.width, a.x + 90.0));
+    assert!(near(num.x + num.width / 3.0, a.x + 120.0));
+    assert!(a.y == bb.y && bb.y == cc.y && cc.y == num.y);
+    let (d, e) = (find("dddd"), find("ee"));
+    assert!(near(e.x, d.x + 36.0), "{} {}", e.x, d.x + d.width);
+    let (f, g) = (find("f"), find("gggggg"));
+    assert!(near(g.x, f.x + f.width));
+    let (h, ii, j, kk) = (find("h"), find("ii"), find("j"), find("kk"));
+    assert!(near(ii.x, h.x + 30.0) && near(kk.x, j.x + 30.0) && near(h.x, j.x) && j.y > h.y);
+
+    // Hostile: stops out of any range, a tab at every character, tabs past the end of a line.
+    let wild = vec![stop(0, TabKind::Right), stop(u16::MAX, TabKind::Decimal), stop(u16::MAX, TabKind::Center)];
+    let body = doc(vec![
+        Block::Para(Para { tabs: wild.clone(), ..para(&"a\t".repeat(3000)) }),
+        Block::Para(Para { tabs: wild, kind: ParaKind::Pre, ..para(&format!("{}\t\t\tb.\t.\t", "word ".repeat(200))) }),
+    ]);
+    within(&print(&body, SMALL), SMALL);
 }

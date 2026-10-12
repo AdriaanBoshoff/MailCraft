@@ -2061,3 +2061,63 @@ fn rtf_list_paragraphs_have_their_numbers_and_bullets() {
     let Some(Block::Para(cell)) = tables(&doc)[0].rows[0][0].blocks.first() else { panic!() };
     assert_eq!(cell.kind, ParaKind::Item("1.".into()));
 }
+
+#[test]
+fn rtf_paragraphs_have_tab_stops() {
+    use crate::rich::{Tab, TabKind, tab_room};
+    // RTF 1.9.1, "Tabs": how a stop holds its text comes before where it is.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi\
+          \\pard\\tx1440\\tqr\\tx4320\\li720\\tqdec\\tx6000\\tqc\\tx3000\\tb5000\\tx720\\tx300 a\\tab b\\tab c\\par \
+          same\\par\
+          \\pard none\\tab here\\par\
+          \\pard\\tqr\\tx9000{\\tx100 in\\tab side\\par}out\\tab side\\par}",
+    );
+    let p = paras(&doc);
+    let stop = |at, kind| Tab { at, kind };
+    // From where the text starts, the nearest first; a stop at or before the start is none,
+    // and a bar tab is no stop.
+    assert_eq!(p[0].tabs, [stop(48, TabKind::Left), stop(152, TabKind::Center), stop(240, TabKind::Right), stop(352, TabKind::Decimal)]);
+    // A paragraph with no tab in it carries none; one with a tab and no stops has the usual ones.
+    assert!(p[1].tabs.is_empty() && p[2].tabs.is_empty());
+    assert_eq!(p[2].text(), "none\there");
+    // Stops are the paragraph's: a group keeps its own and gives them back.
+    assert_eq!(p[3].tabs, [stop(6, TabKind::Left), stop(600, TabKind::Right)]);
+    assert_eq!(p[4].tabs, [stop(600, TabKind::Right)]);
+
+    // The room a tab takes. With no stop ahead: to the next of the stops every paragraph has.
+    assert_eq!(tab_room(&[], 1.0, 48.0, 10.0, 0.0, 0.0), 38.0);
+    assert_eq!(tab_room(&[], 1.0, 48.0, 48.0, 0.0, 0.0), 48.0);
+    let one = |kind| [stop(100, kind)];
+    assert_eq!(tab_room(&one(TabKind::Left), 1.0, 48.0, 10.0, 30.0, 12.0), 90.0);
+    assert_eq!(tab_room(&one(TabKind::Right), 1.0, 48.0, 10.0, 30.0, 12.0), 60.0);
+    assert_eq!(tab_room(&one(TabKind::Center), 1.0, 48.0, 10.0, 30.0, 12.0), 75.0);
+    assert_eq!(tab_room(&one(TabKind::Decimal), 1.0, 48.0, 10.0, 30.0, 12.0), 78.0);
+    // Text too long to end at its stop starts where the tab is.
+    assert_eq!(tab_room(&one(TabKind::Right), 1.0, 48.0, 10.0, 200.0, 0.0), 0.0);
+    // Past the last stop, and in another measure (points, three to four pixels).
+    assert_eq!(tab_room(&one(TabKind::Left), 1.0, 48.0, 120.0, 0.0, 0.0), 24.0);
+    assert_eq!(tab_room(&one(TabKind::Left), 0.75, 36.0, 15.0, 0.0, 0.0), 60.0);
+    // Numbers that are none: always some room, never a panic.
+    for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0, f32::MAX] {
+        for kind in [TabKind::Left, TabKind::Center, TabKind::Right, TabKind::Decimal] {
+            for room in [
+                tab_room(&one(kind), 1.0, wild, wild, wild, wild),
+                tab_room(&one(kind), wild, 48.0, 10.0, wild, wild),
+                tab_room(&[], 1.0, wild, 10.0, 0.0, 0.0),
+            ] {
+                assert!(room.is_finite() && room >= 0.0, "{wild} {kind:?} {room}");
+            }
+        }
+    }
+
+    // Hostile: more stops than a paragraph may have, and places that are none.
+    let mut body = String::from("{\\rtf1\\pard\\tx-5\\tx2147483647\\tqr\\tx-2147483648\\li2147483647\\tx99999 ");
+    for i in 0..2000 {
+        body.push_str(&format!("\\tx{} ", i * 40));
+    }
+    body.push_str("a\\tab b\\par}");
+    let doc = crate::rtf::parse(body.as_bytes());
+    let tabs = &paras(&doc)[0].tabs;
+    assert!(tabs.len() <= 32 && tabs.iter().all(|t| (1..=4096).contains(&t.at)) && tabs.windows(2).all(|w| w[0].at < w[1].at));
+}

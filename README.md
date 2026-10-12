@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M1%20%2B%20M2%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-41%20of%20115%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-167%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-169%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -66,7 +66,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - Reply, reply all, forward and new mail as drafts; saving messages as `.msg`, `.oft` or `.eml`.
 - **Formatted bodies.** HTML and RTF mail is laid out and drawn: fonts the message names (installed
   ones only), colours, lists, links, tables (cell borders, fills, merged cells, tables inside cells),
-  paragraph borders and spacing. Nothing in a message is run and nothing is fetched.
+  paragraph borders and spacing, tab stops. Nothing in a message is run and nothing is fetched.
 - **Pictures.** Attached and written-in pictures (PNG, JPEG, bitmaps, Windows and enhanced metafiles
   that are drawings) are decoded in-process and drawn in the text; an attachment that stands in the
   text is a card that a click saves.
@@ -77,7 +77,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
 - **Writing `.pst` files.** Data files are read-only; changes to them are refused.
-- **Parts of formatted bodies.** Tab stops, list numbering and line spacing in RTF; metafiles with a
+- **Parts of formatted bodies.** Line spacing, tab leaders and list numbers the writer left out in RTF; metafiles with a
   bitmap beside the drawing; shaping, kerning and right-to-left text in print.
 - Calendar, People and Tasks.
 - The MCP server, the control channel and the web build.
