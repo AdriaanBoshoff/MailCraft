@@ -362,6 +362,72 @@ impl MailUi {
         self.menu_fresh = false;
     }
 
+    /// Ask about a link before anything is opened: where it really goes, what is wrong with
+    /// it, and the whole address. Only "Open" here ever hands an address to the system.
+    pub(crate) fn link_window(&mut self, ctx: &egui::Context) {
+        let Some(ask) = self.link_ask.as_ref() else { return };
+        let t = self.tokens.clone();
+        // What to do: open (true), or only close (false).
+        let mut done: Option<bool> = None;
+        let title = if ask.mailbox { "Write to this mailbox?" } else { "Open this link?" };
+        egui::Window::new(title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            let words = |text: &str, size: f32, color: Color32| egui::Label::new(egui::RichText::new(text).font(font(size)).color(color)).wrap();
+            if !ask.text.is_empty() {
+                ui.add(words(&format!("The text says: {}", ask.text), 12.5, t.text_dim));
+                ui.add_space(4.0);
+            }
+            if let Some(goes) = &ask.goes {
+                ui.add(words(if ask.mailbox { "It writes to a mailbox at" } else { "It goes to" }, 12.5, t.text_dim));
+                ui.add(egui::Label::new(egui::RichText::new(goes).font(bold(17.0)).color(t.text)).wrap());
+                ui.add_space(4.0);
+            }
+            if let Some(concern) = &ask.concern {
+                ui.add(words(concern, 13.0, t.danger));
+                ui.add_space(4.0);
+            }
+            let shown: String = ask.address.chars().take(600).collect();
+            ui.add(egui::Label::new(egui::RichText::new(shown).font(egui::FontId::monospace(12.0)).color(t.text_dim)).wrap());
+            if let Some(refused) = &ask.refused {
+                ui.add_space(4.0);
+                ui.add(words(refused, 13.0, t.text));
+            }
+            ui.add_space(8.0);
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                done = Some(false);
+            }
+            ui.horizontal(|ui| {
+                let open = if ask.mailbox { "Write a message" } else { "Open in browser" };
+                if ui.add_enabled(ask.refused.is_none(), egui::Button::new(open)).clicked() {
+                    done = Some(true);
+                }
+                if ui.button("Copy address").clicked() {
+                    ui.ctx().copy_text(ask.address.clone());
+                    done = Some(false);
+                }
+                // The safe answer is the one a key press gives.
+                let cancel = ui.button("Cancel");
+                if !cancel.has_focus() && ui.memory(|m| m.focused().is_none()) {
+                    cancel.request_focus();
+                }
+                if cancel.clicked() {
+                    done = Some(false);
+                }
+            });
+        });
+        let Some(open) = done else { return };
+        let Some(ask) = self.link_ask.take().filter(|_| open) else { return };
+        // The engine checks the address again; the person has seen the concern and said yes.
+        match self.execute("mail.openLink", &json!({ "address": ask.address, "confirm": true })) {
+            Ok(result) => {
+                if let Some(address) = result.pointer("/untrusted_content/open").and_then(Value::as_str) {
+                    self.requests.push(crate::UiRequest::OpenLink(address.to_string()));
+                }
+            }
+            Err(e) => self.session.status = e,
+        }
+    }
+
     pub(crate) fn prompt_window(&mut self, ctx: &egui::Context) {
         let Some(prompt) = self.prompt.as_mut() else { return };
         let mut done: Option<bool> = None;

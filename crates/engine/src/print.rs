@@ -229,7 +229,7 @@ fn mailbox(name: &str, email: &str) -> String {
 }
 
 /// The message's formatted body, or its plain one as a document. True for a plain one.
-fn body(item: &Item) -> (Doc, bool) {
+pub(crate) fn body(item: &Item) -> (Doc, bool) {
     if let Some(html) = item.body_html() {
         let doc = mailcraft_formats::html::parse(&html);
         if !doc.is_empty() {

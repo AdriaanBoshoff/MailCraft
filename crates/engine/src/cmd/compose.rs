@@ -168,6 +168,12 @@ fn set_aside(s: &mut Session) -> bool {
     }
 }
 
+/// Start a new message to one mailbox, setting aside any that was being written.
+pub(super) fn start_to(s: &mut Session, to: String) {
+    set_aside(s);
+    s.compose = Some(Draft { kind: "New", to, ..Draft::default() });
+}
+
 fn new(s: &mut Session, _: &Value) -> CmdResult {
     set_aside(s);
     s.compose = Some(Draft { kind: "New", ..Draft::default() });

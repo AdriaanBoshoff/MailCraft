@@ -23,7 +23,7 @@ use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilde
 use mailcraft_formats::rich::{
     self, Block, Doc, Edge, Edges, Filed, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 /// Size of text the message gives no size for: 12 points.
@@ -66,6 +66,8 @@ const MAX_DASHES: usize = 2048;
 const MAX_LEADERS: usize = 64;
 /// A border colour this close to what is behind it is drawn in the reader's own.
 const EDGE_CONTRAST: f32 = 1.3;
+/// What is said under a link's address when the pointer rests on it.
+const LINK_HINT: &str = "Click to be asked before it is opened.";
 /// The card of an attachment that stands in the text: how tall it is, the room its mark and its
 /// edges take beside the words, and the narrowest it is drawn.
 const CARD_TALL: f32 = 22.0;
@@ -82,6 +84,17 @@ struct Look<'a> {
     on: Color32,
     /// The attachment a click in the text asked for, by its number in the message.
     picked: &'a Cell<Option<usize>>,
+    /// The link a click in the text was on.
+    link: &'a RefCell<Option<Arc<str>>>,
+}
+
+/// What a click in the body asked for.
+#[derive(Default)]
+pub(crate) struct Picked {
+    /// An attachment standing in the text, by its number: the reader asks for it to be saved.
+    pub file: Option<usize>,
+    /// A link: the reader is asked whether to open it.
+    pub link: Option<Arc<str>>,
 }
 
 impl Look<'_> {
@@ -91,13 +104,13 @@ impl Look<'_> {
     }
 }
 
-/// Draw the body. Returns the number of an attachment standing in the text that was clicked:
-/// the reader asks for it to be saved. Nothing is opened from here.
-pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, faces: &Faces) -> Option<usize> {
+/// Draw the body. Returns what a click in it asked for. Nothing is opened from here.
+pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, faces: &Faces) -> Picked {
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
     let picked = Cell::new(None);
-    blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface, picked: &picked }, 0);
-    picked.get()
+    let link = RefCell::new(None);
+    blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface, picked: &picked, link: &link }, 0);
+    Picked { file: picked.get(), link: link.into_inner() }
 }
 
 /// A picture standing at one side, with room beside it still to fill.
@@ -623,7 +636,7 @@ fn tip(run: &Run, stand: Stand) -> String {
     lines.push(alt(run));
     if let Some(link) = run.style.link.as_deref() {
         lines.push(link.chars().take(300).collect());
-        lines.push("Links are not opened from here.".to_string());
+        lines.push(LINK_HINT.to_string());
     }
     lines.retain(|line| !line.is_empty());
     lines.join("\n")
@@ -947,17 +960,27 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             if !tip.is_empty() {
                 response.clone().on_hover_text_at_pointer(tip);
             }
+            if let Some(link) = &p.run.style.link {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                if response.clicked() {
+                    look.link.replace(Some(link.clone()));
+                }
+            }
         } else {
             let cursor = galley.cursor_from_pos(pointer - pos);
             let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
             if (pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y) {
                 let index = cursor.index.0;
                 let at = ends.iter().position(|end| index < *end);
-                if let Some(link) = at.and_then(|i| runs.get(i)).and_then(|r| r.style.link.as_deref()) {
+                if let Some(link) = at.and_then(|i| runs.get(i)).and_then(|r| r.style.link.as_ref()) {
                     let shown: String = link.chars().filter(|c| !c.is_control()).take(300).collect();
                     let concern =
                         at.and_then(|i| mailcraft_formats::links::concern_at(runs, i)).map(|c| format!("{}\n", c.words())).unwrap_or_default();
-                    response.clone().on_hover_text_at_pointer(format!("{concern}{shown}\nLinks are not opened from here."));
+                    response.clone().on_hover_text_at_pointer(format!("{concern}{shown}\n{LINK_HINT}"));
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    if response.clicked() {
+                        look.link.replace(Some(link.clone()));
+                    }
                 }
             }
         }

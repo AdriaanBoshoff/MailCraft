@@ -1800,6 +1800,7 @@ dependencies = [
  "egui",
  "log",
  "mailcraft-engine",
+ "mailcraft-formats",
  "mailcraft-ui-egui",
  "rfd",
  "serde_json",

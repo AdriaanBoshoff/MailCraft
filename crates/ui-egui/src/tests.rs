@@ -479,7 +479,7 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
         let mut picked = None;
         let input = egui::RawInput { events, ..egui::RawInput::default() };
         let mut output = ctx.run_ui(input, |ui| {
-            picked = body::draw(ui, doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &faces::Faces::default());
+            picked = body::draw(ui, doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &faces::Faces::default()).file;
         });
         output.textures_delta.clear();
         picked
@@ -529,4 +529,72 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
             output.textures_delta.clear();
         }
     }
+}
+
+#[test]
+fn a_click_on_a_link_asks_and_only_the_answer_opens_it() {
+    use mailcraft_formats::rich::{Block, Doc, Para, Run, Style};
+    let link: std::sync::Arc<str> = "https://example.org/help".into();
+    let run = Run { text: "A link with some words in it".into(), style: Style { link: Some(link.clone()), ..Style::default() }, ..Run::default() };
+    let doc = Doc { blocks: vec![Block::Para(Para { runs: vec![run], ..Para::default() })], ..Doc::default() };
+    let draw = |ctx: &egui::Context, events: Vec<egui::Event>| {
+        let mut picked = None;
+        let input = egui::RawInput { events, ..egui::RawInput::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            picked = body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &faces::Faces::default()).link;
+        });
+        output.textures_delta.clear();
+        picked
+    };
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let at = egui::pos2(40.0, 10.0);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    // Looking at it and resting the pointer on it ask for nothing.
+    assert_eq!(draw(&ctx, Vec::new()), None);
+    assert_eq!(draw(&ctx, vec![egui::Event::PointerMoved(at)]), None);
+    assert_eq!(draw(&ctx, vec![button(at, true)]), None);
+    assert_eq!(draw(&ctx, vec![button(at, false)]), Some(link));
+    // A click beside the text is on no link.
+    let beside = egui::pos2(600.0, 10.0);
+    assert_eq!(draw(&ctx, vec![egui::Event::PointerMoved(beside), button(beside, true)]), None);
+    assert_eq!(draw(&ctx, vec![button(beside, false)]), None);
+
+    // In the window: asking shows where the link goes and opens nothing.
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.linkDialog", &json!({"index": 0})).is_err(), "no message is open");
+    ui.execute("mail.select", &json!({"folder": "Junk Email", "index": 0})).unwrap();
+    assert!(ui.execute("ui.linkDialog", &json!({"address": "https://example.com/not-in-the-message"})).is_err());
+    assert!(ui.execute("ui.linkDialog", &json!({"index": 99})).is_err() && ui.execute("ui.linkDialog", &Value::Null).is_err());
+    ui.execute("ui.linkDialog", &json!({"index": 1})).unwrap();
+    let ask = ui.link_ask.as_ref().unwrap();
+    assert_eq!(
+        (ask.goes.as_deref(), ask.text.as_str(), ask.mailbox, ask.refused.is_none()),
+        (Some("sign-in.example.net"), "mail.example.org", false, true)
+    );
+    assert!(ask.concern.as_ref().is_some_and(|c| c.contains("sign-in.example.net")));
+    assert!(ui.requests.is_empty());
+    // A command from outside the window never hands an address to the system: only the
+    // dialog's own button does.
+    ui.execute("mail.openLink", &json!({"index": 4})).unwrap();
+    ui.execute("mail.openLink", &json!({"index": 1, "confirm": true})).unwrap();
+    assert!(ui.requests.is_empty());
+    // The dialog is drawn, in both themes, and still nothing is opened.
+    for dark in [false, true] {
+        ui.execute("ui.theme", &json!({"theme": if dark { "dark" } else { "light" }})).unwrap();
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 700.0))),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |u| ui.ui(u));
+            output.textures_delta.clear();
+        }
+    }
+    assert!(ui.requests.is_empty() && ui.link_ask.is_some());
+    // A mailbox is told apart.
+    ui.execute("ui.linkDialog", &json!({"index": 3})).unwrap();
+    assert!(ui.link_ask.as_ref().is_some_and(|a| a.mailbox && a.goes.as_deref() == Some("mailbox-notice.example.net")));
 }

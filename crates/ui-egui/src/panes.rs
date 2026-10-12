@@ -487,6 +487,7 @@ impl MailUi {
             .take(32)
             .collect();
         let mut save: Option<usize> = None;
+        let mut link: Option<std::sync::Arc<str>> = None;
         let mut save_all = false;
         if !files.is_empty() {
             let mut ax = left;
@@ -578,7 +579,11 @@ impl MailUi {
                     ui.set_width(ui.available_width());
                     match &doc {
                         // An attachment that stands in the text is saved like one in the list above.
-                        Some(doc) => save = body::draw(ui, doc, &t, &self.pictures, &self.faces).or(save),
+                        Some(doc) => {
+                            let picked = body::draw(ui, doc, &t, &self.pictures, &self.faces);
+                            save = picked.file.or(save);
+                            link = picked.link;
+                        }
                         None => {
                             ui.add(egui::Label::new(egui::RichText::new(plain).font(font(13.5)).color(t.text)).wrap().selectable(true));
                         }
@@ -591,6 +596,9 @@ impl MailUi {
         }
         if let Some(index) = save {
             self.act("ui.saveAttachmentDialog", json!({ "index": index }));
+        }
+        if let Some(link) = link {
+            self.act("ui.linkDialog", json!({ "address": link.chars().filter(|c| !c.is_control()).collect::<String>() }));
         }
         if save_all {
             self.act("ui.saveAllAttachmentsDialog", Value::Null);

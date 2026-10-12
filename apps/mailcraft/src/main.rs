@@ -85,10 +85,41 @@ impl App {
                         self.run("compose.attach", json!({ "path": path }));
                     }
                 }
+                UiRequest::OpenLink(address) => {
+                    self.ui.session.status = match open_in_browser(&address) {
+                        Ok(()) => "Opened in the browser".to_string(),
+                        Err(e) => format!("The browser could not be started: {e}"),
+                    };
+                }
                 UiRequest::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
     }
+}
+
+/// Hand a web address to the system's browser. The address has been checked by the engine
+/// (`mail.openLink`): `http` or `https`, plain characters only. It is checked once more here,
+/// because this is where it leaves the program, and it is passed as one argument, never through
+/// a shell.
+fn open_in_browser(address: &str) -> std::io::Result<()> {
+    use mailcraft_formats::links::{Target, target};
+    let refused = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, why.to_string());
+    let address = match target(address) {
+        Ok(Target::Page(address)) => address,
+        Ok(Target::Mailbox(_)) => return Err(refused("not a web address")),
+        Err(why) => return Err(refused(why)),
+    };
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command.arg(address).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command.spawn().map(|_| ())
 }
 
 /// A file name suggestion from untrusted text: no path separators, reserved characters or dots

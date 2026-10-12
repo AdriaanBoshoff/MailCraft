@@ -67,6 +67,9 @@ pub enum UiRequest {
     SaveAttachment(usize),
     SaveAllAttachments,
     Attach,
+    /// Hand a web address to the system's browser. Queued only when the person presses Open in
+    /// the link dialog, with an address the engine has checked.
+    OpenLink(String),
     Quit,
 }
 
@@ -85,6 +88,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
     UiCommand { id: "ui.saveAllAttachmentsDialog", label: "Save All Attachments…", params: "" },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
+    UiCommand {
+        id: "ui.linkDialog",
+        label: "Open Link…",
+        params: r#"{"index": link number from mail.links} or {"address": as the message writes it}; shows where the link goes and asks; nothing is opened until the person answers"#,
+    },
     UiCommand { id: "ui.toggleFolder", label: "Expand or Collapse Folder", params: r#"{"store": index, "folderId": id}"# },
     UiCommand { id: "ui.prompt", label: "Ask for a Name", params: r#"{"command": "folder.new" | "folder.rename"}"# },
     UiCommand {
@@ -115,6 +123,19 @@ pub(crate) enum Menu {
     Reading,
 }
 
+/// A link the person is being asked about.
+pub(crate) struct LinkAsk {
+    /// As the message writes it: what `mail.openLink` is given.
+    pub address: String,
+    pub text: String,
+    pub goes: Option<String>,
+    pub concern: Option<String>,
+    /// Why it cannot be opened, when it cannot.
+    pub refused: Option<String>,
+    /// It is a mailbox: answering starts a message.
+    pub mailbox: bool,
+}
+
 pub(crate) struct Prompt {
     pub title: &'static str,
     pub command: &'static str,
@@ -141,6 +162,7 @@ pub struct MailUi {
     pub(crate) menu: Option<(Menu, Pos2)>,
     pub(crate) menu_fresh: bool,
     pub(crate) prompt: Option<Prompt>,
+    pub(crate) link_ask: Option<LinkAsk>,
     pub(crate) scroll_to_selected: bool,
     fonts_ready: bool,
 }
@@ -246,6 +268,7 @@ impl MailUi {
             menu: None,
             menu_fresh: false,
             prompt: None,
+            link_ask: None,
             scroll_to_selected: false,
             fonts_ready: false,
         }
@@ -297,6 +320,26 @@ impl MailUi {
             }
             "ui.saveAllAttachmentsDialog" => self.requests.push(UiRequest::SaveAllAttachments),
             "ui.attachDialog" => self.requests.push(UiRequest::Attach),
+            "ui.linkDialog" => {
+                let item = self.session.open.as_ref().ok_or("No message is open")?;
+                let found = mailcraft_engine::links::of(item);
+                let link = match (number("index"), text("address")) {
+                    (Some(index), _) => usize::try_from(index).ok().and_then(|index| found.get(index)),
+                    (None, Some(address)) => found.iter().find(|link| link.address == address),
+                    (None, None) => return Err("\"index\" or \"address\" is missing".to_string()),
+                }
+                .ok_or("The message has no such link")?;
+                let target = mailcraft_formats::links::target(&link.address);
+                self.menu = None;
+                self.link_ask = Some(LinkAsk {
+                    address: link.address.clone(),
+                    text: link.text.clone(),
+                    goes: link.goes.clone(),
+                    concern: link.concern.as_ref().map(|c| c.words()),
+                    mailbox: matches!(target, Ok(mailcraft_formats::links::Target::Mailbox(_))),
+                    refused: target.err().map(str::to_string),
+                });
+            }
             "ui.toggleFolder" => {
                 let key = (number("store").and_then(|n| usize::try_from(n).ok()).unwrap_or(0), number("folderId").ok_or("\"folderId\" is missing")?);
                 if !self.collapsed.remove(&key) {
@@ -462,6 +505,7 @@ impl MailUi {
         }
         self.menu_popup(&ctx);
         self.prompt_window(&ctx);
+        self.link_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
             if let Err(e) = self.execute(&id, &params) {
@@ -471,7 +515,7 @@ impl MailUi {
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
-        if self.prompt.is_some() {
+        if self.prompt.is_some() || self.link_ask.is_some() {
             return;
         }
         let typing = ui.ctx().memory(|m| m.focused().is_some());

@@ -4,6 +4,7 @@
 mod compose;
 mod file;
 mod folder;
+mod link;
 mod mail;
 mod view;
 
@@ -31,6 +32,7 @@ pub fn registry() -> &'static [CommandSpec] {
         let mut v = Vec::new();
         v.extend(file::commands());
         v.extend(mail::commands());
+        v.extend(link::commands());
         v.extend(compose::commands());
         v.extend(folder::commands());
         v.extend(view::commands());

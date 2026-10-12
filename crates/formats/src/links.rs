@@ -206,3 +206,58 @@ pub fn concern_at(runs: &[Run], at: usize) -> Option<Concern> {
     let link = runs.get(at)?.style.link.as_deref()?;
     concern(&text_around(runs, at), link)
 }
+
+/// What following a link would start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// A web page: the address as a browser may be given it.
+    Page(String),
+    /// A mailbox to write to.
+    Mailbox(String),
+}
+
+/// Characters a web address may be written in ([RFC 3986] 2: unreserved, reserved and `%`).
+fn in_address(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c)
+}
+
+/// Characters a mailbox may be written in here ([RFC 5322] 3.2.3, without the ones that would
+/// mean more than one mailbox, a display name or something to decode).
+fn in_mailbox(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-._+@".contains(c)
+}
+
+/// What following `link` would start, or why it is not followed. Only a web page (`http`,
+/// `https`) and a mailbox (`mailto`) are: any other kind of address would start a program or
+/// open a file. The address is given back as it may be handed on: without white space, in the
+/// plain characters an address is made of, and no longer than is looked at.
+pub fn target(link: &str) -> Result<Target, &'static str> {
+    let clean: String = link.chars().filter(|c| !c.is_whitespace() && !c.is_control()).take(MAX_LOOKED_AT + 1).collect();
+    if clean.chars().count() > MAX_LOOKED_AT {
+        return Err("The address is too long to open.");
+    }
+    let Some((scheme, rest)) = scheme_of(&clean) else {
+        return Err("The link has no address of a web page or a mailbox.");
+    };
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" => {
+            if !clean.chars().all(in_address) {
+                return Err("The address is written in characters a web address does not have. It is not opened; it can be copied.");
+            }
+            match place(&clean) {
+                Some(place) if !place.host.is_empty() => Ok(Target::Page(clean)),
+                _ => Err("The address names no place to go to."),
+            }
+        }
+        "mailto" => {
+            let mailbox = rest.split('?').next().unwrap_or_default();
+            let shaped = mailbox.split_once('@').is_some_and(|(name, host)| !name.is_empty() && host.contains('.') && !host.contains('@'));
+            if shaped && mailbox.chars().count() <= 320 && mailbox.chars().all(in_mailbox) {
+                Ok(Target::Mailbox(mailbox.to_string()))
+            } else {
+                Err("The link does not name one plain mailbox.")
+            }
+        }
+        _ => Err("Only web pages and mailboxes are opened from a message."),
+    }
+}

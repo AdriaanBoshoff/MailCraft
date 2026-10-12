@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 37 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 38 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 176, all passing |
+| Tests | 180, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -72,9 +72,9 @@
 22. Done: tab leaders, and the line between paragraphs in one border, in RTF bodies.
 23. Done: list numbers from the list tables of RTF bodies.
 24. Done: fills behind blocks, and room on each side of them, in HTML and RTF bodies.
-25. Next: what is left of M2, in this order: opening a link; text beside pictures and kerning in
-    print; page setup, Table Style and a print preview; metafiles with a bitmap beside the
-    drawing.
+25. Done: opening a link, after being asked.
+26. Next: what is left of M2, in this order: text beside pictures and kerning in print; page
+    setup, Table Style and a print preview; metafiles with a bitmap beside the drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -428,3 +428,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   (it stands outside the fill), a fill on the body itself, background pictures, lengths in
   `em` and percentages. The sample checklist message has a filled note. Nothing here goes
   beyond Outlook.
+- **2026-10-12** - M2.35: a link can be followed. A click on a link in the reading pane (text or a
+  linked picture) opens a question, never the link: the words of the link, the place it
+  really goes in large letters, any concern from the link check (a name that is not the one
+  the text shows, a name hidden before an `@`, a bare number), and the whole address, with
+  Open in browser, Copy address and Cancel (Cancel has the focus). Only web pages (`http`,
+  `https`; RFC 3986 characters, with a host) and single plain mailboxes (`mailto`, RFC 6068)
+  are followed; a file, a script, a program's own scheme or an address in other characters
+  is refused, and the question says why. A mailbox starts a new message to it. Commands:
+  `mail.links` lists a message's links with where each goes, `mail.openLink` checks one and
+  returns its address (it wants `"confirm": true` for a link with a concern, and only takes
+  a link the message has), `ui.linkDialog` asks. The engine opens nothing: only the Open
+  button in the window hands the address to the system's browser (one argument, no shell),
+  so a command from the control channel or an agent cannot start one. That last step, the
+  browser starting, was not run on the dev machine and is untested end to end. What this
+  does on purpose: a link is never opened by the click alone.

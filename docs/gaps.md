@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 27 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 28 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -19,7 +19,7 @@
    labelled placeholder; several pictures at the sides of one paragraph, or a second one while the
    first still stands; animation; a backing for see-through pictures on the dark pane; boxes
    inside one another, a fill behind a table in a block and behind the whole body; borders on
-   text within a line and rounded corners; and opening a link (its address is shown on hover). Style sheets
+   text within a line and rounded corners. Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
    their width, place, cell fills, padding, spacing and the vertical place of what cells hold; a
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
@@ -72,6 +72,7 @@
 
 ## Revision history
 
+- 28 · 2026-10-12 — opening a link after a question (item 3).
 - 27 · 2026-10-12 — fills behind blocks and padding on each side (item 3).
 - 26 · 2026-10-12 — RTF list numbers from the list tables (item 3).
 - 25 · 2026-10-12 — RTF tab leaders and the line between paragraphs in one border (item 3).

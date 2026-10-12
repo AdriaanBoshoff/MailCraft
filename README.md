@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M1%20%2B%20M2%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-41%20of%20115%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-176%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-180%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)

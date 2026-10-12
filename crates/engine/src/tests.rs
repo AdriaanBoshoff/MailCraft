@@ -65,6 +65,9 @@ fn hostile_params_never_panic() {
         json!({"path": "\u{0}", "folder": "a/b/c/d/../..", "name": "x/y", "field": "body", "value": "é".repeat(40_000), "key": "\u{202e}", "category": "c".repeat(4000), "text": "\u{0}\u{ffff}"}),
         json!({"path": "Z:\\no\\such\\dir\\file.msg", "folder": "/", "name": "\u{7}", "field": "to", "value": "<<<>>>;;;,,,\"", "index": 99999}),
         json!({"show": "yes", "on": 3, "descending": "no", "clear": "true"}),
+        json!({"address": 7, "confirm": 7}),
+        json!({"address": "file:///C:/a.exe", "confirm": true, "index": 0}),
+        json!({"address": "h".repeat(70_000), "confirm": "x"}),
     ];
     let setups: [fn(&mut Session); 4] = [
         |_| {},
@@ -1602,4 +1605,81 @@ fn the_sample_receipt_has_a_drawing_that_is_drawn() {
     let doc = mailcraft_formats::rtf::parse(&rtf);
     assert_eq!(doc.written.len(), 1);
     assert_eq!(doc.written[0][..], bmp[..]);
+}
+
+#[test]
+fn a_link_is_followed_only_when_it_is_the_message_s_and_safe_to_follow() {
+    let mut s = session();
+    // Nothing is open: there are no links to list or to follow.
+    assert!(s.run("mail.links", &Value::Null).is_err() && s.run("mail.openLink", &json!({"index": 0})).is_err());
+
+    run(&mut s, "mail.select", json!({"folder": "Junk Email", "index": 0}));
+    let listed = run(&mut s, "mail.links", Value::Null);
+    assert_eq!(listed["count"], 5);
+    let links = listed["untrusted_content"]["links"].as_array().unwrap();
+    let goes: Vec<&str> = links.iter().map(|l| l["goes"].as_str().unwrap()).collect();
+    assert_eq!(
+        goes,
+        ["mail.example.org.account-check.example.net", "sign-in.example.net", "192.0.2.44", "mailbox-notice.example.net", "example.org"]
+    );
+    assert_eq!(links[1]["text"], "mail.example.org");
+    assert_eq!(links[1]["address"], "https://mail.example.org@sign-in.example.net/");
+    // Four of them are not what they say; the last one is.
+    assert!(links[..4].iter().all(|l| l["concern"].is_string()) && links[4]["concern"].is_null());
+
+    // A link with a concern is not followed without being told to.
+    let refused = s.run("mail.openLink", &json!({"index": 0})).unwrap_err().to_string();
+    assert!(refused.contains("account-check.example.net") && refused.contains("confirm"), "{refused}");
+    assert!(s.run("mail.openLink", &json!({"index": 0, "confirm": "yes"})).is_err());
+    let told = run(&mut s, "mail.openLink", json!({"index": 0, "confirm": true}));
+    assert_eq!(told["untrusted_content"]["open"], "https://mail.example.org.account-check.example.net/quota");
+    // One that is what it says needs no telling, by number or by address.
+    let told = run(&mut s, "mail.openLink", json!({"index": 4}));
+    assert_eq!(told["untrusted_content"], json!({"open": "https://example.org/help", "goes": "example.org"}));
+    assert_eq!(run(&mut s, "mail.openLink", json!({"address": "https://example.org/help"}))["untrusted_content"]["open"], "https://example.org/help");
+    // An address the message does not have is not followed, whatever it is.
+    for other in ["https://example.com/", "file:///C:/Windows/System32/calc.exe", "", "https://example.org/help "] {
+        assert!(s.run("mail.openLink", &json!({"address": other, "confirm": true})).is_err(), "{other}");
+    }
+    assert!(s.run("mail.openLink", &json!({"index": 5})).is_err() && s.run("mail.openLink", &json!({"index": u64::MAX})).is_err());
+    assert!(s.run("mail.openLink", &Value::Null).is_err());
+    // The engine itself has started nothing: no message is being written yet.
+    assert!(s.compose.is_none());
+
+    // A mailbox starts a message to it, once the concern is confirmed.
+    assert!(s.run("mail.openLink", &json!({"index": 3})).is_err() && s.compose.is_none());
+    let told = run(&mut s, "mail.openLink", json!({"index": 3, "confirm": true}));
+    assert_eq!(told["untrusted_content"]["mailbox"], "helpdesk@mailbox-notice.example.net");
+    let draft = s.compose.as_ref().unwrap();
+    assert_eq!((draft.to.as_str(), draft.kind, draft.subject.as_str()), ("helpdesk@mailbox-notice.example.net", "New", ""));
+
+    // The receipt's link, in an RTF body, is found the same way.
+    run(&mut s, "compose.discard", Value::Null);
+    run(&mut s, "mail.select", json!({"folder": "Inbox/Receipts", "index": 0}));
+    let listed = run(&mut s, "mail.links", Value::Null);
+    assert_eq!(listed["untrusted_content"]["links"][0]["address"], "https://parking.example.net/help");
+}
+
+#[test]
+fn links_of_hostile_bodies_are_listed_within_bounds() {
+    use mailcraft_model::{Item, PropValue, pid};
+    let mut html = String::from("<html><body>");
+    for i in 0..3000 {
+        html.push_str(&format!("<a href=\"javascript:{i}//{}\">{}</a> <a href=\"\">none</a> ", "x".repeat(5000), "t".repeat(3000)));
+    }
+    for _ in 0..200 {
+        html.push_str("<table><tr><td>");
+    }
+    html.push_str("<a href=\"https://example.org/\u{0}\u{202e}\">deep</a>");
+    let mut item = Item::default();
+    item.props.set(pid::HTML, PropValue::Binary(html.into_bytes()));
+    let found = crate::links::of(&item);
+    assert_eq!(found.len(), crate::links::MAX_LINKS);
+    assert!(found.iter().all(|l| l.text.chars().count() <= 200 && l.address.chars().count() <= 2048 && !l.address.chars().any(char::is_control)));
+    // None of them is one to follow.
+    let mut s = session();
+    s.open = Some(item);
+    for index in [0, 1, 499] {
+        assert!(s.run("mail.openLink", &json!({"index": index, "confirm": true})).is_err());
+    }
 }

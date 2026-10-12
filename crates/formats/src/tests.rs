@@ -2366,3 +2366,70 @@ fn blocks_have_fills_and_room_on_each_side() {
         }
     }
 }
+
+#[test]
+fn only_web_pages_and_mailboxes_are_links_to_follow() {
+    use crate::links::{Target, target};
+    let page = |address: &str| Ok(Target::Page(address.to_string()));
+    assert_eq!(target("https://example.org/help?a=1&b=%20#top"), page("https://example.org/help?a=1&b=%20#top"));
+    assert_eq!(target("HTTP://Example.org"), page("HTTP://Example.org"));
+    // White space and control characters inside an address are dropped, as a browser would.
+    assert_eq!(target(" https://exa\tmple.org/\r\n a\u{7}"), page("https://example.org/a"));
+    assert_eq!(target("mailto:help@example.org?subject=Hi&body=x"), Ok(Target::Mailbox("help@example.org".to_string())));
+
+    // Anything else would start a program, open a file, or go nowhere.
+    for other in [
+        "file:///C:/Windows/System32/calc.exe",
+        "javascript:alert(1)",
+        "data:text/html,<script>1</script>",
+        "ms-msdt:/id PCWDiagnostic",
+        "search-ms:query=x",
+        "ftp://example.org/a",
+        "tel:+15550100",
+        "cid:part1@example.org",
+        "\\\\server\\share\\a.exe",
+        "C:\\Windows\\notepad.exe",
+        "#top",
+        "/relative/path",
+        "example.org",
+        "",
+        "http:",
+        "http://",
+        "https:///path",
+        "https://",
+    ] {
+        assert!(target(other).is_err(), "{other}");
+    }
+    // An address in characters an address does not have is not handed on: quotes, brackets,
+    // backslashes, a pipe, letters outside the plain ones.
+    for odd in [
+        "https://example.org/\"&calc",
+        "https://example.org/a b|c",
+        "https://example.org/<x>",
+        "https:\\\\example.org\\a",
+        "https://example.org/^a`{}",
+        "https://ex\u{430}mple.org/",
+        "https://example.org/\u{202e}gpj.exe",
+    ] {
+        assert!(
+            target(odd).is_err() || matches!(target(odd), Ok(Target::Page(p)) if p.is_ascii() && !p.contains(['"', '|', '<', '\\', ' '])),
+            "{odd}"
+        );
+    }
+    assert!(target("https://example.org/\"x").is_err() && target("https:\\\\example.org").is_err() && target("https://ex\u{430}mple.org/").is_err());
+    // One plain mailbox, or none.
+    for odd in
+        ["mailto:", "mailto:a", "mailto:a@b", "mailto:a@b.org,c@d.org", "mailto:a%40b.org", "mailto:\"x\"@b.org", "mailto:a@b@c.org", "mailto:@b.org"]
+    {
+        assert!(target(odd).is_err(), "{odd}");
+    }
+    // Hostile: any length, any characters.
+    let long = format!("https://example.org/{}", "a".repeat(100_000));
+    assert!(target(&long).is_err());
+    let wild: String = (0..5000u32).filter_map(|n| char::from_u32(n * 37 % 0x11_0000)).collect();
+    for cut in [0, 1, 7, 64, 1000] {
+        let _ = target(&wild.chars().skip(cut).collect::<String>());
+        let _ = target(&format!("https://{}", wild.chars().skip(cut).collect::<String>()));
+        let _ = target(&format!("mailto:{}", wild.chars().skip(cut).collect::<String>()));
+    }
+}

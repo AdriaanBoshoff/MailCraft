@@ -9,6 +9,7 @@ pub mod attachments;
 pub mod catalog;
 pub mod cmd;
 pub mod io;
+pub mod links;
 pub mod outgoing;
 pub mod pictures;
 pub mod print;
