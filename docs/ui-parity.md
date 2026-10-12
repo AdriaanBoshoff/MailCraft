@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 11 · 2026-10-11 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 12 · 2026-10-12 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -27,8 +27,8 @@ and only the ribbon panel's height and contents change. OpenMailClient follows t
 | Ribbon, simplified | one rounded panel, 48 high, inset from the right window edge | one rounded panel, 48 high, inset 16 | close; no overflow menu when the window is narrow |
 | Ribbon, classic | one rounded panel, about 98 high, inset from the right window edge like the simplified one; large buttons with a label of up to two lines under the icon, columns of up to three small buttons, a group name centred under each group, a collapse arrow bottom right; panes start about 6 below it | one rounded panel, 98 high, inset 16; the same button and group arrangement; panes 7 below | close; no collapse arrow, no Quick Steps gallery, fewer groups |
 | Module strip | 64 wide at the far left, full height below the title bar; icons 48 apart: Mail, Calendar, People, Tasks, More | 64 wide, full height, 48 apart; four modules | close |
-| Folder pane | 235 wide (user-resizable); rows 24 apart; Favorites group first, then one group per account; collapse arrow top right | 216 wide, fixed; rows 26 apart; no Favorites | differs |
-| Message list | 276 wide (user-resizable); header row with All / Unread, "By Date" and a direction arrow; group header 24 high; rows about 70 high with sender, subject, preview | 348 wide, fixed; same header parts; rows 64 high | close |
+| Folder pane | 235 wide (user-resizable); rows 24 apart; Favorites group first, then one group per account; collapse arrow top right | 216 wide to start with, dragged at its edge and kept between runs; rows 26 apart; no Favorites | differs |
+| Message list | 276 wide (user-resizable); header row with All / Unread, "By Date" and a direction arrow; group header 24 high; rows about 70 high with sender, subject, preview | 348 wide to start with, dragged at its edge and kept between runs; same header parts; rows 64 high | close |
 | Row details | attachment mark at the right of the first line; date at the right of the second | marks at the right of the first line; time at the right of the second | close |
 | Reading pane, nothing open | envelope drawing with a one-line hint, centred | the same arrangement, our own drawing | close |
 | Reading pane, message open | formatted body on a page in the theme's colour | formatted body laid out as Outlook lays out the same message: see Message bodies below | close |
@@ -116,13 +116,14 @@ Outlook's print pane was not observed.
 
 ## Next
 
-1. Pane splitters (folder pane and message list widths are fixed today) and Favorites.
+1. Favorites (the panes are sized by dragging since M3b.3).
 2. An overflow menu for the simplified ribbon, and the "tell me" command search.
 3. A light theme has not been observed (the theme setting roams to the owner's other machines, so
    it was not switched; ask first).
 
 ## Revision history
 
+- 12 · 2026-10-12 — the folder pane and the list are sized by dragging their edges, and their sizes are kept (M3b.3).
 - 11 · 2026-10-11 — printing added; its output is not yet compared with Outlook's.
 - 10 · 2026-10-11 — a sixth probe message compared, with an RTF body: pictures, cell lines per side, fills, places and cells merged down.
 - 9 · 2026-10-11 — a fifth probe message compared: what follows a picture at the side, breaks that clear, borders set in styles, table border widths and colours, cells that span rows.

@@ -9,6 +9,17 @@ use openmailclient_model::{Flag, FolderId, FolderInfo, FolderKind, RECIP_CC, REC
 use serde_json::{Value, json};
 
 const ROW_H: f32 = 64.0;
+/// Half the width of the strip at a pane's edge that takes hold of it.
+const GRIP: f32 = 3.0;
+
+/// An edge between panes: where the pane it sizes begins (and, for the list over the reading
+/// pane, the height the two share).
+#[derive(Clone, Copy)]
+enum Edge {
+    Folders(f32),
+    List(f32),
+    ListBottom(f32, f32),
+}
 const GROUP_H: f32 = 24.0;
 /// Body text beyond this is not laid out (a message body can be hundreds of megabytes).
 const MAX_BODY_CHARS: usize = 200_000;
@@ -71,10 +82,13 @@ impl MailUi {
             return;
         }
         let mut left = rest.left();
+        // The edges between the panes, to be dragged: where each is, and what it changes.
+        let mut edges: Vec<(Rect, Edge)> = Vec::new();
         if self.session.folder_pane {
-            let w = t.folder_w.min(rest.width() * 0.4);
+            let w = self.folder_w.min(rest.width() * 0.4);
             self.folder_pane(ui, Rect::from_min_size(pos2(left, rest.top()), vec2(w, rest.height())));
             left += w;
+            edges.push((Rect::from_min_max(pos2(left - GRIP, rest.top()), pos2(left + GRIP, rest.bottom())), Edge::Folders(rest.left())));
         }
         let area = Rect::from_min_max(pos2(left, rest.top()), rest.max);
         let composing = self.session.compose.is_some();
@@ -82,11 +96,19 @@ impl MailUi {
         let (list, reading) = match pane {
             ReadingPane::Off => (area, None),
             ReadingPane::Right => {
-                let w = t.list_w.min(area.width() * 0.5);
+                let w = self.list_w.min(area.width() * 0.7);
+                edges.push((
+                    Rect::from_min_max(pos2(area.left() + w - GRIP, area.top()), pos2(area.left() + w + GRIP, area.bottom())),
+                    Edge::List(area.left()),
+                ));
                 (Rect::from_min_size(area.min, vec2(w, area.height())), Some(Rect::from_min_max(pos2(area.left() + w, area.top()), area.max)))
             }
             ReadingPane::Bottom => {
-                let h = (area.height() * 0.42).max(120.0).min(area.height());
+                let h = (area.height() * self.list_share).max(120.0).min(area.height());
+                edges.push((
+                    Rect::from_min_max(pos2(area.left(), area.top() + h - GRIP), pos2(area.right(), area.top() + h + GRIP)),
+                    Edge::ListBottom(area.top(), area.height()),
+                ));
                 (Rect::from_min_size(area.min, vec2(area.width(), h)), Some(Rect::from_min_max(pos2(area.left(), area.top() + h), area.max)))
             }
         };
@@ -104,6 +126,54 @@ impl MailUi {
             } else {
                 self.reading_pane(ui, r);
             }
+        }
+        // Last, so that an edge is over what the panes drew beside it.
+        for (grip, edge) in edges {
+            self.pane_edge(ui, grip, edge);
+        }
+    }
+
+    /// An edge between two panes: dragging it sizes the pane before it, and a double click
+    /// gives that pane the size it started with.
+    fn pane_edge(&mut self, ui: &mut Ui, grip: Rect, edge: Edge) {
+        let (name, across) = match edge {
+            Edge::Folders(_) => ("edge-folders", true),
+            Edge::List(_) => ("edge-list", true),
+            Edge::ListBottom(..) => ("edge-list-bottom", false),
+        };
+        let found = ui.interact(grip, ui.id().with(name), Sense::click_and_drag());
+        if found.hovered() || found.dragged() {
+            ui.ctx().set_cursor_icon(if across { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
+            let line = (2.0, self.tokens.accent);
+            let p = ui.painter_at(grip);
+            if across {
+                p.vline(grip.center().x, grip.y_range(), line);
+            } else {
+                p.hline(grip.x_range(), grip.center().y, line);
+            }
+        }
+        let first = crate::Tokens::default();
+        let size = if found.double_clicked() {
+            Some(match edge {
+                Edge::Folders(_) => f64::from(first.folder_w),
+                Edge::List(_) => f64::from(first.list_w),
+                Edge::ListBottom(..) => f64::from(crate::FIRST_LIST_SHARE),
+            })
+        } else if found.dragged() {
+            found.interact_pointer_pos().map(|at| match edge {
+                Edge::Folders(from) | Edge::List(from) => f64::from(at.x - from),
+                Edge::ListBottom(from, height) => f64::from((at.y - from) / height.max(1.0)),
+            })
+        } else {
+            None
+        };
+        if let Some(size) = size {
+            let key = match edge {
+                Edge::Folders(_) => "folders",
+                Edge::List(_) => "list",
+                Edge::ListBottom(..) => "listShare",
+            };
+            self.actions.push(("ui.layout".to_string(), serde_json::json!({ key: size })));
         }
     }
 

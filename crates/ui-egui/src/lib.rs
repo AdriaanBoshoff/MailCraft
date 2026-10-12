@@ -109,11 +109,49 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"menu": "categorize" | "followup" | "move" | "arrange" | "reading", "x": px, "y": px}"#,
     },
     UiCommand { id: "ui.ribbonMode", label: "Simplified Ribbon", params: r#"{"mode": "classic" | "simplified"}; none switches"# },
+    UiCommand {
+        id: "ui.layout",
+        label: "Pane Sizes",
+        params: r#"{"folders": px, "list": px, "listShare": 0.15 to 0.85 of the height with the reading pane at the bottom, "reset": true for the sizes it started with and the window where it started}; each is optional; returns the sizes now"#,
+    },
     UiCommand { id: "ui.theme", label: "Dark Mode", params: r#"{"theme": "light" | "dark"}; none switches"# },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
+
+/// Where the window stands, in points: what is kept between runs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowPlace {
+    /// The inside of the window when it is neither maximized nor minimized.
+    pub size: [f32; 2],
+    /// Its top left corner, kept only while that is on the first screen.
+    pub pos: Option<[f32; 2]>,
+    pub maximized: bool,
+}
+
+/// The smallest window, and the size of a first one.
+pub const MIN_WINDOW: [f32; 2] = [760.0, 480.0];
+pub const FIRST_WINDOW: [f32; 2] = [1280.0, 800.0];
+/// No screen is larger than this; a settings file that says so is not believed.
+const MAX_WINDOW: f32 = 16384.0;
+/// Where a window is put when the place it was kept at is not on the screen any more.
+const SAFE_CORNER: [f32; 2] = [40.0, 40.0];
+const FOLDER_W: (f32, f32) = (120.0, 600.0);
+const LIST_W: (f32, f32) = (200.0, 1200.0);
+const LIST_SHARE: (f32, f32) = (0.15, 0.85);
+pub(crate) const FIRST_LIST_SHARE: f32 = 0.42;
+
+/// True when a window with its corner at `pos` can be reached on a screen of `screen` points
+/// that starts at the origin: enough of its title bar is on it to take hold of.
+///
+/// Only the first screen starts at the origin, and egui does not say where the others are: a
+/// place on another screen is not kept, so that a window is never put where no screen is.
+pub fn on_first_screen(pos: [f32; 2], screen: [f32; 2]) -> bool {
+    let [x, y] = pos;
+    let [w, h] = screen;
+    [x, y, w, h].iter().all(|v| v.is_finite()) && x >= -8.0 && y >= -8.0 && x + 160.0 <= w && y + 60.0 <= h
+}
 
 /// The ribbon's two layouts: three rows with labelled groups, or a single line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +214,17 @@ pub struct MailUi {
     pub(crate) preview: Option<preview::Preview>,
     pub(crate) scroll_to_selected: bool,
     fonts_ready: bool,
+    /// The widths of the folder pane and of the list beside the reading pane, and the share
+    /// of the height the list takes above it: dragged at their edges, kept between runs.
+    pub(crate) folder_w: f32,
+    pub(crate) list_w: f32,
+    pub(crate) list_share: f32,
+    /// Where the window stands; `None` until a frame or a settings file has said.
+    pub window: Option<WindowPlace>,
+    /// The window was put where the settings said: the first frames see that it is on a screen.
+    check_place: bool,
+    /// The window is to go back to where a first one stands.
+    reset_window: bool,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -284,6 +333,12 @@ impl MailUi {
             preview: None,
             scroll_to_selected: false,
             fonts_ready: false,
+            folder_w: Tokens::default().folder_w,
+            list_w: Tokens::default().list_w,
+            list_share: FIRST_LIST_SHARE,
+            window: None,
+            check_place: false,
+            reset_window: false,
         }
     }
 
@@ -305,7 +360,71 @@ impl MailUi {
             "theme": if self.tokens.dark { "dark" } else { "light" },
             "ribbon": if self.ribbon_mode == RibbonMode::Classic { "classic" } else { "simplified" },
             "bodyFormat": if self.plain_bodies { "plain" } else { "formatted" },
+            "folderWidth": self.folder_w.round(),
+            "listWidth": self.list_w.round(),
+            "listShare": (f64::from(self.list_share) * 100.0).round() / 100.0,
+            "window": self.window.map(|w| json!({
+                "width": w.size[0].round(),
+                "height": w.size[1].round(),
+                "x": w.pos.map(|p| p[0].round()),
+                "y": w.pos.map(|p| p[1].round()),
+                "maximized": w.maximized,
+            })),
         })
+    }
+
+    /// The sizes of the panes, each held to what leaves the others room.
+    fn set_layout(&mut self, folders: Option<f64>, list: Option<f64>, share: Option<f64>) {
+        let held = |v: Option<f64>, (low, high): (f32, f32), now: f32| match v {
+            Some(v) if v.is_finite() => (v as f32).clamp(low, high),
+            _ => now,
+        };
+        self.folder_w = held(folders, FOLDER_W, self.folder_w);
+        self.list_w = held(list, LIST_W, self.list_w);
+        self.list_share = held(share, LIST_SHARE, self.list_share);
+    }
+
+    /// Keep where the window stands, as this frame sees it. A maximized window keeps the size
+    /// it goes back to; a minimized one changes nothing.
+    fn note_window(&mut self, ctx: &egui::Context) {
+        let (inner, outer, screen, maximized, minimized, fullscreen) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.inner_rect, v.outer_rect, v.monitor_size, v.maximized.unwrap_or(false), v.minimized.unwrap_or(false), v.fullscreen.unwrap_or(false))
+        });
+        if self.reset_window {
+            self.reset_window = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(FIRST_WINDOW.into()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(SAFE_CORNER.into()));
+            return;
+        }
+        let (Some(inner), false) = (inner, minimized) else { return };
+        if self.check_place
+            && let (Some(outer), Some(screen)) = (outer, screen)
+        {
+            // The screen may have changed since the place was kept: a window that cannot be
+            // reached is brought back to the corner of the first screen.
+            self.check_place = false;
+            if !maximized && !on_first_screen([outer.left(), outer.top()], [screen.x, screen.y]) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(SAFE_CORNER.into()));
+                return;
+            }
+        }
+        let mut now = self.window.unwrap_or(WindowPlace { size: FIRST_WINDOW, pos: None, maximized: false });
+        now.maximized = maximized;
+        if !maximized && !fullscreen {
+            let size = inner.size();
+            if size.x >= MIN_WINDOW[0] - 1.0 && size.y >= MIN_WINDOW[1] - 1.0 && size.x <= MAX_WINDOW && size.y <= MAX_WINDOW {
+                now.size = [size.x, size.y];
+            }
+            now.pos = match (outer, screen) {
+                (Some(outer), Some(screen)) if on_first_screen([outer.left(), outer.top()], [screen.x, screen.y]) => {
+                    Some([outer.left(), outer.top()])
+                }
+                _ => None,
+            };
+        }
+        self.window = Some(now);
     }
 
     /// Take what a settings file says of the window; what makes no sense in it is left out.
@@ -314,6 +433,26 @@ impl MailUi {
             if let Some(v) = ui.get(key).and_then(Value::as_str) {
                 let _ = self.ui_command(id, &json!({ param: v }));
             }
+        }
+        let number = |v: &Value, key: &str| v.get(key).and_then(Value::as_f64).filter(|n| n.is_finite());
+        self.set_layout(number(ui, "folderWidth"), number(ui, "listWidth"), number(ui, "listShare"));
+        // A window's size is believed only between the smallest window and the largest
+        // screen, and its place only where a first screen could be.
+        if let Some(w) = ui.get("window").filter(|w| w.is_object()) {
+            let side = |key: &str, at: usize| {
+                let low = MIN_WINDOW.get(at).copied().unwrap_or(0.0);
+                number(w, key).map(|n| n as f32).filter(|n| (low..=MAX_WINDOW).contains(n))
+            };
+            let size = match (side("width", 0), side("height", 1)) {
+                (Some(width), Some(height)) => [width, height],
+                _ => self.window.map_or(FIRST_WINDOW, |w| w.size),
+            };
+            let pos = match (number(w, "x"), number(w, "y")) {
+                (Some(x), Some(y)) if on_first_screen([x as f32, y as f32], [MAX_WINDOW, MAX_WINDOW]) => Some([x as f32, y as f32]),
+                _ => None,
+            };
+            self.window = Some(WindowPlace { size, pos, maximized: w.get("maximized").and_then(Value::as_bool).unwrap_or(false) });
+            self.check_place = pos.is_some();
         }
     }
 
@@ -462,6 +601,16 @@ impl MailUi {
                     _ => return Err("\"mode\" must be classic or simplified".to_string()),
                 };
             }
+            "ui.layout" => {
+                let size = |key: &str| params.get(key).and_then(Value::as_f64);
+                if params.get("reset").and_then(Value::as_bool) == Some(true) {
+                    let first = Tokens::default();
+                    (self.folder_w, self.list_w, self.list_share) = (first.folder_w, first.list_w, FIRST_LIST_SHARE);
+                    self.reset_window = true;
+                }
+                self.set_layout(size("folders"), size("list"), size("listShare"));
+                return Ok(json!({ "folders": self.folder_w, "list": self.list_w, "listShare": self.list_share }));
+            }
             "ui.theme" => {
                 let dark = match (params.get("theme"), text("theme")) {
                     (None, _) => !self.tokens.dark,
@@ -555,6 +704,7 @@ impl MailUi {
             self.theme_applied = Some(t.dark);
         }
         ui.painter().rect_filled(full, 0.0, t.window);
+        self.note_window(&ctx);
         self.shortcuts(ui);
 
         let title = Rect::from_min_size(full.min, vec2(full.width(), t.title_h));
@@ -684,7 +834,7 @@ impl MailUi {
         let caption = if store.is_empty() { format!("{place} - OpenMailClient") } else { format!("{place} - {store} - OpenMailClient") };
 
         // Lined up with the message list's left edge.
-        let left = rect.left() + t.nav_w + if self.session.folder_pane { t.folder_w } else { 0.0 };
+        let left = rect.left() + t.nav_w + if self.session.folder_pane { self.folder_w } else { 0.0 };
         let left = left.min(rect.right() - 170.0).max(rect.left() + 44.0);
         let search = Rect::from_min_size(pos2(left, rect.center().y - 15.0), vec2((rect.right() - left - 150.0).clamp(120.0, 304.0), 30.0));
         clip_text(&p, pos2(rect.left() + 40.0, rect.center().y - 8.0), search.left() - rect.left() - 52.0, &caption, font(12.5), t.title_text);

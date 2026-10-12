@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-257%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-259%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -104,7 +104,7 @@ cargo run --release -p openmailclient -- --sample
 cargo run --release -p openmailclient -- path/to/archive.pst
 ```
 
-The page setup, the panes, the theme and the data files that were open are kept between runs in
+The page setup, the panes and their sizes, the window's size and place, the theme and the data files that were open are kept between runs in
 `settings.json` in the per-user configuration folder (`%APPDATA%\OpenMailClient` on Windows) and
 the data files are opened again when a run names none. To start without it:
 

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 44 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 45 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -61,7 +61,7 @@
    and a file attachment ([file-format-parity.md](file-format-parity.md)). Attached messages, inline
    pictures, non-mail items and opening from the Outlook window are unchecked.
 10. **The UI differs from Outlook Classic in measured ways.** A first side-by-side look is in
-    [ui-parity.md](ui-parity.md): fixed pane widths, no Favorites, no ribbon overflow or command search.
+    [ui-parity.md](ui-parity.md): no Favorites, no ribbon overflow or command search.
 
 ## Known shortcomings
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 45 · 2026-10-12 — M3b.3: pane edges are dragged; window size and place and pane sizes are kept between runs.
 - 44 · 2026-10-12 — M3b.2: `file.export` copies a Unicode `.pst` as it is stored (hidden items, folder properties, unknown properties).
 - 43 · 2026-10-12 — M3b.1: unsaved changes to a Unicode `.pst` are journalled beside the file and come back after a crash.
 - 42 · 2026-10-12 — M3.5: settings (page setup, panes, theme, open data files) are kept between runs; M3 closed.

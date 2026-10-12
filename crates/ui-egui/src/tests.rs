@@ -871,3 +871,170 @@ fn the_window_keeps_its_settings_in_the_settings_file() {
     assert_eq!(next.settings(), mixed);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Run one frame of the window, 1100 by 700, with what the pointer did and what the system
+/// says of the window.
+fn frame(ui: &mut MailUi, ctx: &egui::Context, events: Vec<egui::Event>, window: Option<egui::ViewportInfo>) -> Vec<egui::ViewportCommand> {
+    let mut input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 700.0))),
+        events,
+        ..egui::RawInput::default()
+    };
+    if let Some(info) = window {
+        input.viewports.insert(input.viewport_id, info);
+    }
+    let mut output = ctx.run_ui(input, |u| ui.ui(u));
+    output.textures_delta.clear();
+    output.viewport_output.into_values().flat_map(|v| v.commands).collect()
+}
+
+#[test]
+fn the_edges_of_the_panes_are_dragged_and_their_sizes_kept() {
+    let mut ui = MailUi::new(Session::with_sample());
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let first = (ui.folder_w, ui.list_w, ui.list_share);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let drag = |ui: &mut MailUi, from: egui::Pos2, to: egui::Pos2| {
+        for events in [
+            Vec::new(),
+            Vec::new(),
+            vec![egui::Event::PointerMoved(from)],
+            vec![button(from, true)],
+            vec![egui::Event::PointerMoved(from + (to - from) * 0.5)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![button(to, false)],
+            Vec::new(),
+        ] {
+            frame(ui, &ctx, events, None);
+        }
+    };
+    // The folder pane ends 216 points after the strip of modules; the list 348 after that.
+    let nav = ui.tokens.nav_w;
+    drag(&mut ui, egui::pos2(nav + first.0, 420.0), egui::pos2(nav + 300.0, 430.0));
+    assert!((ui.folder_w - 300.0).abs() < 1.5, "{}", ui.folder_w);
+    assert_eq!(ui.list_w, first.1);
+    let left = nav + ui.folder_w;
+    drag(&mut ui, egui::pos2(left + first.1, 420.0), egui::pos2(left + 420.0, 400.0));
+    assert!((ui.list_w - 420.0).abs() < 1.5, "{}", ui.list_w);
+    // Dragged past what leaves the others room, a pane stops.
+    let edge = nav + ui.folder_w;
+    drag(&mut ui, egui::pos2(edge, 420.0), egui::pos2(2.0, 420.0));
+    assert_eq!(ui.folder_w, 120.0);
+    // A drag anywhere else sizes nothing.
+    let was = (ui.folder_w, ui.list_w);
+    drag(&mut ui, egui::pos2(900.0, 500.0), egui::pos2(700.0, 500.0));
+    assert_eq!((ui.folder_w, ui.list_w), was);
+
+    // By command, with the reading pane at the bottom too; junk is held or left out.
+    let now = ui.execute("ui.layout", &json!({ "folders": 250, "list": 1e12, "listShare": 0.6 })).unwrap();
+    assert_eq!((now["folders"].as_f64(), now["list"].as_f64()), (Some(250.0), Some(1200.0)));
+    assert!((ui.list_share - 0.6).abs() < 1e-6);
+    ui.execute("ui.layout", &json!({ "folders": "wide", "list": -4, "listShare": [] })).unwrap();
+    assert_eq!((ui.folder_w, ui.list_w), (250.0, 200.0));
+    ui.execute("view.readingPane", &json!({ "position": "bottom" })).unwrap();
+    for _ in 0..2 {
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+
+    // Kept in the settings and taken from them; junk in the file changes nothing.
+    let kept = ui.settings();
+    assert_eq!((&kept["folderWidth"], &kept["listWidth"], &kept["listShare"]), (&json!(250.0), &json!(200.0), &json!(0.6)));
+    let mut next = MailUi::new(Session::with_sample());
+    next.apply_settings(&kept);
+    assert_eq!((next.folder_w, next.list_w), (250.0, 200.0));
+    next.apply_settings(&json!({ "folderWidth": "x", "listWidth": null, "listShare": 77 }));
+    assert_eq!((next.folder_w, next.list_w, next.list_share), (250.0, 200.0, 0.85));
+    // Back to the sizes it started with.
+    next.execute("ui.layout", &json!({ "reset": true })).unwrap();
+    assert_eq!((next.folder_w, next.list_w, next.list_share), first);
+}
+
+#[test]
+fn the_window_stands_where_it_stood_and_never_where_no_screen_is() {
+    let info = |x: f32, y: f32, w: f32, h: f32, screen: [f32; 2]| egui::ViewportInfo {
+        inner_rect: Some(egui::Rect::from_min_size(egui::pos2(x + 8.0, y + 31.0), egui::vec2(w, h))),
+        outer_rect: Some(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w + 16.0, h + 39.0))),
+        monitor_size: Some(screen.into()),
+        maximized: Some(false),
+        minimized: Some(false),
+        fullscreen: Some(false),
+        ..egui::ViewportInfo::default()
+    };
+    let screen = [1920.0, 1080.0];
+    let mut ui = MailUi::new(Session::with_sample());
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    assert_eq!(ui.settings()["window"], Value::Null);
+    for _ in 0..3 {
+        frame(&mut ui, &ctx, Vec::new(), Some(info(200.0, 120.0, 1100.0, 700.0, screen)));
+    }
+    assert_eq!(ui.window, Some(WindowPlace { size: [1100.0, 700.0], pos: Some([200.0, 120.0]), maximized: false }));
+    // Maximized, the size it goes back to is the one that is kept; minimized changes nothing.
+    let mut big = info(-8.0, -8.0, 1920.0, 1040.0, screen);
+    big.maximized = Some(true);
+    frame(&mut ui, &ctx, Vec::new(), Some(big));
+    assert_eq!(ui.window, Some(WindowPlace { size: [1100.0, 700.0], pos: Some([200.0, 120.0]), maximized: true }));
+    let mut small = info(-32000.0, -32000.0, 160.0, 28.0, screen);
+    small.minimized = Some(true);
+    frame(&mut ui, &ctx, Vec::new(), Some(small));
+    assert_eq!(ui.window.map(|w| (w.size, w.pos)), Some(([1100.0, 700.0], Some([200.0, 120.0]))));
+    // On a second screen the size is kept and the place is not.
+    frame(&mut ui, &ctx, Vec::new(), Some(info(2400.0, 100.0, 1000.0, 600.0, screen)));
+    assert_eq!(ui.window, Some(WindowPlace { size: [1000.0, 600.0], pos: None, maximized: false }));
+    frame(&mut ui, &ctx, Vec::new(), Some(info(200.0, 120.0, 1100.0, 700.0, screen)));
+    let kept = ui.settings();
+    assert_eq!(kept["window"], json!({ "width": 1100.0, "height": 700.0, "x": 200.0, "y": 120.0, "maximized": false }));
+
+    // The next run takes it from the settings, and its first frames see that it can be reached.
+    let mut next = MailUi::new(Session::with_sample());
+    next.apply_settings(&kept);
+    assert_eq!(next.window, ui.window);
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut moved = Vec::new();
+    for _ in 0..3 {
+        moved.extend(frame(&mut next, &ctx, Vec::new(), Some(info(200.0, 120.0, 1100.0, 700.0, screen))));
+    }
+    assert!(!moved.iter().any(|c| matches!(c, egui::ViewportCommand::OuterPosition(_))), "{moved:?}");
+    // The screen is smaller now: the window is brought to where it can be taken hold of.
+    let mut lost = MailUi::new(Session::with_sample());
+    lost.apply_settings(&json!({ "window": { "width": 1100, "height": 700, "x": 1700, "y": 900, "maximized": false } }));
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut moved = Vec::new();
+    for _ in 0..3 {
+        moved.extend(frame(&mut lost, &ctx, Vec::new(), Some(info(1700.0, 900.0, 1100.0, 700.0, [1280.0, 720.0]))));
+    }
+    assert_eq!(moved.iter().filter(|c| matches!(c, egui::ViewportCommand::OuterPosition(p) if *p == egui::pos2(40.0, 40.0))).count(), 1, "{moved:?}");
+
+    // A settings file is not believed beyond what a window can be.
+    for (junk, size, pos) in [
+        (json!({ "width": 5, "height": 1e9, "x": 10, "y": 10 }), FIRST_WINDOW, Some([10.0, 10.0])),
+        (json!({ "width": 900, "height": 600, "x": -5000, "y": 3 }), [900.0, 600.0], None),
+        (json!({ "width": 900, "height": 600, "x": 1e30, "y": "top", "maximized": "yes" }), [900.0, 600.0], None),
+        (json!({ "width": [], "x": null }), FIRST_WINDOW, None),
+    ] {
+        let mut ui = MailUi::new(Session::new());
+        ui.apply_settings(&json!({ "window": junk }));
+        assert_eq!(ui.window, Some(WindowPlace { size, pos, maximized: false }));
+    }
+    let mut ui = MailUi::new(Session::new());
+    ui.apply_settings(&json!({ "window": "large" }));
+    assert_eq!(ui.window, None);
+    assert!(on_first_screen([0.0, 0.0], screen) && on_first_screen([-8.0, -8.0], screen) && on_first_screen([1700.0, 1000.0], screen));
+    assert!(!on_first_screen([1800.0, 10.0], screen) && !on_first_screen([10.0, 1050.0], screen) && !on_first_screen([f32::NAN, 0.0], screen));
+
+    // Asked to, the window goes back to where a first one stands.
+    ui.execute("ui.layout", &json!({ "reset": true })).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut asked = Vec::new();
+    for _ in 0..3 {
+        asked.extend(frame(&mut ui, &ctx, Vec::new(), Some(info(900.0, 500.0, 800.0, 500.0, screen))));
+    }
+    assert!(
+        asked.contains(&egui::ViewportCommand::InnerSize(FIRST_WINDOW.into()))
+            && asked.contains(&egui::ViewportCommand::OuterPosition(egui::pos2(40.0, 40.0)))
+    );
+}

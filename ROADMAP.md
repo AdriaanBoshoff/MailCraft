@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 54 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 55 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 257, all passing |
+| Tests | 259, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -89,7 +89,8 @@
 38. Done: settings are kept between runs: the page setup, the panes, the theme and ribbon, and the data files that were open (M3.5). M3 closed.
 39. Done: unsaved changes to a data file are journalled as they are made and come back after a run that ended without saving (M3b.1).
 40. Done: `file.export` of a Unicode `.pst` copies it as it is stored: hidden items, folder properties and unknown properties go along (M3b.2).
-41. Next: M3b.3: the window's size and place, the widths of the panes and the columns of the list kept between runs, then the rest of the M3b list.
+41. Done: the edges of the panes are dragged, and the window's size and place and the panes' sizes are kept between runs (M3b.3).
+42. Next: M3b.4: right-to-left text in the message list, the reading pane's header, folder names and the compose box, then the rest of the M3b list.
 
 ## Do later (from M2)
 
@@ -107,7 +108,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | ~~Keeping the page setup between runs~~ | done: M3.5 |
 | Rules kept between runs (there are no rules yet; they are kept in the data file as Outlook keeps them, and in the settings for accounts without one) | M5, with rules |
-| The window's size and place, the widths of the panes and the columns of the list kept between runs | M3b |
+| ~~The window's size and place and the widths of the panes kept between runs~~ | done: M3b.3 |
+| The columns of the list kept between runs (the list has no columns yet: they come with the single-line view) | M5, with views |
+| The window's place on a second screen kept (the size is; egui does not say where the other screens are) | M5 |
 | Each folder's own view (sort, grouping, reading pane) kept, in the data file where Outlook keeps it | M5, with views |
 | A settings page in the app (the file is written and read; nothing shows or edits it but the commands that change each setting) | M5 |
 | A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile); with it, where a message attached to a message is kept and the bucket of a named property, both written from the specification alone | when the owner says so |
@@ -787,3 +790,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   hidden items are then not in it (pinned by a test that damages a file in one place after
   another); the copy is also the file made small again (free space is not carried). The
   sample mailbox, an `.ost`, an ANSI and a 4K-page file still go through the model.
+- **2026-10-12** - M3b.3: the panes are sized by dragging, and the window stands where it stood. The edge
+  between the folder pane and the list, and between the list and the reading pane (beside it
+  or under it), is taken hold of and dragged; the sizes go through a command (`ui.layout`),
+  are held to what leaves the other panes room, and are kept in the settings with the
+  window's size, its place and whether it was maximized. The next run opens the window there.
+  A window is never put where no screen is: a settings file is believed only between the
+  smallest window and the largest screen, the first frames see that the title bar can be
+  reached on the screen as it is now and bring the window to the corner if not (tried on the
+  real window: a place of 9000 across came back at 40, 40), and a place on a second screen
+  is not kept (egui does not say where the other screens are; the size is). Made better on
+  the way: a double click on an edge gives that pane the size it started with, and
+  `ui.layout {"reset": true}` brings the panes and the window back to where a first run has
+  them; the settings file is written at most once a second while a window is dragged. The
+  list has no columns to keep yet (it shows each message on three lines); that waits for
+  the views of M5.

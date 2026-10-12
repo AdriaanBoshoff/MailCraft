@@ -17,6 +17,9 @@ struct App {
     settings: Option<std::path::PathBuf>,
     /// The settings as they were last written or read.
     kept: Value,
+    /// When they were last written: a window being dragged changes them every frame, and
+    /// the file is written no more than once a second.
+    written: Option<std::time::Instant>,
 }
 
 impl App {
@@ -28,12 +31,17 @@ impl App {
 
     /// Write the settings when they are not what the file has: when they change, not only on
     /// the way out, so that a run that ends badly keeps them too.
-    fn keep_settings(&mut self) {
-        let Some(path) = self.settings.clone() else { return };
+    /// Returns true when a change waits to be written.
+    fn keep_settings(&mut self, at_once: bool) -> bool {
+        let Some(path) = self.settings.clone() else { return false };
         let now = self.ui.session.settings(Some(&self.ui.settings()));
         if now == self.kept {
-            return;
+            return false;
         }
+        if !at_once && self.written.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1)) {
+            return true;
+        }
+        self.written = Some(std::time::Instant::now());
         // The status line is for what the person did, not for housekeeping: a failure to
         // write settings is not shown over it, and is tried again at the next change.
         let status = self.ui.session.status.clone();
@@ -43,6 +51,7 @@ impl App {
         let _ = self.ui.execute("settings.save", &json!({ "path": path.display().to_string() }));
         self.ui.session.status = status;
         self.kept = now;
+        false
     }
 
     /// Native dialogs for what the UI asked for. Only a user action queues these.
@@ -180,11 +189,13 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         self.serve(&ctx);
-        self.keep_settings();
+        if self.keep_settings(false) {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
     }
 
     fn on_exit(&mut self) {
-        self.keep_settings();
+        self.keep_settings(true);
     }
 }
 
@@ -206,7 +217,7 @@ fn main() -> ExitCode {
     session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
-    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null };
+    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None };
     if let Some(path) = app.settings.clone() {
         // The data files of last time are opened again unless this run names what to open.
         let reopen = !args.iter().any(|a| a == "--sample" || !a.starts_with("--"));
@@ -232,10 +243,17 @@ fn main() -> ExitCode {
             path => app.run("file.open", json!({ "path": path })),
         }
     }
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("OpenMailClient").with_inner_size([1280.0, 800.0]).with_min_inner_size([760.0, 480.0]),
-        ..Default::default()
-    };
+    // The window stands where it stood last time; the first frames see that it can be reached.
+    let place = app.ui.window;
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("OpenMailClient")
+        .with_inner_size(place.map_or(openmailclient_ui_egui::FIRST_WINDOW, |w| w.size))
+        .with_min_inner_size(openmailclient_ui_egui::MIN_WINDOW)
+        .with_maximized(place.is_some_and(|w| w.maximized));
+    if let Some(pos) = place.and_then(|w| w.pos) {
+        viewport = viewport.with_position(pos);
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     match eframe::run_native("OpenMailClient", options, Box::new(move |_cc| Ok(Box::new(app)))) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
