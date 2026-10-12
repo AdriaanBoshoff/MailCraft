@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 33 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 34 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -70,6 +70,7 @@
 
 ## Revision history
 
+- 34 · 2026-10-12 — M2 closed; item 3 is what it leaves.
 - 33 · 2026-10-12 — bitmaps beside a metafile's drawing (item 1).
 - 32 · 2026-10-12 — Table Style (item 3).
 - 31 · 2026-10-12 — print preview (item 3).

@@ -1,6 +1,6 @@
 # OpenMailClient
 
-![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M1%20%2B%20M2%20in%20progress-orange)
+![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M2%20closed%20%C2%B7%20M3%20next-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
 ![tests](https://img.shields.io/badge/tests-197%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
@@ -29,7 +29,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
-| M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([what it leaves](ROADMAP.md#what-m2-leaves)) |
 | M3 | **Writing `.pst`**: journalled, crash-safe writes | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
@@ -54,7 +54,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | not yet (M3) |
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
-| `.pdf` | | yes, a message printed in Memo Style |
+| `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
 | IMAP, POP3, SMTP | not yet (M4) | not yet (M4) |
 
 ## What works today
@@ -68,17 +68,21 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
   ones only), colours, lists, links, tables (cell borders, fills, merged cells, tables inside cells),
   paragraph borders and spacing, line spacing, tab stops. Nothing in a message is run and nothing is fetched.
 - **Pictures.** Attached and written-in pictures (PNG, JPEG, bitmaps, Windows and enhanced metafiles
-  that are drawings) are decoded in-process and drawn in the text; an attachment that stands in the
+  that are drawings, with the bitmaps in them) are decoded in-process and drawn in the text; an attachment that stands in the
   text is a card that a click saves.
-- **Printing.** A message prints to a PDF file in Memo Style, with its tables, borders and pictures.
+- **Printing.** A message (Memo Style) or a folder's list (Table Style) prints to a PDF file, with
+  tables, borders and pictures; a print window shows the pages beside the page setup (paper,
+  direction, margins, header and footer). Nothing is sent to a printer yet.
 - A sample mailbox with invented content, for trying things without any real mail.
 
 ## What does not work yet
 
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
 - **Writing `.pst` files.** Data files are read-only; changes to them are refused.
-- **Parts of formatted bodies.** Metafiles that draw a part of a bitmap, a run-packed bitmap or a
-  patterned brush; shaping and right-to-left text in print.
+- **Parts of formatted bodies.** Shaping of complex scripts and right-to-left text; SVG, WebP and
+  TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a
+  patterned brush; printing to a printer. The full list is in
+  [ROADMAP.md](ROADMAP.md#what-m2-leaves).
 - Calendar, People and Tasks.
 - The MCP server, the control channel and the web build.
 

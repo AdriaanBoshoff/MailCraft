@@ -1,6 +1,6 @@
 # OpenMailClient roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 43 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 44 · 2026-10-12
 
 ## Headline numbers
 
@@ -17,7 +17,7 @@
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
-| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | in progress: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message prints to a PDF file |
+| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "What M2 leaves" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
@@ -78,7 +78,33 @@
 28. Done: a print preview with the page setup in it.
 29. Done: Table Style: a folder's list printed as a table.
 30. Done: bitmaps beside a metafile's drawing.
-31. Next: close M2 and list what it leaves.
+31. Done: M2 is closed; what it leaves is listed under "What M2 leaves".
+32. Next: nothing more in M2. The work goes on in M3 (writing `.pst`).
+
+## What M2 leaves
+
+M2 is closed with these not done. Each is in [docs/gaps.md](docs/gaps.md) (item 3) and is taken
+up when it hurts more than what is ahead of it; none blocks M3.
+
+- **Text.** Complex-script shaping and right-to-left text, on screen and in print: such text is
+  drawn glyph by glyph in the order it is stored. Borders on text within a line, rounded
+  corners, Outlook's highlight colours, list numbers an override changes (`\lfolevel`).
+- **Pictures.** SVG, WebP and TIFF show a labelled placeholder; a GIF shows its first frame
+  only. Several pictures at the sides of one paragraph. A backing for see-through pictures on
+  the dark pane. Pictures on a server are never fetched, by design; loading them on an explicit
+  command belongs with accounts (M4).
+- **Metafiles.** A part of a bitmap, a bitmap mirrored, turned, packed in runs or not copied
+  as it is, patterned brushes, regions of many boxes, text that needs shaping: a metafile that
+  asks for one of these is left as its place rather than half drawn.
+- **Blocks.** Boxes inside one another, a fill behind a table in a block and behind the whole
+  body.
+- **Printing.** Sending pages to a printer (a PDF file is written instead), print styles other
+  than Memo and Table, the view's own columns and group headings in Table Style, the selected
+  rows only, keeping the page setup between runs, a zoom in the preview.
+- **Unchecked.** Nothing printed was compared with what Outlook prints: its print pane and
+  dialog are not driven on the shared machine. Bodies were compared with Outlook's display for
+  one HTML and one RTF message of ours ([docs/ui-parity.md](docs/ui-parity.md)); metafiles and
+  Table Style were checked only by our own tests and by eye.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -523,3 +549,11 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   colours that are numbers in a palette, pixels packed in runs (RLE), EMR_BITBLT and its
   kin, META_SETDIBTODEV beside a drawing. Checked by tests on files we build; no metafile of
   Outlook's was compared, and nothing here goes beyond Outlook.
+- **2026-10-12** - M2 closed. Formatted reading is done as far as this milestone takes it: HTML and
+  RTF bodies are laid out and drawn with their fonts, lists, tables, borders, fills and
+  pictures (PNG, JPEG, GIF's first frame, bitmaps, metafiles that are drawings), attachments
+  stand in their places, links open after being asked, and a message or a folder's list
+  prints to a PDF file with a page setup and a preview. What M2 does not do is listed in the
+  roadmap under "What M2 leaves" and ranked in docs/gaps.md (item 3); none of it is claimed
+  as done. Nothing printed was compared with Outlook's print output. M1's checks against
+  Outlook-written files stay open. Next is M3, writing `.pst`.
