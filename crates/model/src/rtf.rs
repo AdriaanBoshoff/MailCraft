@@ -105,6 +105,8 @@ enum Token<'a> {
     Symbol(u8),
     Hex(u8),
     Bytes(&'a [u8]),
+    /// The bytes after `\binN`, and whether all N of them were there.
+    Bin(&'a [u8], bool),
 }
 
 struct Tokens<'a> {
@@ -178,9 +180,12 @@ impl<'a> Tokens<'a> {
             self.pos += 1;
         }
         if word == "bin" {
-            // Raw bytes follow; they are never text.
+            // Raw bytes follow, as many as the number says (RTF 1.9.1, "Pictures"); they are
+            // never text, whatever they look like.
             let n = usize::try_from(param.unwrap_or(0)).unwrap_or(0);
+            let start = self.pos;
             self.pos = self.pos.saturating_add(n).min(self.src.len());
+            return Token::Bin(self.src.get(start..self.pos).unwrap_or_default(), self.pos - start == n);
         }
         Token::Word(word, param)
     }
@@ -225,6 +230,9 @@ pub enum Event<'a> {
     Close,
     Word(&'a str, Option<i32>),
     Text(String),
+    /// Bytes written as they are (`\binN`), and whether all that were promised are there. They
+    /// are data for whatever group they stand in, never text.
+    Bin(&'a [u8], bool),
 }
 
 #[derive(Clone, Copy)]
@@ -452,6 +460,14 @@ impl<'a> Iterator for Reader<'a> {
                     Some(event) => event,
                     None => continue,
                 },
+                Token::Bin(data, whole) => {
+                    // Like any control word after `\uN`, it counts as one fallback character.
+                    if self.skip > 0 {
+                        self.skip -= 1;
+                        continue;
+                    }
+                    Event::Bin(data, whole)
+                }
             };
             self.flush();
             return match self.take_text() {
@@ -571,6 +587,7 @@ pub fn encapsulated(rtf: &[u8]) -> Option<Wrapped> {
                     _ => {}
                 }
             }
+            Event::Bin(..) => {}
             Event::Text(text) => {
                 scope.cur.star = false;
                 if shown(&scope.cur) {
@@ -620,6 +637,7 @@ pub fn to_text(rtf: &[u8]) -> String {
                     _ => {}
                 }
             }
+            Event::Bin(..) => {}
             Event::Text(text) => {
                 scope.cur.star = false;
                 if !scope.cur.skip && !scope.cur.hidden {

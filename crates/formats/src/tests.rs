@@ -695,8 +695,8 @@ fn rtf_pictures_are_kept_as_bytes_at_the_size_they_ask_for() {
     assert_eq!(&*doc.written[0], &png[..]);
     assert_eq!(&*doc.written[1], &[0xff, 0xd8, 0xff][..]);
 
-    // Data that is not hex digits, half a byte, raw bytes: a place, and no bytes kept.
-    for data in ["89504e4x", "89504", "\\bin4 abcd", ""] {
+    // Data that is not hex digits, half a byte, none: a place, and no bytes kept.
+    for data in ["89504e4x", "89504", ""] {
         let doc = crate::rtf::parse(format!("{{\\rtf1 a{{\\pict\\pngblip {data}}}b\\par}}").as_bytes());
         assert!(doc.written.is_empty(), "{data}");
         assert_eq!(paras(&doc)[0].runs.iter().filter_map(|r| r.picture.clone()).collect::<Vec<_>>(), [Picture::Inline(None)], "{data}");
@@ -1746,4 +1746,64 @@ fn rtf_shows_the_text_of_a_drawing_and_says_what_it_says() {
     let doc = crate::rtf::parse(rtf.as_bytes());
     let run = paras(&doc)[0].runs.iter().find(|r| r.picture.is_some()).unwrap();
     assert_eq!((run.picture.clone(), run.text.as_str(), doc.written.len()), (Some(Picture::Inline(None)), "", 0));
+}
+
+#[test]
+fn rtf_pictures_written_as_bytes_are_kept() {
+    // Bytes that would end the group, start a control word or end the file if they were text.
+    let mut png = vec![0x89u8, b'P', b'N', b'G', 13, 10, 26, 10];
+    png.extend_from_slice(b"}{\\par \\bin9 \0\r\n}}");
+    let body = |data: &[u8]| {
+        let mut rtf = b"{\\rtf1\\ansi\\pard a{\\pict\\pngblip\\picwgoal1500\\pichgoal750".to_vec();
+        rtf.extend_from_slice(data);
+        rtf.extend_from_slice(b"}b\\par}");
+        rtf
+    };
+    let bin = |bytes: &[u8]| [format!("\\bin{} ", bytes.len()).as_bytes(), bytes].concat();
+    let pictures = |doc: &Doc| paras(doc)[0].runs.iter().filter_map(|r| r.picture.clone().map(|p| (p, r.extent))).collect::<Vec<_>>();
+
+    // All of it as bytes; and part as hex digits, part as bytes, part as hex digits again.
+    let (head, rest) = png.split_at(5);
+    let (middle, tail) = rest.split_at(9);
+    let mixed = [format!(" {}\r\n", hexed(head)).into_bytes(), bin(middle), hexed(tail).into_bytes()].concat();
+    for data in [bin(&png), mixed] {
+        let doc = crate::rtf::parse(&body(&data));
+        assert_eq!(doc.text(), "ab");
+        assert_eq!(pictures(&doc), [(Picture::Inline(Some(0)), (100, 50))]);
+        assert_eq!(&*doc.written[0], &png[..]);
+    }
+    // No bytes at all are no picture, and take nothing after them.
+    let doc = crate::rtf::parse(&body(b"\\bin0 "));
+    assert_eq!((doc.text().as_str(), pictures(&doc)), ("ab", vec![(Picture::Inline(None), (100, 50))]));
+
+    // Fewer bytes than promised, half a byte of hex before the bytes, a number that is no
+    // count: a place, nothing kept, and nothing of the bytes read as text.
+    let short = b"{\\rtf1 a{\\pict\\pngblip \\bin500 \x89PNG}b\\par}".to_vec();
+    let split = body(&[b" 8".to_vec(), bin(&png)].concat());
+    let negative = body(b"\\bin-4 ");
+    let huge = body(b"\\bin2147483647 \x89PNG");
+    for rtf in [short, split, negative, huge] {
+        let doc = crate::rtf::parse(&rtf);
+        assert!(doc.written.is_empty(), "{:?}", String::from_utf8_lossy(&rtf));
+        assert!(!doc.text().contains("PNG"), "{:?}", doc.text());
+        assert!(paras(&doc)[0].runs.iter().any(|r| r.picture == Some(Picture::Inline(None))));
+    }
+
+    // Bytes outside a picture are never text, and what follows them is read as before.
+    let mut rtf = b"{\\rtf1\\ansi\\pard a\\bin4 }{\\b".to_vec();
+    rtf.extend_from_slice(b" b{\\*\\unknown\\bin3 }}}c}\\par}");
+    let doc = crate::rtf::parse(&rtf);
+    assert_eq!(doc.text(), "a b");
+    assert!(doc.written.is_empty());
+    // The same goes for the readers that only want the words.
+    assert_eq!(mailcraft_model::rtf::to_text(&rtf), "a b");
+
+    // A bitmap written as bytes becomes a picture file like one written as hex digits.
+    let dib = small_dib();
+    let mut rtf = b"{\\rtf1 {\\pict\\dibitmap0".to_vec();
+    rtf.extend_from_slice(&bin(&dib));
+    rtf.extend_from_slice(b"}\\par}");
+    let doc = crate::rtf::parse(&rtf);
+    assert_eq!(doc.written.len(), 1);
+    assert_eq!(&doc.written[0][..2], b"BM");
 }

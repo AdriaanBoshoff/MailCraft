@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 28 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 29 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 160, all passing |
+| Tests | 161, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -63,7 +63,8 @@
 14. Done: Windows metafiles and enhanced metafiles that are drawings of lines, curves,
     filled shapes and text are drawn.
 15. Done: an attachment that stands in the text is a card there, with its name and size.
-16. Next: `\bin` picture data.
+16. Done: pictures written as bytes (`\bin`) are read.
+17. Next: nested tables and cells merged across in RTF bodies.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -322,4 +323,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   characters, a document that carries macros) is marked in the text itself, with the reason
   when the pointer rests on it - not only once it has been opened. A long name is cut in its
   middle, so the ending stays in sight.
+- **2026-10-12** - M2.26: a picture written into an RTF body as bytes (`\binN`, RTF 1.9.1,
+  "Pictures") is read and shown like one written as hex digits; before, it left only its
+  place. A picture may be written partly one way and partly the other. The bytes are never
+  read as text or as RTF, whatever they hold (braces, backslashes, line ends, a `\bin` of
+  their own), inside a picture or anywhere else, and the readers that only want a body's
+  words pass over them too. A picture with fewer bytes than it promised, with a byte split
+  between hex digits and bytes, or with more than a body may keep, leaves its place and
+  nothing is kept of it. Nothing here goes beyond Outlook: this is a case it reads and
+  MailCraft did not.
 

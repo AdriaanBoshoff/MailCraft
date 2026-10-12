@@ -232,6 +232,11 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                     Dest::Skip | Dest::Instruction => {}
                 }
             }
+            Event::Bin(data, whole) => {
+                if scope.cur.dest == Dest::Picture {
+                    b.picture_bytes(data, whole);
+                }
+            }
             Event::Text(text) => {
                 scope.cur.star = false;
                 match scope.cur.dest {
@@ -460,7 +465,6 @@ impl Builder<'_> {
             "picscalex" => pict.scale.0 = n,
             "picscaley" => pict.scale.1 = n,
             // Bytes written as they are; the reader of words steps over them.
-            "bin" => pict.bad = true,
             // Properties of the picture (`\*\picprop`) are not its data.
             _ if star => cur.dest = Dest::Skip,
             _ => {}
@@ -491,6 +495,21 @@ impl Builder<'_> {
                 }
             }
         }
+    }
+
+    /// The data of a picture written as bytes (`\binN`, RTF 1.9.1, "Pictures"). A picture may
+    /// be written partly so and partly as hex digits, but a byte is never split between them.
+    fn picture_bytes(&mut self, data: &[u8], whole: bool) {
+        let Some(pict) = &mut self.pict else { return };
+        if pict.kind == Kind::Unread || pict.bad {
+            return;
+        }
+        let room = crate::html::MAX_WRITTEN_BYTES.saturating_sub(self.written_bytes).saturating_sub(pict.bytes.len());
+        if !whole || pict.half.is_some() || data.len() > room {
+            pict.bad = true;
+            return;
+        }
+        pict.bytes.extend_from_slice(data);
     }
 
     /// Close the picture being read: it stands in the line of text where it was written.
