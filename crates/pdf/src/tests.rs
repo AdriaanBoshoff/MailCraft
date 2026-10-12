@@ -36,11 +36,12 @@ fn a_file_holds_its_pages_text_and_fonts() {
         baseline: 50.0,
         color: [204, 0, 0],
         glyphs: &[(1, 'a'), (2, 'b'), (3, ' '), (1, 'a')],
+        kerns: &[],
         bold: false,
         slant: false,
     });
     assert!(w.page(595.0, 842.0));
-    w.text(Piece { font, size: 9.0, x: 36.0, baseline: 50.0, color: [0, 0, 0], glyphs: &[(4, '\u{c9}')], bold: true, slant: true });
+    w.text(Piece { font, size: 9.0, x: 36.0, baseline: 50.0, color: [0, 0, 0], glyphs: &[(4, '\u{c9}')], kerns: &[], bold: true, slant: true });
     let file = w.finish("A title: \u{e9}\n(x)").unwrap();
 
     assert!(file.starts_with(b"%PDF-1.7\n"));
@@ -114,7 +115,7 @@ fn fonts_that_may_not_be_embedded_are_refused() {
     assert_eq!(w.font(boxed("ab"), 9), Err(PdfError::Font));
     let whole = w.font(boxes::font_with("abc", 0x0100).into(), 0).unwrap();
     assert!(w.page(100.0, 100.0));
-    w.text(Piece { font: whole, size: 10.0, x: 0.0, baseline: 10.0, color: [0, 0, 0], glyphs: &[(1, 'a')], bold: false, slant: false });
+    w.text(Piece { font: whole, size: 10.0, x: 0.0, baseline: 10.0, color: [0, 0, 0], glyphs: &[(1, 'a')], kerns: &[], bold: false, slant: false });
     let file = w.finish("").unwrap();
     // All three boxes are in the file, though one was used.
     let program = streams(&file).into_iter().find(|s| s.starts_with(&[0, 1, 0, 0])).unwrap();
@@ -126,7 +127,7 @@ fn hostile_drawing_never_panics_and_stays_a_file() {
     let mut w = Writer::new();
     // Nothing is drawn before there is a page.
     w.fill(0.0, 0.0, 1.0, 1.0, [0; 3]);
-    w.text(Piece { font: FontId(7), size: 1.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &[(1, 'a')], bold: false, slant: false });
+    w.text(Piece { font: FontId(7), size: 1.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &[(1, 'a')], kerns: &[], bold: false, slant: false });
     let font = w.font(boxed("a"), 0).unwrap();
     assert!(w.page(f32::NAN, -5.0));
     assert!(w.page(f32::INFINITY, 1e30));
@@ -140,13 +141,14 @@ fn hostile_drawing_never_panics_and_stays_a_file() {
             baseline: v,
             color: [0; 3],
             glyphs: &[(65535, '\u{10ffff}'), (0, '\0'), (9, ')')],
+            kerns: &[],
             bold: true,
             slant: true,
         });
-        w.text(Piece { font: FontId(usize::MAX), size: v, x: v, baseline: v, color: [0; 3], glyphs: &[], bold: false, slant: false });
+        w.text(Piece { font: FontId(usize::MAX), size: v, x: v, baseline: v, color: [0; 3], glyphs: &[], kerns: &[], bold: false, slant: false });
     }
     let long: Vec<(u16, char)> = (0..100_000u32).map(|i| ((i % 7) as u16, 'a')).collect();
-    w.text(Piece { font, size: 10.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &long, bold: false, slant: false });
+    w.text(Piece { font, size: 10.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &long, kerns: &[], bold: false, slant: false });
     let file = w.finish(&"\u{202e}(\\)>".repeat(10_000)).unwrap();
     for page in streams(&file).iter().filter(|s| has(s, " Tj ET")) {
         let ops = String::from_utf8_lossy(page);
@@ -196,6 +198,7 @@ fn damaged_fonts_never_panic() {
                     baseline: 0.0,
                     color: [0; 3],
                     glyphs: &[(4, 'x'), (60000, 'y')],
+                    kerns: &[],
                     bold: false,
                     slant: false,
                 });
@@ -243,4 +246,36 @@ fn pictures_are_carried_with_what_shows_through_them() {
         w.image(1, 1, &[0; 4]).unwrap();
     }
     assert_eq!(w.image(1, 1, &[0; 4]), Err(PdfError::TooManyImages));
+}
+
+#[test]
+fn kerned_glyphs_are_shown_with_the_room_between_them() {
+    let mut w = Writer::new();
+    let font = w.font(boxed("abc"), 0).unwrap();
+    assert!(w.page(200.0, 200.0));
+    let piece = |kerns| Piece {
+        font,
+        size: 10.0,
+        x: 10.0,
+        baseline: 20.0,
+        color: [0, 0, 0],
+        glyphs: &[(1, 'a'), (2, 'b'), (3, 'c'), (1, 'a')],
+        kerns,
+        bold: false,
+        slant: false,
+    };
+    // A point closer at size 10 is a hundred thousandths, taken off the way on.
+    w.text(piece(&[-1.0, 0.0, 0.25, -3.0]));
+    w.text(piece(&[]));
+    w.text(piece(&[0.0, 0.0]));
+    // Amounts that are no numbers, or beyond reason, and more of them than glyphs.
+    w.text(piece(&[f32::NAN, f32::INFINITY, -1e30, 5.0, 5.0, 5.0]));
+    let file = w.finish("t").unwrap();
+    let unpacked = streams(&file);
+    let page = String::from_utf8_lossy(unpacked.iter().find(|s| has(s, " Tm ")).unwrap()).to_string();
+    let shown: Vec<&str> = page.lines().filter_map(|l| l.split(" Tm ").nth(1)).collect();
+    assert_eq!(
+        shown,
+        ["[<0001> 100 <00020003> -25 <0001>] TJ ET", "<0001000200030001> Tj ET", "<0001000200030001> Tj ET", "[<000100020003> 2000 <0001>] TJ ET"]
+    );
 }

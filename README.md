@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M1%20%2B%20M2%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-41%20of%20115%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-180%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-184%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -78,7 +78,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
 - **Writing `.pst` files.** Data files are read-only; changes to them are refused.
 - **Parts of formatted bodies.** Metafiles with a
-  bitmap beside the drawing; shaping, kerning and right-to-left text in print.
+  bitmap beside the drawing; shaping and right-to-left text in print.
 - Calendar, People and Tasks.
 - The MCP server, the control channel and the web build.
 

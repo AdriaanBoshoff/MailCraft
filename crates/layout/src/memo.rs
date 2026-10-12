@@ -91,6 +91,7 @@ fn number(flow: &mut Flow, page: usize, pages: usize) {
             color: [0, 0, 0],
             glyphs: vec![(glyph, ch)],
             width: advance,
+            kerns: Vec::new(),
             bold: pick.bold,
             slant: pick.slant,
         });

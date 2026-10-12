@@ -322,6 +322,7 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
                     baseline: text.y,
                     color: text.color,
                     glyphs: &text.glyphs,
+                    kerns: &text.kerns,
                     bold: text.bold,
                     slant: text.slant,
                 });

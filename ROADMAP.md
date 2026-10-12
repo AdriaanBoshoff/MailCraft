@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 38 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 39 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 180, all passing |
+| Tests | 184, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -73,8 +73,9 @@
 23. Done: list numbers from the list tables of RTF bodies.
 24. Done: fills behind blocks, and room on each side of them, in HTML and RTF bodies.
 25. Done: opening a link, after being asked.
-26. Next: what is left of M2, in this order: text beside pictures and kerning in print; page
-    setup, Table Style and a print preview; metafiles with a bitmap beside the drawing.
+26. Done: text beside pictures, and kerning, in print.
+27. Next: what is left of M2, in this order: page setup, Table Style and a print preview;
+    metafiles with a bitmap beside the drawing.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -443,3 +444,20 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   so a command from the control channel or an agent cannot start one. That last step, the
   browser starting, was not run on the dev machine and is untested end to end. What this
   does on purpose: a link is never opened by the click alone.
+- **2026-10-12** - M2.36: print sets text beside a picture at the side, and kerns. A picture a body
+  puts at one side (`align`, `float`) is printed there, with the lines beside it shorter by
+  its width and the lines after its foot under it; what follows its paragraph stands beside
+  it too, until a paragraph asks to start below it or a table, a line or a bordered block
+  comes, as on screen. It goes to the next page with its text when its page has no room,
+  and stands in the line where less than 90 points would be left beside it. Pairs of
+  glyphs stand as close as their face says: from the `kern` feature of the face's `GPOS`
+  table (OpenType, pair adjustment, lookup type 2, both formats, through extension
+  lookups; the default language system of `latn`, else `DFLT`) or else from its `kern`
+  table (format 0). Lines are measured and broken with the pairs counted, and the PDF
+  shows them with the `TJ` operator (PDF 32000-1, 9.4.3). A pair is held to half an em and
+  never moves a glyph back past its start; tables cut short or filled with anything move
+  nothing. Not yet: more than one picture at the sides at once, the reading pane's own
+  kerning (it sets text as the toolkit does), shaping and right-to-left text. The printed
+  pages were checked by their numbers (tests, and a sample message printed in the
+  installed fonts, where 19 of 33 pieces of text carry pairs), not by eye: nothing on this
+  machine draws a PDF, and the print preview is next. Nothing here goes beyond Outlook.

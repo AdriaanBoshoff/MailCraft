@@ -1,19 +1,30 @@
 //! The faces a layout is set in: found by name among the installed fonts, read once, and asked
 //! for glyphs and measures. Table layouts are from the OpenType specification (`head`, `hhea`,
 //! `hmtx`, `maxp`); every number in a font file is read as hostile.
+//!
+//! Pairs of glyphs that stand closer or further apart than their widths say (kerning) are
+//! read from the `kern` feature of the `GPOS` table (pair adjustment, lookup type 2), or
+//! from the `kern` table (format 0) of a face that has no such feature.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use mailcraft_fonts::{Face, Library};
 use skrifa::raw::TableProvider;
+use skrifa::raw::tables::gpos::{PairPos, PositionSubtables};
+use skrifa::raw::tables::kern::SubtableKind;
 use skrifa::raw::types::Tag;
-use skrifa::{FontRef, MetadataProvider};
+use skrifa::{FontRef, GlyphId, MetadataProvider};
 
 /// Faces one layout may load.
 const MAX_FACES: usize = 48;
 /// Characters remembered per face.
 const MAX_REMEMBERED: usize = 20_000;
+/// Pairs of glyphs remembered per face.
+const MAX_PAIRS: usize = 60_000;
+/// Lookups, and subtables of one, that are asked about a pair.
+const MAX_LOOKUPS: usize = 32;
+const MAX_SUBTABLES: usize = 256;
 
 /// Fixed-width fonts, for text that asks for one.
 const MONO: &[&str] = &["Consolas", "Inconsolata", "Courier New", "Liberation Mono", "Cousine", "DejaVu Sans Mono", "Noto Sans Mono"];
@@ -31,6 +42,16 @@ const LAST: &[&str] = &[
     "Noto Sans CJK SC",
 ];
 
+/// Where a face says which pairs of glyphs stand closer together.
+#[derive(Clone, Debug)]
+enum Pairs {
+    None,
+    /// The lookups of the `kern` feature of its `GPOS` table, in the order they apply.
+    Lookups(Vec<u16>),
+    /// Its `kern` table.
+    Table,
+}
+
 /// A face that is used: its file, and its measures in font units.
 #[derive(Clone, Debug)]
 pub struct Loaded {
@@ -42,6 +63,8 @@ pub struct Loaded {
     gap: f32,
     advances: Vec<u16>,
     chars: HashMap<char, u16>,
+    pairs: Pairs,
+    kerns: HashMap<(u16, u16), i16>,
 }
 
 impl Loaded {
@@ -83,6 +106,98 @@ fn be16(data: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*data.get(at)?, *data.get(at.checked_add(1)?)?]))
 }
 
+/// The lookups a face kerns Latin text with: those of the `kern` feature in the default
+/// language system of its `latn` script, else of `DFLT`, else of the first script it has
+/// (OpenType, "OpenType Layout Common Table Formats": script list, language system, feature
+/// list).
+fn kern_lookups(font: &FontRef) -> Option<Vec<u16>> {
+    let gpos = font.gpos().ok()?;
+    let scripts = gpos.script_list().ok()?;
+    let records = scripts.script_records();
+    let named = |tag: &[u8; 4]| records.iter().find(|r| r.script_tag() == Tag::new(tag));
+    let script = named(b"latn").or_else(|| named(b"DFLT")).or_else(|| records.first())?.script(scripts.offset_data()).ok()?;
+    let system = match script.default_lang_sys() {
+        Some(system) => system.ok()?,
+        None => script.lang_sys_records().first()?.lang_sys(script.offset_data()).ok()?,
+    };
+    let features = gpos.feature_list().ok()?;
+    let mut out: Vec<u16> = Vec::new();
+    for index in system.feature_indices().iter().take(1024) {
+        let Some(record) = features.feature_records().get(usize::from(index.get())) else { continue };
+        if record.feature_tag() != Tag::new(b"kern") {
+            continue;
+        }
+        let Ok(feature) = record.feature(features.offset_data()) else { continue };
+        for lookup in feature.lookup_list_indices() {
+            if out.len() < MAX_LOOKUPS && !out.contains(&lookup.get()) {
+                out.push(lookup.get());
+            }
+        }
+    }
+    // Lookups apply in the order of the lookup list.
+    out.sort_unstable();
+    (!out.is_empty()).then_some(out)
+}
+
+/// What one pair adjustment subtable says of a pair: how much further the first glyph moves
+/// on, in font units. `None` when the subtable does not speak of the pair, and the next one is
+/// asked (OpenType `GPOS`, "Lookup type 2 subtable: pair adjustment positioning").
+fn pair_value(subtable: &PairPos, left: u16, right: u16) -> Option<i32> {
+    match subtable {
+        PairPos::Format1(pairs) => {
+            let at = pairs.coverage().ok()?.get(GlyphId::from(left))?;
+            let set = pairs.pair_sets().get(usize::from(at)).ok()?;
+            for record in set.pair_value_records().iter() {
+                let record = record.ok()?;
+                if record.second_glyph().to_u16() == right {
+                    return Some(i32::from(record.value_record1().x_advance().unwrap_or(0)));
+                }
+            }
+            None
+        }
+        PairPos::Format2(classes) => {
+            classes.coverage().ok()?.get(GlyphId::from(left))?;
+            let first = classes.class_def1().ok()?.get(GlyphId::from(left));
+            let second = classes.class_def2().ok()?.get(GlyphId::from(right));
+            let row = classes.class1_records().get(usize::from(first)).ok()?;
+            let record = row.class2_records().get(usize::from(second)).ok()?;
+            Some(i32::from(record.value_record1().x_advance().unwrap_or(0)))
+        }
+    }
+}
+
+/// How much further than its width `left` moves on before `right`, in font units.
+fn pair(loaded: &Loaded, left: u16, right: u16) -> Option<i32> {
+    let font = FontRef::from_index(&loaded.data, loaded.index).ok()?;
+    let mut sum = 0i32;
+    match &loaded.pairs {
+        Pairs::None => return None,
+        Pairs::Lookups(lookups) => {
+            let list = font.gpos().ok()?.lookup_list().ok()?;
+            for index in lookups {
+                let Ok(lookup) = list.lookups().get(usize::from(*index)) else { continue };
+                let Ok(PositionSubtables::Pair(subtables)) = lookup.subtables() else { continue };
+                // The first subtable that speaks of the pair is the lookup's answer.
+                if let Some(value) = subtables.iter().take(MAX_SUBTABLES).flatten().find_map(|s| pair_value(&s, left, right)) {
+                    sum = sum.saturating_add(value);
+                }
+            }
+        }
+        Pairs::Table => {
+            // OpenType `kern`: pairs of the subtables that kern along the line.
+            for subtable in font.kern().ok()?.subtables().take(MAX_LOOKUPS).flatten() {
+                if !subtable.is_horizontal() || subtable.is_cross_stream() || subtable.is_variable() {
+                    continue;
+                }
+                if let Ok(SubtableKind::Format0(pairs)) = subtable.kind() {
+                    sum = sum.saturating_add(pairs.kerning(GlyphId::from(left), GlyphId::from(right)).unwrap_or(0));
+                }
+            }
+        }
+    }
+    Some(sum)
+}
+
 fn load(face: Face) -> Option<Loaded> {
     mailcraft_fonts::embedding(&face.data, face.index)?;
     let font = FontRef::from_index(&face.data, face.index).ok()?;
@@ -109,7 +224,23 @@ fn load(face: Face) -> Option<Loaded> {
         }
         advances.push(last);
     }
-    Some(Loaded { data: face.data.into(), index: face.index, units: f32::from(units), ascent, descent, gap, advances, chars: HashMap::new() })
+    let pairs = match kern_lookups(&font) {
+        Some(lookups) => Pairs::Lookups(lookups),
+        None if font.kern().is_ok() => Pairs::Table,
+        None => Pairs::None,
+    };
+    Some(Loaded {
+        data: face.data.into(),
+        index: face.index,
+        units: f32::from(units),
+        ascent,
+        descent,
+        gap,
+        advances,
+        chars: HashMap::new(),
+        pairs,
+        kerns: HashMap::new(),
+    })
 }
 
 impl<'a> Fonts<'a> {
@@ -181,6 +312,28 @@ impl<'a> Fonts<'a> {
         }
         let picks = vec![None; names.len()];
         Chain { names, bold, italic, picks }
+    }
+
+    /// How much further than its width `left` moves on when `right` follows it in the same
+    /// face, at `size`: less than nothing for a pair that stands closer together. No pair
+    /// moves by more than half an em.
+    pub(crate) fn kern(&mut self, face: usize, left: u16, right: u16, size: f32) -> f32 {
+        let Some(loaded) = self.faces.get_mut(face) else { return 0.0 };
+        if matches!(loaded.pairs, Pairs::None) {
+            return 0.0;
+        }
+        let units = match loaded.kerns.get(&(left, right)) {
+            Some(known) => *known,
+            None => {
+                let most = (loaded.units / 2.0) as i32;
+                let found = i16::try_from(pair(loaded, left, right).unwrap_or(0).clamp(-most, most)).unwrap_or(0);
+                if loaded.kerns.len() < MAX_PAIRS {
+                    loaded.kerns.insert((left, right), found);
+                }
+                found
+            }
+        };
+        f32::from(units) * size / loaded.units
     }
 
     fn glyph(&mut self, face: usize, ch: char) -> u16 {

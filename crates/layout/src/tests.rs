@@ -521,3 +521,246 @@ fn a_filled_box_is_behind_its_paragraphs_with_its_room_on_each_side() {
         assert!(fills[0].y >= 19.9 && fills[0].y + fills[0].height <= 280.1 && fills[0].height > 0.0);
     }
 }
+
+fn print_in(font: Vec<u8>, body: &Doc, paper: Paper) -> Printed {
+    let library = Library::empty();
+    let mut fonts = Fonts::new(&library);
+    for family in ["Segoe UI", "Times New Roman", "Calibri"] {
+        fonts.give(family, false, false, Face { data: font.clone(), index: 0 });
+    }
+    memo(&Memo { owner: "Owner", fields: &[], body, plain: false, sizes: &|_| None }, paper, &mut fonts).unwrap()
+}
+
+#[test]
+fn pairs_a_face_kerns_stand_as_close_as_it_says() {
+    // "AV" stands a tenth of the size closer, "Va" a twentieth, "ab" further apart.
+    let pairs = [('A', 'V', -100), ('V', 'a', -50), ('a', 'b', 30), ('V', 'A', 0)];
+    let body = doc(vec![Block::Para(para("AVab VA")), Block::Para(Para { align: Align::Right, ..para("xAV") }), Block::Para(para("A\tV"))]);
+    let plain = print(&body, Paper::A4);
+    for gpos in [false, true] {
+        let printed = print_in(boxes::font_kerned(CHARS, &pairs, gpos), &body, Paper::A4);
+        let page = &printed.pages[0];
+        let find = |page: &Page, text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap().clone();
+        let (set, was) = (find(page, "AVab VA"), find(&plain.pages[0], "AVab VA"));
+        // The body is set at 12 points: a box is 6 wide, and a thousandth of the size 0.012.
+        let near = |a: f32, b: f32| (a - b).abs() < 0.001;
+        assert!(was.kerns.is_empty() && near(was.width, 6.0 * 6.0 + 3.0));
+        assert_eq!(set.kerns.len(), 7, "gpos {gpos}");
+        let want = [-1.2, -0.6, 0.36, 0.0, 0.0, 0.0, 0.0];
+        assert!(set.kerns.iter().zip(want).all(|(k, w)| near(*k, w)), "gpos {gpos}: {:?}", set.kerns);
+        assert!(near(set.width, was.width - 1.2 - 0.6 + 0.36), "{}", set.width);
+        // Text set to the right ends where the room ends, kerned or not.
+        let (right, right_was) = (find(page, "xAV"), find(&plain.pages[0], "xAV"));
+        assert!(near(right.x + right.width, right_was.x + right_was.width) && near(right.width, right_was.width - 1.2));
+        // Nothing is kerned across a tab.
+        assert!(page.texts.iter().filter(|t| t.glyphs.len() == 1 && matches!(t.glyphs[0].1, 'A' | 'V')).all(|t| t.kerns.is_empty()));
+        within(&printed, Paper::A4);
+    }
+
+    // More fits on a line that is kerned tighter: 26 boxes fill the small sheet, 27 with pairs.
+    let tight: Vec<(char, char, i16)> = vec![('A', 'V', -200), ('V', 'A', -200)];
+    let word = "AV".repeat(14);
+    let body = doc(vec![Block::Para(para(&word))]);
+    assert_eq!(body_lines(&print(&body, SMALL).pages[0]).len(), 2);
+    let printed = print_in(boxes::font_kerned(CHARS, &tight, true), &body, SMALL);
+    assert_eq!(body_lines(&printed.pages[0]), std::slice::from_ref(&word));
+    within(&printed, SMALL);
+
+    // A pair in two sizes or two looks is not one pair.
+    let two = Para { runs: vec![run("A"), Run { style: Style { size: Some(20.0), ..Style::default() }, ..run("V") }], ..Para::default() };
+    let printed = print_in(boxes::font_kerned(CHARS, &pairs, false), &doc(vec![Block::Para(two)]), Paper::A4);
+    assert!(printed.pages[0].texts.iter().all(|t| t.kerns.is_empty()));
+}
+
+#[test]
+fn hostile_kerning_tables_move_nothing_far() {
+    let body = doc(vec![Block::Para(para("AVAVAV abc VA")), Block::Para(para(&"AV".repeat(400)))]);
+    let whole = boxes::font_kerned(CHARS, &[('A', 'V', i16::MIN), ('V', 'A', i16::MAX)], true);
+    // Amounts beyond reason are held to half an em, and no glyph moves back past its start.
+    let printed = print_in(whole.clone(), &body, SMALL);
+    within(&printed, SMALL);
+    for text in printed.pages.iter().flat_map(|p| &p.texts) {
+        assert!(text.width >= -0.001 && text.kerns.iter().all(|k| k.abs() <= text.size / 2.0 + 0.001), "{text:?}");
+    }
+    // Tables that are cut short, or filled with anything, are read as far as they hold.
+    let kern = boxes::font_kerned(CHARS, &[('A', 'V', -100)], false);
+    for font in [&whole, &kern] {
+        let tag: &[u8; 4] = if std::ptr::eq(font, &whole) { b"GPOS" } else { b"kern" };
+        let record = (0..usize::from(u16::from_be_bytes([font[4], font[5]]))).map(|i| 12 + i * 16).find(|at| &font[*at..*at + 4] == tag).unwrap();
+        let start = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+        let len = u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
+        for cut in 0..len {
+            let mut short = font.clone();
+            short[record + 12..record + 16].copy_from_slice(&(cut as u32).to_be_bytes());
+            within(&print_in(short, &body, SMALL), SMALL);
+        }
+        for (step, fill) in [(1usize, 0xFFu8), (2, 0x00), (3, 0x7F), (5, 0x01), (7, 0x80)] {
+            let mut wild = font.clone();
+            for at in (start..start + len).step_by(step) {
+                wild[at] = fill;
+            }
+            within(&print_in(wild, &body, SMALL), SMALL);
+        }
+    }
+    for junk in [vec![], vec![0u8; 3], vec![0xFF; 64], vec![0, 1, 0, 0, 0, 10, 0, 10, 0, 10, 0xFF, 0xFF], (0..=255u8).collect::<Vec<u8>>()] {
+        for tag in [*b"GPOS", *b"kern"] {
+            within(&print_in(boxes::font_and(CHARS, vec![(tag, junk.clone())]), &body, SMALL), SMALL);
+        }
+    }
+}
+
+#[test]
+fn text_stands_beside_a_picture_at_one_side() {
+    use mailcraft_formats::rich::Float;
+    let side = |id: &str, float: Float| Run { picture: Some(Picture::Attached(id.into())), float, ..Run::default() };
+    let sizes = |picture: &Picture| match picture {
+        // 80 by 40 pixels are 60 by 30 points; with its gap a picture takes 66 of the width.
+        Picture::Attached(id) if id == "small" => Some((80, 40)),
+        Picture::Attached(id) if id == "wide" => Some((100, 40)),
+        Picture::Attached(id) if id == "tall" => Some((80, 160)),
+        Picture::Attached(id) if id == "huge" => Some((u16::MAX, u16::MAX)),
+        _ => None,
+    };
+    let print = |body: &Doc, paper: Paper| {
+        print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body, plain: false, sizes: &sizes }, paper).unwrap()
+    };
+    let words = |n: usize| vec!["word"; n].join(" ");
+    let (left, right) = (36.0f32, 595.28f32 - 36.0);
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let lines_of = |page: &Page| -> Vec<Text> { page.texts.iter().filter(|t| t.glyphs.first().is_some_and(|g| g.1 == 'w')).cloned().collect() };
+
+    for float in [Float::Left, Float::Right] {
+        let body = doc(vec![Block::Para(Para { runs: vec![side("small", float), run(&words(90))], ..Para::default() }), Block::Para(para("after"))]);
+        let printed = print(&body, Paper::A4);
+        let page = &printed.pages[0];
+        assert_eq!(page.pictures.len(), 1);
+        let picture = &page.pictures[0];
+        let lines = lines_of(page);
+        assert!(lines.len() >= 5, "{}", lines.len());
+        // The picture is at its side, its top at the top of the first line (12 points tall,
+        // with its baseline 9.6 down).
+        assert_eq!((picture.width, picture.height), (60.0, 30.0));
+        assert!(near(picture.x, if float == Float::Left { left } else { right - 60.0 }), "{picture:?}");
+        assert!(near(picture.y, lines[0].y - 9.6), "{} {}", picture.y, lines[0].y);
+        // Three lines start above its foot and are shorter by its width and the gap; the
+        // fourth is under it, as wide as the page's room.
+        for (n, line) in lines.iter().enumerate() {
+            let (from, to) = match (n < 3, float) {
+                (true, Float::Left) => (left + 66.0, right),
+                (true, _) => (left, right - 66.0),
+                (false, _) => (left, right),
+            };
+            assert!(near(line.x, from) && line.x + line.width <= to + 0.01, "line {n} of {float:?}: {} {}", line.x, line.width);
+            // As many words as there is room for: one more would not fit.
+            assert!(n + 1 == lines.len() || line.width + 27.0 > to - from, "line {n} of {float:?} is short");
+        }
+        assert!(lines[3].y > picture.y + picture.height);
+        within(&printed, Paper::A4);
+    }
+
+    // A picture taller than its paragraph: what follows stands beside it too, until a
+    // paragraph asks to start below it, or something that is no plain paragraph comes.
+    let tall = |then: Block| {
+        doc(vec![
+            Block::Para(Para { runs: vec![side("tall", Float::Left), run("one")], ..Para::default() }),
+            Block::Para(para("two")),
+            then,
+            Block::Para(para("end")),
+        ])
+    };
+    let find = |page: &Page, text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap().clone();
+    for then in [
+        Block::Para(Para { clear: true, ..para("below") }),
+        Block::Table(Table { rows: vec![vec![cell("below")]], ..Table::default() }),
+        Block::Para(Para {
+            frame: Some(Arc::new(Frame { edges: Default::default(), padding: [0; 4], indent: 0, between: Edge::default(), fill: Some([1, 2, 3]) })),
+            ..para("below")
+        }),
+    ] {
+        let printed = print(&tall(then), Paper::A4);
+        let page = &printed.pages[0];
+        let picture = &page.pictures[0];
+        assert_eq!((picture.width, picture.height), (60.0, 120.0));
+        let (one, two, below, end) = (find(page, "one"), find(page, "two"), find(page, "below"), find(page, "end"));
+        assert!(near(one.x, left + 66.0) && near(two.x, left + 66.0) && two.y > one.y && two.y < picture.y + 120.0);
+        assert!(below.x < left + 20.0 && below.y - 9.6 >= picture.y + 120.0 - 0.01, "{} {}", below.x, below.y);
+        assert!(near(end.x, left) && end.y > below.y);
+    }
+    // Blocks that end beside a picture end under it: a cell is as tall as its picture, and
+    // the next cell's text does not stand beside a picture that is not its own.
+    let floated = Cell {
+        blocks: vec![Block::Para(Para { runs: vec![side("tall", Float::Right), run("in")], ..Para::default() })],
+        span: 1,
+        rows: 1,
+        ..Cell::default()
+    };
+    let body = doc(vec![
+        Block::Table(Table { rows: vec![vec![floated, cell("next")]], width: TableWidth::Percent(100), ..Table::default() }),
+        Block::Para(para("after")),
+    ]);
+    let printed = print(&body, Paper::A4);
+    let page = &printed.pages[0];
+    let (picture, next, after) = (&page.pictures[0], find(page, "next"), find(page, "after"));
+    assert!(after.y - 9.6 >= picture.y + 120.0 - 0.01 && near(after.x, left));
+    assert!(next.x >= picture.x + picture.width - 0.01 && next.x + next.width <= right + 0.01, "{picture:?} {} {}", next.x, next.width);
+
+    // Where too little room would be left beside it, a picture stands in the line.
+    let body = doc(vec![Block::Para(Para { runs: vec![side("wide", Float::Left), run("ab cd")], ..Para::default() })]);
+    let printed = print(&body, SMALL);
+    let (picture, ab) = (&printed.pages[0].pictures[0], find(&printed.pages[0], "ab cd"));
+    assert!(near(picture.x, 20.0) && near(ab.x, 20.0 + 75.0) && near(picture.y + picture.height, ab.y));
+    // With room for it, it stands at the side on the small sheet too.
+    let body = doc(vec![Block::Para(Para { runs: vec![side("small", Float::Right), run(&words(12))], ..Para::default() })]);
+    let printed = print(&body, SMALL);
+    assert!(near(printed.pages[0].pictures[0].x, 180.0 - 60.0));
+    assert!(lines_of(&printed.pages[0])[0].width <= 94.01);
+    within(&printed, SMALL);
+
+    // A picture that has no room left on its page goes to the next with its text.
+    let mut blocks: Vec<Block> = (0..17).map(|i| Block::Para(para(&format!("line {i}")))).collect();
+    blocks.push(Block::Para(Para { runs: vec![side("small", Float::Left), run("beside it")], ..Para::default() }));
+    let printed = print(&doc(blocks), SMALL);
+    assert_eq!(printed.pages.len(), 2);
+    assert!(printed.pages[0].pictures.is_empty());
+    let (picture, beside) = (&printed.pages[1].pictures[0], find(&printed.pages[1], "beside it"));
+    assert!(near(picture.y, 20.0) && near(beside.x, 20.0 + 66.0) && near(beside.y, 20.0 + 9.6));
+
+    // Hostile: pictures of any size at the sides of everything, nested, by the thousand.
+    let mut blocks: Vec<Block> = Vec::new();
+    for i in 0..400u16 {
+        let id = ["small", "wide", "tall", "huge", "none"][usize::from(i % 5)];
+        let float = if i % 2 == 0 { Float::Left } else { Float::Right };
+        let runs = vec![
+            run("x"),
+            Run { extent: (i.wrapping_mul(977), i.wrapping_mul(331)), ..side(id, float) },
+            side("tall", float),
+            run(&words(usize::from(i % 7))),
+        ];
+        let p = Para {
+            runs,
+            clear: i % 11 == 0,
+            indent: (i % 9) as u8,
+            quote: (i % 4) as u8,
+            align: if i % 3 == 0 { Align::Right } else { Align::Left },
+            ..Para::default()
+        };
+        blocks.push(if i % 6 == 0 {
+            Block::Table(Table {
+                rows: vec![vec![Cell { blocks: vec![Block::Para(p.clone()), Block::Para(p)], span: 1, rows: 1, ..Cell::default() }, cell("c")]],
+                ..Table::default()
+            })
+        } else {
+            Block::Para(p)
+        });
+    }
+    for paper in [SMALL, Paper::A4, Paper { width: 80.0, height: 90.0, margin: 30.0 }] {
+        let printed = print(&doc(blocks.clone()), paper);
+        assert!(!printed.pages.is_empty());
+        for page in &printed.pages {
+            for placed in &page.pictures {
+                assert!(placed.width > 0.0 && placed.height > 0.0 && placed.x.is_finite() && placed.y.is_finite());
+                assert!(placed.y + placed.height <= page.height + 0.01 && placed.y >= -0.01, "{placed:?}");
+            }
+        }
+    }
+}

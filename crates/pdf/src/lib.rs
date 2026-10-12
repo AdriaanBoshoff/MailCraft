@@ -81,6 +81,9 @@ pub struct Piece<'a> {
     pub color: Rgb,
     /// Each glyph with the character it stands for, which is what a reader finds and copies.
     pub glyphs: &'a [(u16, char)],
+    /// Kerning: how much further than its own width each glyph moves on before the next, in
+    /// points. Empty, or shorter than the glyphs, where none is moved.
+    pub kerns: &'a [f32],
     /// Thicken the glyphs: the face has no bold of its own.
     pub bold: bool,
     /// Lean the glyphs: the face has no italic of its own.
@@ -237,14 +240,28 @@ impl Writer {
         let Some(font) = self.fonts.get_mut(piece.font.0) else { return };
         let Some(page) = self.pages.last_mut().filter(|page| page.ops.len() < MAX_PAGE_BYTES) else { return };
         let size = if piece.size.is_finite() { piece.size.clamp(1.0, 1000.0) } else { 10.0 };
-        let mut hex = String::with_capacity(piece.glyphs.len().min(MAX_PIECE) * 4);
-        for (glyph, ch) in piece.glyphs.iter().take(MAX_PIECE) {
-            font.used.entry(*glyph).or_insert(*ch);
-            let _ = write!(hex, "{glyph:04X}");
-        }
-        if hex.is_empty() {
+        if piece.glyphs.is_empty() {
             return;
         }
+        // Glyphs are shown as one string; where one is kerned the string is cut, with the
+        // amount between the parts in thousandths of the size, taken off the way on (9.4.3,
+        // the `TJ` operator).
+        let count = piece.glyphs.len().min(MAX_PIECE);
+        let mut hex = String::with_capacity(count * 4 + 2);
+        let mut kerned = false;
+        hex.push('<');
+        for (i, (glyph, ch)) in piece.glyphs.iter().take(count).enumerate() {
+            font.used.entry(*glyph).or_insert(*ch);
+            let _ = write!(hex, "{glyph:04X}");
+            let kern = piece.kerns.get(i).copied().filter(|k| k.is_finite()).unwrap_or(0.0);
+            let off = (-kern / size * 1000.0).clamp(-2000.0, 2000.0).round();
+            if off != 0.0 && i + 1 < count {
+                let _ = write!(hex, "> {off} <");
+                kerned = true;
+            }
+        }
+        hex.push('>');
+        let show = if kerned { format!("[{hex}] TJ") } else { format!("{hex} Tj") };
         let color = rgb(piece.color);
         let ops = &mut page.ops;
         let _ = write!(ops, "BT /F{} {} Tf {color} rg ", piece.font.0, num(size));
@@ -254,7 +271,7 @@ impl Writer {
             ops.push_str("0 Tr ");
         }
         let lean = if piece.slant { "0.2" } else { "0" };
-        let _ = writeln!(ops, "1 0 {lean} 1 {} {} Tm <{hex}> Tj ET", num(piece.x), num(page.height - piece.baseline));
+        let _ = writeln!(ops, "1 0 {lean} 1 {} {} Tm {show} ET", num(piece.x), num(page.height - piece.baseline));
     }
 
     /// The finished file. `title` is what a reader's window shows for it.

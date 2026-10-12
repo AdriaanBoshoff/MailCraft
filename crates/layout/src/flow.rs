@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use mailcraft_formats::rich::{
-    Align, Block, Cell, Edge, Edges, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign, tab_room,
-    tab_stop,
+    Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign,
+    tab_room, tab_stop,
 };
 
 use crate::fonts::{Fonts, Pick};
@@ -21,6 +21,12 @@ const INDENT: f32 = 40.0;
 const QUOTE: f32 = 14.0;
 const MAX_EDGE: u8 = 12;
 const MAX_CELL_ROOM: u16 = 64;
+/// Room between a picture at one side of a paragraph and the text beside it, in points.
+const FLOAT_GAP: f32 = 8.0 * PX;
+/// A picture stands at one side only when this much width is left for the text beside it.
+const MIN_BESIDE: f32 = 120.0 * PX;
+/// Runs of a paragraph looked through for a picture that stands at one side.
+const MAX_FLOAT_SEARCH: usize = 64;
 
 const MAX_COLUMNS: usize = 64;
 /// Tables inside tables that are still set as tables; deeper ones are set cell under cell.
@@ -75,6 +81,8 @@ struct Glyph {
     pick: Pick,
     glyph: u16,
     advance: f32,
+    /// What of the advance is kerning with the glyph after it.
+    kern: f32,
     look: usize,
     kind: Kind,
     /// A picture: its place among the paragraph's pictures. Its width is the advance.
@@ -97,6 +105,16 @@ struct Look {
     rise: f32,
 }
 
+/// A picture standing at one side, with room beside it still to fill.
+#[derive(Clone, Copy)]
+struct Aside {
+    left: bool,
+    /// Room the picture takes at its side, with the gap to what stands beside it.
+    width: f32,
+    page: usize,
+    bottom: f32,
+}
+
 /// How many fills, lines, texts and pictures a page held at some moment.
 type Mark = (usize, usize, usize, usize);
 
@@ -111,6 +129,8 @@ pub(crate) struct Flow<'f, 'l> {
     pub no_font: bool,
     glyphs_left: usize,
     sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>,
+    /// The picture that stands at one side of the blocks being set.
+    aside: Option<Aside>,
 }
 
 fn px(v: u16) -> f32 {
@@ -153,19 +173,18 @@ fn set_tabs(glyphs: &mut [Glyph], tabs: &[Tab], pre: bool, room: f32) {
     }
 }
 
-/// The lines of a paragraph `width` wide: where each starts and ends among its glyphs. A line
-/// ends at the last space it has room for; a word longer than a line is cut where it must be.
-fn lines(glyphs: &[Glyph], width: f32) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let (mut start, mut wide, mut i) = (0usize, 0.0f32, 0usize);
+/// Where the line that starts at `start` ends when it has `width` of room, and where the next
+/// one starts. A line ends at the last space it has room for; a word longer than a line is cut
+/// where it must be. A paragraph of nothing has one line; `None` when no line is left.
+fn line_end(glyphs: &[Glyph], start: usize, width: f32) -> Option<(usize, usize)> {
+    if start >= glyphs.len() {
+        return (start == 0).then_some((0, 0));
+    }
+    let (mut wide, mut i) = (0.0f32, start);
     let mut after_space: Option<usize> = None;
     while let Some(g) = glyphs.get(i) {
         match g.kind {
-            Kind::Break => {
-                out.push((start, i));
-                (start, wide, after_space) = (i + 1, 0.0, None);
-                i += 1;
-            }
+            Kind::Break => return Some((i, i + 1)),
             Kind::Space => {
                 wide += g.advance;
                 after_space = Some(i + 1);
@@ -173,9 +192,7 @@ fn lines(glyphs: &[Glyph], width: f32) -> Vec<(usize, usize)> {
             }
             Kind::Ink if wide + g.advance > width + 0.01 && i > start => {
                 let cut = after_space.filter(|at| *at > start).unwrap_or(i);
-                out.push((start, cut));
-                wide = glyphs.get(cut..i).unwrap_or_default().iter().map(|g| g.advance).sum();
-                (start, after_space) = (cut, None);
+                return Some((cut, cut));
             }
             Kind::Ink => {
                 wide += g.advance;
@@ -183,10 +200,7 @@ fn lines(glyphs: &[Glyph], width: f32) -> Vec<(usize, usize)> {
             }
         }
     }
-    if start < glyphs.len() || out.is_empty() {
-        out.push((start, glyphs.len()));
-    }
-    out
+    Some((glyphs.len(), glyphs.len()))
 }
 
 /// Room a border takes inside its box, in points: left and top, then right and bottom.
@@ -260,7 +274,17 @@ impl<'f, 'l> Flow<'f, 'l> {
         let width = sane(paper.width, 72.0, 14_400.0);
         let height = sane(paper.height, 72.0, 14_400.0);
         let margin = sane(paper.margin, 0.0, width.min(height) / 3.0);
-        Self { fonts, paper: Paper { width, height, margin }, pages: Vec::new(), base, full: false, no_font: false, glyphs_left: MAX_GLYPHS, sizes }
+        Self {
+            fonts,
+            paper: Paper { width, height, margin },
+            pages: Vec::new(),
+            base,
+            full: false,
+            no_font: false,
+            glyphs_left: MAX_GLYPHS,
+            sizes,
+            aside: None,
+        }
     }
 
     pub fn top(&self) -> f32 {
@@ -301,6 +325,15 @@ impl<'f, 'l> Flow<'f, 'l> {
             self.pages.push(Page { width: self.paper.width, height: self.paper.height, ..Page::default() });
         }
         at
+    }
+
+    /// Where what does not stand beside a picture goes on: `at`, or under the picture that
+    /// stands at one side. No picture stands there afterwards.
+    fn below_aside(&mut self, at: At) -> At {
+        match self.aside.take() {
+            Some(a) if a.page == at.page && at.y < a.bottom => At { page: at.page, y: a.bottom.min(self.bottom()) },
+            _ => at,
+        }
     }
 
     fn mark(&self, page: usize) -> Mark {
@@ -349,12 +382,15 @@ impl<'f, 'l> Flow<'f, 'l> {
     }
 
     /// The glyphs of a paragraph that has `room` across, the looks they point at, and the
-    /// pictures among them.
-    fn glyphs<'p>(&mut self, para: &'p Para, room: f32) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
+    /// pictures among them. The run at `aside` stands at one side and is not among them.
+    fn glyphs<'p>(&mut self, para: &'p Para, room: f32, aside: Option<usize>) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
         let mut out: Vec<Glyph> = Vec::new();
         let mut looks: Vec<Look> = Vec::new();
         let mut pictures: Vec<&'p Picture> = Vec::new();
-        for run in &para.runs {
+        for (n, run) in para.runs.iter().enumerate() {
+            if aside == Some(n) {
+                continue;
+            }
             let s = &run.style;
             let mut size = s.size.filter(|v| v.is_finite()).unwrap_or(self.base.size).clamp(4.0, 96.0);
             let mut rise = 0.0;
@@ -399,6 +435,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                         pick,
                         glyph,
                         advance: wide,
+                        kern: 0.0,
                         look: at,
                         kind: Kind::Ink,
                         picture: Some(pictures.len()),
@@ -457,11 +494,28 @@ impl<'f, 'l> Flow<'f, 'l> {
                 };
                 self.glyphs_left -= 1;
                 let advance = self.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, look.size)) * times;
+                // A pair the face kerns stands as close as the face says.
+                if kind != Kind::Break
+                    && ch != '\t'
+                    && let Some(before) = out.last_mut()
+                    && before.picture.is_none()
+                    && before.kind != Kind::Break
+                    && before.ch != '\t'
+                    && before.pick == pick
+                    && before.look == at
+                {
+                    let kern = self.fonts.kern(pick.face, before.glyph, glyph, look.size).max(-before.advance);
+                    if kern.is_finite() {
+                        before.kern = kern;
+                        before.advance += kern;
+                    }
+                }
                 out.push(Glyph {
                     ch: if kind == Kind::Break { '\n' } else { ch },
                     pick,
                     glyph,
                     advance,
+                    kern: 0.0,
                     look: at,
                     kind,
                     picture: None,
@@ -497,10 +551,46 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
         let inset = Self::inset(para, width);
         let (left, room) = (x + inset, (width - inset).max(24.0));
-        let (mut glyphs, looks, pictures) = self.glyphs(para, room);
+        // A picture standing at one side ends where it ends, or where a paragraph asks to
+        // start below it.
+        if self.aside.is_some_and(|a| para.clear || a.page != at.page || at.y >= a.bottom - 0.01) {
+            at = self.below_aside(at);
+        }
+        // The first picture that asks to stand at one side does, when there is room beside it
+        // and no other stands there.
+        let stand = para.runs.iter().take(MAX_FLOAT_SEARCH).enumerate().filter(|_| self.aside.is_none()).find_map(|(n, run)| {
+            let picture = run.picture.as_ref().filter(|_| run.float != Float::None)?;
+            let (wide, tall) = self.picture_size(run.extent, (self.sizes)(picture)?, room);
+            (room - wide - FLOAT_GAP >= MIN_BESIDE).then_some((n, picture, run.float, wide, tall))
+        });
+        if let Some((_, picture, float, wide, tall)) = stand {
+            at = self.room(at, tall);
+            if self.full {
+                return at;
+            }
+            let placed = Placed {
+                x: if float == Float::Left { left } else { left + room - wide },
+                y: at.y,
+                width: wide,
+                height: tall,
+                picture: picture.clone(),
+            };
+            if let Some(page) = self.page(at.page) {
+                page.pictures.push(placed);
+            }
+            self.aside = Some(Aside { left: float == Float::Left, width: wide + FLOAT_GAP, page: at.page, bottom: at.y + tall + FLOAT_GAP / 2.0 });
+        }
+        let (mut glyphs, looks, pictures) = self.glyphs(para, room, stand.map(|s| s.0));
         set_tabs(&mut glyphs, &para.tabs, matches!(para.kind, ParaKind::Pre), room);
         let own_size = looks.first().map_or(self.base.size, |l| l.size);
-        for (n, (from, to)) in lines(&glyphs, room).into_iter().enumerate() {
+        let (mut from, mut n) = (0usize, 0usize);
+        loop {
+            // A line beside a picture that stands at one side is shorter.
+            let (left, room) = match self.aside.filter(|a| a.page == at.page && at.y < a.bottom - 0.01) {
+                Some(a) => (if a.left { left + a.width } else { left }, (room - a.width).max(24.0)),
+                None => (left, room),
+            };
+            let Some((to, next)) = line_end(&glyphs, from, room) else { break };
             let line = glyphs.get(from..to).unwrap_or_default();
             // Spaces at the end of a line take no room.
             let seen = line.iter().rposition(|g| g.kind != Kind::Space).map_or(0, |last| last + 1);
@@ -532,7 +622,8 @@ impl<'f, 'l> Flow<'f, 'l> {
                 break;
             }
             let baseline = at.y + gap / 2.0 + ascent;
-            let wide: f32 = line.iter().map(|g| g.advance).sum();
+            // The last glyph of a line has nothing after it to stand closer to.
+            let wide: f32 = line.iter().map(|g| g.advance).sum::<f32>() - line.last().map_or(0.0, |g| g.kern);
             let mut pen = left
                 + match para.align {
                     Align::Left => 0.0,
@@ -575,10 +666,13 @@ impl<'f, 'l> Flow<'f, 'l> {
                     // A tab is drawn as room, not as glyphs.
                     let mut x = pen;
                     let mut run: Vec<(u16, char)> = Vec::new();
+                    let mut kerns: Vec<f32> = Vec::new();
                     let mut run_x = pen;
                     let mut texts: Vec<Text> = Vec::new();
                     let mut leads: Vec<(f32, f32, Leader)> = Vec::new();
-                    let mut close = |run: &mut Vec<(u16, char)>, from: f32, to: f32| {
+                    let mut close = |run: &mut Vec<(u16, char)>, kerns: &mut Vec<f32>, from: f32, to: f32| {
+                        let moved = kerns.iter().any(|k| *k != 0.0);
+                        let kerns = std::mem::take(kerns);
                         if !run.is_empty() {
                             texts.push(Text {
                                 x: from,
@@ -588,6 +682,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                                 color: look.color,
                                 glyphs: std::mem::take(run),
                                 width: to - from,
+                                kerns: if moved { kerns } else { Vec::new() },
                                 bold: first.pick.bold,
                                 slant: first.pick.slant,
                             });
@@ -595,15 +690,16 @@ impl<'f, 'l> Flow<'f, 'l> {
                     };
                     for g in piece {
                         if g.ch == '\t' {
-                            close(&mut run, run_x, x);
+                            close(&mut run, &mut kerns, run_x, x);
                             leads.push((x, g.advance, g.lead));
                             run_x = x + g.advance;
                         } else {
                             run.push((g.glyph, if g.ch == '\u{a0}' { ' ' } else { g.ch }));
+                            kerns.push(g.kern);
                         }
                         x += g.advance;
                     }
-                    close(&mut run, run_x, x);
+                    close(&mut run, &mut kerns, run_x, x);
                     if let Some(page) = self.page(page) {
                         page.texts.extend(texts);
                     }
@@ -624,6 +720,10 @@ impl<'f, 'l> Flow<'f, 'l> {
                 self.marker(marker, left - 5.0, baseline, own_size, at.page);
             }
             at.y += tall;
+            if next <= from {
+                break;
+            }
+            (from, n) = (next, n + 1);
         }
         at
     }
@@ -673,6 +773,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     color: BLACK,
                     glyphs: vec![(glyph, ch)],
                     width: advance,
+                    kerns: Vec::new(),
                     bold: pick.bold,
                     slant: pick.slant,
                 });
@@ -684,7 +785,7 @@ impl<'f, 'l> Flow<'f, 'l> {
     /// The narrowest and the widest a paragraph can usefully be: its longest word, and its
     /// longest line when nothing is wrapped.
     fn para_wants(&mut self, para: &Para) -> (f32, f32) {
-        let (glyphs, ..) = self.glyphs(para, f32::MAX);
+        let (glyphs, ..) = self.glyphs(para, f32::MAX, None);
         let (mut word, mut line, mut least, mut most) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for g in &glyphs {
             match g.kind {
@@ -877,6 +978,8 @@ impl<'f, 'l> Flow<'f, 'l> {
                 inner = self.para(p, left, room, inner, k == 0 || between > 0.0);
             }
         }
+        // A picture at one side of the last paragraph is inside the border too.
+        inner = self.below_aside(inner);
         let end = At { page: inner.page, y: inner.y + far.1 };
         // Over the fill of a cell it stands in, under any highlight of its text.
         let over = u16::try_from(depth).unwrap_or(u16::MAX - 2).saturating_add(2).min(u16::MAX - 1);
@@ -890,12 +993,18 @@ impl<'f, 'l> Flow<'f, 'l> {
         if depth > MAX_DEPTH {
             return at;
         }
+        // A picture at one side belongs to the blocks it is among: these start with none.
+        let outer = self.aside.take();
         let mut i = 0usize;
         while let Some(block) = list.get(i) {
             if self.full {
                 break;
             }
             let mut step = 1usize;
+            // Only plain paragraphs stand beside a picture; anything else starts below it.
+            if !matches!(block, Block::Para(p) if p.frame.is_none()) {
+                at = self.below_aside(at);
+            }
             match block {
                 Block::Para(para) => match &para.frame {
                     Some(frame) => {
@@ -921,6 +1030,8 @@ impl<'f, 'l> Flow<'f, 'l> {
             }
             i += step;
         }
+        at = self.below_aside(at);
+        self.aside = outer;
         at
     }
 

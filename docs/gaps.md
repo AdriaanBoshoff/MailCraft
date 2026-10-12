@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 28 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 29 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -34,8 +34,7 @@
    and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
-   text, lists, borders and tables; pictures the message carries are drawn; not yet: text beside a picture at the side (it is
-   printed in the line), pictures on a server (never fetched; their place is named), kerning,
+   text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
    complex-script shaping and right-to-left text, Table Style and other print styles, page setup
    beyond A4 and Letter (margins, headers and footers, orientation), sending pages to a printer,
    print preview, and any comparison with what Outlook prints.
@@ -72,6 +71,7 @@
 
 ## Revision history
 
+- 29 · 2026-10-12 — text beside side pictures and kerning in print (item 3).
 - 28 · 2026-10-12 — opening a link after a question (item 3).
 - 27 · 2026-10-12 — fills behind blocks and padding on each side (item 3).
 - 26 · 2026-10-12 — RTF list numbers from the list tables (item 3).

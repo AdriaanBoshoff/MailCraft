@@ -7,9 +7,11 @@
 //!
 //! Fonts are the installed ones, found by name ([`mailcraft_fonts`]); a face that may not be
 //! put into a document is passed over for the next name. Text is set one character to one
-//! glyph, left to right: there is no shaping, no kerning and no right-to-left setting yet.
-//! Pictures stand in the line of text at the size the body asks for; the caller says how large
-//! each is and draws it.
+//! glyph, left to right, with the pairs a face kerns standing as close as it says: there is
+//! no shaping and no right-to-left setting yet.
+//! Pictures stand in the line of text at the size the body asks for, or at one side with the
+//! text beside them where the body asks for that; the caller says how large each is and draws
+//! it.
 //!
 //! Everything in a body is hostile: sizes, widths, spans and nesting are capped, and so are the
 //! pages and the glyphs one message may take.
@@ -122,6 +124,9 @@ pub struct Text {
     pub glyphs: Vec<(u16, char)>,
     /// The width the glyphs take.
     pub width: f32,
+    /// Kerning: how much further than its own width each glyph moves on before the next,
+    /// less than nothing for a pair that stands closer. Empty when no glyph is moved.
+    pub kerns: Vec<f32>,
     /// The face has no bold of its own: the glyphs are to be thickened.
     pub bold: bool,
     /// The face has no italic of its own: the glyphs are to be leant.
