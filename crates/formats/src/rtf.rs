@@ -29,6 +29,9 @@ const MAX_CELL_PADDING: i32 = 64;
 /// Widest border line kept, in pixels, and the most rows one merged cell covers.
 const MAX_EDGE: u8 = 12;
 const MAX_ROW_SPAN: u16 = 1000;
+/// The most columns one cell merged across covers, and how deep tables stand in tables.
+const MAX_SPAN: u16 = 64;
+const MAX_NEST: u8 = 8;
 /// Places for attachments one body may keep.
 const MAX_OBJECTS: usize = 256;
 /// Longest side a picture may ask to be shown at, in pixels.
@@ -118,6 +121,43 @@ struct CellDef {
     fill: Option<Rgb>,
     valign: VAlign,
     merge: Merge,
+    across: Across,
+}
+
+/// A cell's part in a cell merged across several columns (`\clmgf`, `\clmrg`).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Across {
+    #[default]
+    None,
+    First,
+    Next,
+}
+
+/// The row being defined (`\trowd` and what follows it): its cells, the one whose settings are
+/// being read, and the side of it border words apply to.
+#[derive(Default)]
+struct RowDef {
+    defs: Vec<CellDef>,
+    def: CellDef,
+    side: Option<usize>,
+    /// Half the room between the text of two cells, in twips.
+    half_gap: i32,
+}
+
+/// A table being read: finished rows, the open row's cells, the open cell's blocks.
+#[derive(Default)]
+struct Level {
+    rows: Vec<Vec<Cell>>,
+    row: Vec<Cell>,
+    cell: Vec<Block>,
+    /// For each finished row, each cell's right edge and its part in a cell merged down.
+    merges: Vec<Vec<(i32, Merge)>>,
+    merging: Vec<(i32, Merge)>,
+    /// Cells of the open row that have ended, those merged into the one before them too.
+    seen: usize,
+    /// Cells of the open row of a table inside a cell: such a row is defined after its cells
+    /// (`\nesttableprops`), so they wait for it.
+    waiting: Vec<Vec<Block>>,
 }
 
 /// A cell's part in a cell merged down several rows.
@@ -139,6 +179,10 @@ struct Chars {
     align: Align,
     indent: u8,
     in_table: bool,
+    /// How many tables deep the paragraph is (`\itap`); 0 where it does not say.
+    itap: u8,
+    /// Inside `\nesttableprops`: the row defined here is one of a table inside a cell.
+    nest_props: bool,
 }
 
 #[derive(Default)]
@@ -146,20 +190,14 @@ struct Builder<'a> {
     /// Who gives the shapes of the letters in a drawing, when anybody does.
     letters: Option<&'a dyn Lettering>,
     blocks: Vec<Block>,
-    /// The table being read: finished rows, the open row's cells, the open cell's blocks.
-    rows: Vec<Vec<Cell>>,
-    row: Vec<Cell>,
-    cell: Vec<Block>,
-    /// For each finished row, each cell's right edge and its part in a cell merged down.
-    merges: Vec<Vec<(i32, Merge)>>,
-    merging: Vec<(i32, Merge)>,
-    /// The cells of the row being defined, the one whose settings are being read, and the side
-    /// of it border words apply to.
-    defs: Vec<CellDef>,
-    def: CellDef,
-    side: Option<usize>,
-    /// Half the room between the text of two cells of the row being defined, in twips.
-    half_gap: i32,
+    /// The table being read, and the tables inside its open cell, each inside the one before.
+    table: Level,
+    nested: Vec<Level>,
+    /// The row being defined, of the table and of a table inside a cell, and which of them
+    /// the words being read define.
+    outer: RowDef,
+    inner: RowDef,
+    inner_now: bool,
     pict: Option<Pict>,
     written: Vec<Arc<[u8]>>,
     written_bytes: usize,
@@ -275,7 +313,7 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
         reader.count_text(!matches!(scope.cur.dest, Dest::Skip | Dest::Picture));
     }
     b.end_picture();
-    b.end_para(&scope.cur, false, false);
+    b.end_para(&scope.cur, 0, false);
     b.end_table();
     // Empty paragraphs at the end are the writer's, not the reader's.
     while matches!(b.blocks.last(), Some(Block::Para(p)) if p.text().trim().is_empty() && p.runs.iter().all(|r| r.picture.is_none())) {
@@ -287,6 +325,7 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
 impl Builder<'_> {
     fn word(&mut self, cur: &mut Chars, word: &str, param: Option<i32>, star: bool) {
         let on = param != Some(0);
+        self.inner_now = cur.nest_props;
         let color = |colors: &[Option<Rgb>]| usize::try_from(param.unwrap_or(0)).ok().and_then(|i| colors.get(i).copied()).flatten();
         match word {
             "fonttbl" => cur.dest = Dest::Fonts,
@@ -297,6 +336,10 @@ impl Builder<'_> {
             }
             // The picture a reader of this RTF version shows (the other one, `\nonshppict`, is skipped).
             "shppict" => {}
+            // A row of a table inside a cell is defined here, after its cells.
+            "nesttableprops" => cur.nest_props = true,
+            // What a reader that knows no tables inside cells is given in their place.
+            "nonesttables" => cur.dest = Dest::Skip,
             "pict" if cur.hidden => cur.dest = Dest::Skip,
             "pict" => {
                 self.end_picture();
@@ -333,12 +376,13 @@ impl Builder<'_> {
                 cur.style = Style { link: cur.style.link.take(), ..Style::default() };
                 cur.hidden = false;
             }
-            "par" | "sect" | "page" => self.end_para(cur, cur.in_table, true),
+            "par" | "sect" | "page" => self.end_para(cur, depth(cur), true),
             "line" => self.text("\n", &cur.style),
             "pard" => {
                 cur.align = Align::Left;
                 cur.indent = 0;
                 cur.in_table = false;
+                cur.itap = 0;
             }
             "ql" | "qj" => cur.align = Align::Left,
             "qc" => cur.align = Align::Center,
@@ -346,104 +390,129 @@ impl Builder<'_> {
             // Twips; half an inch is one level.
             "li" => cur.indent = u8::try_from((param.unwrap_or(0).max(0) / 720).min(8)).unwrap_or(0),
             "intbl" => cur.in_table = true,
-            "trowd" => {
-                self.defs.clear();
-                self.def = CellDef::default();
-                self.side = None;
-                self.half_gap = 0;
-            }
-            "trgaph" => self.half_gap = param.unwrap_or(0),
+            "itap" => cur.itap = u8::try_from(param.unwrap_or(1).clamp(0, i32::from(MAX_NEST))).unwrap_or(1),
+            "trowd" => *self.def() = RowDef::default(),
+            "trgaph" => self.def().half_gap = param.unwrap_or(0),
             // A cell's settings come before the `\cellx` that gives its right edge.
             "cellx" => {
-                let mut def = CellDef { right: param.unwrap_or(0), ..std::mem::take(&mut self.def) };
+                let row = self.def();
+                let mut def = CellDef { right: param.unwrap_or(0), ..std::mem::take(&mut row.def) };
                 // A double line is two lines of the width given with as much room between them.
                 for edge in def.edges.iter_mut().filter(|e| e.line == Line::Double) {
                     edge.width = edge.width.saturating_mul(3).min(MAX_EDGE);
                 }
-                if self.defs.len() < MAX_EDGES {
-                    self.defs.push(def);
+                if row.defs.len() < MAX_EDGES {
+                    row.defs.push(def);
                 }
-                self.side = None;
+                row.side = None;
             }
             "cell" => {
-                self.end_para(cur, true, false);
-                let blocks = std::mem::take(&mut self.cell);
-                let def = self.defs.get(self.row.len()).copied().unwrap_or_default();
-                // 15 twips to the pixel.
-                let left = self.row.len().checked_sub(1).and_then(|i| self.defs.get(i)).map_or(0, |d| d.right);
-                let width = u16::try_from((def.right.saturating_sub(left) / 15).clamp(0, 4096)).unwrap_or(0);
-                let mut edges = def.edges;
-                // Cells that touch share the line between them: it is drawn once.
-                if let (Some(before), Some(own)) = (self.row.last().and_then(|c| c.edges), edges.get_mut(3))
-                    && before.get(1).is_some_and(|e| e.width > 0)
-                {
-                    own.width = 0;
-                }
-                if let (Some(top), Some(above)) = (edges.first_mut(), self.rows.last())
-                    && !above.is_empty()
-                    && above.iter().all(|c| c.edges.is_some_and(|e| e.get(2).is_some_and(|e| e.width > 0)))
-                {
-                    top.width = 0;
-                }
-                self.merging.push((def.right, def.merge));
-                let beside = u16::try_from((self.half_gap / 15).clamp(i32::from(CELL_PADDING), MAX_CELL_PADDING)).unwrap_or(CELL_PADDING);
-                self.row.push(Cell {
-                    blocks,
-                    span: 1,
-                    width,
-                    padding: Some((1, beside)),
-                    background: def.fill,
-                    valign: def.valign,
-                    edges: any_edge(&edges).then_some(edges),
-                    ..Cell::default()
-                });
+                self.end_para(cur, 1, false);
+                let blocks = std::mem::take(&mut self.table.cell);
+                self.table.end_cell(blocks, &self.outer);
             }
-            "row" => self.end_row(),
+            // The end of a cell of a table inside a cell (RTF 1.9.1, "Nested Tables").
+            "nestcell" => {
+                self.end_para(cur, depth(cur).max(2), false);
+                if let Some(level) = self.nested.last_mut() {
+                    let blocks = std::mem::take(&mut level.cell);
+                    let full = level.waiting.len() >= MAX_EDGES;
+                    match level.waiting.last_mut() {
+                        Some(last) if full => last.extend(blocks),
+                        _ => level.waiting.push(blocks),
+                    }
+                }
+            }
+            "nestrow" => {
+                if let Some(level) = self.nested.last_mut() {
+                    level.end_row(&self.inner);
+                }
+                self.inner = RowDef::default();
+            }
+            "row" => {
+                self.settle(1);
+                self.table.end_row(&RowDef::default());
+            }
             // The sides of a cell, in the order the model keeps them: top, right, bottom, left.
-            "clbrdrt" => self.side = Some(0),
-            "clbrdrr" => self.side = Some(1),
-            "clbrdrb" => self.side = Some(2),
-            "clbrdrl" => self.side = Some(3),
+            "clbrdrt" => self.def().side = Some(0),
+            "clbrdrr" => self.def().side = Some(1),
+            "clbrdrb" => self.def().side = Some(2),
+            "clbrdrl" => self.def().side = Some(3),
             // Borders of rows and of paragraphs are not a cell's.
             "trbrdrt" | "trbrdrl" | "trbrdrb" | "trbrdrr" | "trbrdrh" | "trbrdrv" | "brdrt" | "brdrb" | "brdrl" | "brdrr" | "brdrbtw" | "brdrbar"
-            | "box" | "chbrdr" | "cldglu" | "cldgll" => self.side = None,
+            | "box" | "chbrdr" | "cldglu" | "cldgll" => self.def().side = None,
             "brdrs" | "brdrth" | "brdrsh" | "brdrhair" | "brdrinset" | "brdroutset" => self.edge(|e| e.line = Line::Solid),
             "brdrdb" => self.edge(|e| e.line = Line::Double),
             "brdrdot" => self.edge(|e| e.line = Line::Dotted),
             "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" => self.edge(|e| e.line = Line::Dashed),
             "brdrnone" | "brdrnil" | "brdrtbl" => {
-                if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+                let row = self.def();
+                if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
                     *edge = Edge::default();
                 }
-                self.side = None;
+                row.side = None;
             }
             // Twips, 15 to the pixel; a line is never thinner than one pixel.
             "brdrw" => {
                 let width = u8::try_from(((param.unwrap_or(0).max(0) + 7) / 15).clamp(1, i32::from(MAX_EDGE))).unwrap_or(1);
-                if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+                let row = self.def();
+                if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
                     edge.width = width;
                 }
             }
             "brdrcf" => {
                 let rgb = color(&self.colors);
-                if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+                let row = self.def();
+                if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
                     edge.color = rgb;
                 }
             }
-            "clcbpat" => self.def.fill = color(&self.colors),
-            "clvertalt" => self.def.valign = VAlign::Top,
-            "clvertalc" => self.def.valign = VAlign::Middle,
-            "clvertalb" => self.def.valign = VAlign::Bottom,
-            "clvmgf" => self.def.merge = Merge::First,
-            "clvmrg" => self.def.merge = Merge::Under,
+            "clcbpat" => {
+                let rgb = color(&self.colors);
+                self.def().def.fill = rgb;
+            }
+            "clvertalt" => self.def().def.valign = VAlign::Top,
+            "clvertalc" => self.def().def.valign = VAlign::Middle,
+            "clvertalb" => self.def().def.valign = VAlign::Bottom,
+            "clvmgf" => self.def().def.merge = Merge::First,
+            "clvmrg" => self.def().def.merge = Merge::Under,
+            "clmgf" => self.def().def.across = Across::First,
+            "clmrg" => self.def().def.across = Across::Next,
             _ if star || is_skipped_destination(word) => cur.dest = Dest::Skip,
             _ => {}
         }
     }
 
+    /// The row the words being read define.
+    fn def(&mut self) -> &mut RowDef {
+        if self.inner_now { &mut self.inner } else { &mut self.outer }
+    }
+
+    /// The cell that is open in the innermost open table.
+    fn open_cell(&mut self) -> &mut Vec<Block> {
+        match self.nested.last_mut() {
+            Some(level) => &mut level.cell,
+            None => &mut self.table.cell,
+        }
+    }
+
+    /// Make the open tables agree with a paragraph that is `depth` tables deep: tables deeper
+    /// than that have ended and stand in the cell they were in; tables not yet begun begin.
+    fn settle(&mut self, depth: usize) {
+        while self.nested.len() + 1 > depth.max(1) {
+            let Some(done) = self.nested.pop() else { break };
+            let blocks = done.finish();
+            self.open_cell().extend(blocks);
+        }
+        while self.nested.len() + 1 < depth.min(usize::from(MAX_NEST)) {
+            self.nested.push(Level::default());
+        }
+    }
+
     /// Set the kind of line of the side of the cell that border words apply to now.
     fn edge(&mut self, set: impl Fn(&mut Edge)) {
-        if let Some(edge) = self.side.and_then(|side| self.def.edges.get_mut(side)) {
+        let row = self.def();
+        if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
             set(edge);
             edge.width = edge.width.max(1);
         }
@@ -575,8 +644,10 @@ impl Builder<'_> {
         }
     }
 
-    /// Close the open paragraph. `blank` keeps one with nothing in it, as the empty line it is.
-    fn end_para(&mut self, cur: &Chars, in_table: bool, blank: bool) {
+    /// Close the open paragraph, which is `depth` tables deep. `blank` keeps one with nothing
+    /// in it, as the empty line it is.
+    fn end_para(&mut self, cur: &Chars, depth: usize, blank: bool) {
+        self.settle(depth);
         let mut runs = std::mem::take(&mut self.runs);
         if runs.is_empty() {
             if !blank {
@@ -585,8 +656,8 @@ impl Builder<'_> {
             runs.push(text_run("\u{a0}", Style::default()));
         }
         let para = Block::Para(Para { runs, kind: ParaKind::Body, align: cur.align, indent: cur.indent, ..Para::default() });
-        if in_table {
-            self.cell.push(para);
+        if depth > 0 {
+            self.open_cell().push(para);
         } else {
             self.end_table();
             self.blocks.push(para);
@@ -597,11 +668,86 @@ impl Builder<'_> {
         }
     }
 
-    fn end_row(&mut self) {
+    fn end_table(&mut self) {
+        self.settle(0);
+        let table = std::mem::take(&mut self.table);
+        self.blocks.extend(table.finish());
+    }
+}
+
+/// How many tables deep a paragraph is: none, or one where it says no more than that it is in
+/// a table.
+fn depth(cur: &Chars) -> usize {
+    if cur.in_table { usize::from(cur.itap.clamp(1, MAX_NEST)) } else { 0 }
+}
+
+impl Level {
+    /// End a cell of the open row: `blocks` is what it holds, `props` the row as it is defined.
+    fn end_cell(&mut self, blocks: Vec<Block>, props: &RowDef) {
+        let at = self.seen;
+        self.seen = self.seen.saturating_add(1);
+        let def = props.defs.get(at).copied().unwrap_or_default();
+        // 15 twips to the pixel.
+        let left = at.checked_sub(1).and_then(|i| props.defs.get(i)).map_or(0, |d| d.right);
+        let width = u16::try_from((def.right.saturating_sub(left) / 15).clamp(0, 4096)).unwrap_or(0);
+        // A cell merged into the one before it (`\clmrg`) makes that one a column wider: what it
+        // holds, its width and the line at its right go to the whole.
+        if def.across == Across::Next
+            && let Some(first) = self.row.last_mut()
+            && first.span < MAX_SPAN
+        {
+            first.span += 1;
+            first.width = first.width.saturating_add(width).min(4096);
+            first.blocks.extend(blocks);
+            if let Some(right) = def.edges.get(1).filter(|e| e.width > 0) {
+                let whole = first.edges.get_or_insert_with(Edges::default);
+                if let Some(side) = whole.get_mut(1) {
+                    *side = *right;
+                }
+            }
+            if let Some(last) = self.merging.last_mut() {
+                last.0 = def.right;
+            }
+            return;
+        }
+        let mut edges = def.edges;
+        // Cells that touch share the line between them: it is drawn once.
+        if let (Some(before), Some(own)) = (self.row.last().and_then(|c| c.edges), edges.get_mut(3))
+            && before.get(1).is_some_and(|e| e.width > 0)
+        {
+            own.width = 0;
+        }
+        if let (Some(top), Some(above)) = (edges.first_mut(), self.rows.last())
+            && !above.is_empty()
+            && above.iter().all(|c| c.edges.is_some_and(|e| e.get(2).is_some_and(|e| e.width > 0)))
+        {
+            top.width = 0;
+        }
+        self.merging.push((def.right, def.merge));
+        let beside = u16::try_from((props.half_gap / 15).clamp(i32::from(CELL_PADDING), MAX_CELL_PADDING)).unwrap_or(CELL_PADDING);
+        self.row.push(Cell {
+            blocks,
+            span: 1,
+            width,
+            padding: Some((1, beside)),
+            background: def.fill,
+            valign: def.valign,
+            edges: any_edge(&edges).then_some(edges),
+            ..Cell::default()
+        });
+    }
+
+    /// End the open row. Cells that waited for the row to be defined are ended as `props` has
+    /// them.
+    fn end_row(&mut self, props: &RowDef) {
+        for blocks in std::mem::take(&mut self.waiting) {
+            self.end_cell(blocks, props);
+        }
         if !self.cell.is_empty() {
             let blocks = std::mem::take(&mut self.cell);
             self.row.push(Cell { blocks, span: 1, ..Cell::default() });
         }
+        self.seen = 0;
         let merging = std::mem::take(&mut self.merging);
         if !self.row.is_empty() {
             self.rows.push(std::mem::take(&mut self.row));
@@ -651,19 +797,16 @@ impl Builder<'_> {
         }
     }
 
-    fn end_table(&mut self) {
-        self.end_row();
+    /// The table as it stands where it was written: a table, or the paragraphs of its cells
+    /// when it has only one column, which is only layout.
+    fn finish(mut self) -> Vec<Block> {
+        self.end_row(&RowDef::default());
         self.merge_down();
         if self.rows.is_empty() {
-            return;
+            return Vec::new();
         }
         let table = Table { rows: std::mem::take(&mut self.rows), padding: CELL_PADDING, snug: true, ..Table::default() };
-        if table.columns() > 1 {
-            self.blocks.push(Block::Table(table));
-        } else {
-            // One column is only layout: its paragraphs read as ordinary ones.
-            self.blocks.extend(table.rows.into_iter().flatten().flat_map(|cell| cell.blocks));
-        }
+        if table.columns() > 1 { vec![Block::Table(table)] } else { table.rows.into_iter().flatten().flat_map(|cell| cell.blocks).collect() }
     }
 }
 

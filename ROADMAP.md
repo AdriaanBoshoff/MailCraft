@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 29 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 30 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 161, all passing |
+| Tests | 164, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -64,7 +64,8 @@
     filled shapes and text are drawn.
 15. Done: an attachment that stands in the text is a card there, with its name and size.
 16. Done: pictures written as bytes (`\bin`) are read.
-17. Next: nested tables and cells merged across in RTF bodies.
+17. Done: tables inside the cells of tables, and cells merged across, in RTF bodies.
+18. Next: paragraph spacing, tab stops and paragraph borders in RTF bodies.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -332,4 +333,15 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   between hex digits and bytes, or with more than a body may keep, leaves its place and
   nothing is kept of it. Nothing here goes beyond Outlook: this is a case it reads and
   MailCraft did not.
+- **2026-10-12** - M2.27: an RTF body's tables may stand inside the cells of other tables
+  (RTF 1.9.1, "Nested Tables": `\itapN`, `\nestcell`, and a row defined after its cells in
+  `{\*\nesttableprops ... \nestrow}`), and cells merged across (`\clmgf`, `\clmrg`) are one
+  cell as wide as all of them, with the left line of the first and the right line of the last.
+  Before, an inner table's cells were lost into the text of the outer cell and a merged cell
+  was drawn as its parts. An inner row's settings never touch the outer row's, the paragraph
+  end written for readers that know no nested tables (`\nonesttables`) is passed over, and a
+  cell holds its paragraphs and tables in the order they were written. Tables stand at most 8
+  deep and a cell spans at most 64 columns; an inner table nothing closes ends with the cell
+  it is in. The sample receipt has a row merged across and a table in a cell. Nothing here
+  goes beyond Outlook: these are cases it reads and MailCraft did not.
 

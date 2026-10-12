@@ -157,7 +157,7 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     let doc = ui.body_doc().unwrap();
     assert!(
         doc.blocks.iter().any(
-            |b| matches!(b, mailcraft_formats::rich::Block::Table(t) if t.rows.len() == 3 && t.rows.iter().flatten().all(|c| c.edges.is_some()))
+            |b| matches!(b, mailcraft_formats::rich::Block::Table(t) if t.rows.len() == 5 && t.rows.iter().flatten().all(|c| c.edges.is_some()))
         )
     );
     assert!(doc.text().contains("parking.example.net/help"));

@@ -60,8 +60,13 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard\\qc\\b\\fs32\\cf1 Riverside Car Park\\b0\\fs20\\cf0\\par\r\n\
 \\pard Receipt for permit {\\f1 RP-20418}, paid by card. Thank you.\\par\\par\r\n\
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl\\b Item\\cell Amount\\b0\\cell\\row\r\n\
+\\trowd\\clmgf\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clmrg\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl\\i October, car park B\\i0\\cell\\cell\\row\r\n\
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl Monthly permit, bay 14\\cell 62.00\\cell\\row\r\n\
 \\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\intbl {\\highlight2 Total paid}\\cell {\\b 62.00}\\cell\\row\r\n\
+\\trowd\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx4200\\clbrdrt\\brdrs\\clbrdrb\\brdrs\\cellx6000\\pard\\intbl Paid:\\par\r\n\
+\\pard\\intbl\\itap2 By\\nestcell card ending 4417\\nestcell{\\*\\nesttableprops\\trowd\\clbrdrb\\brdrs\\cellx900\\clbrdrb\\brdrs\\cellx3600\\nestrow}{\\nonesttables\\par}\r\n\
+\\pard\\intbl\\itap2 On\\nestcell 3 October\\nestcell{\\*\\nesttableprops\\trowd\\cellx900\\cellx3600\\nestrow}{\\nonesttables\\par}\r\n\
+\\pard\\intbl\\cell\\pard\\intbl\\cell\\row\r\n\
 \\pard\\par\\li720 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
 \\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\
 \\pard\\par\\qc \\objattph\\'20\\par\r\n\

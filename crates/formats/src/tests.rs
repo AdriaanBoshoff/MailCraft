@@ -1807,3 +1807,134 @@ fn rtf_pictures_written_as_bytes_are_kept() {
     assert_eq!(doc.written.len(), 1);
     assert_eq!(&doc.written[0][..2], b"BM");
 }
+
+#[test]
+fn rtf_cells_merged_across_are_one_cell() {
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi\
+          \\trowd\\clmgf\\clbrdrl\\brdrs\\cellx1500\\clmrg\\cellx3000\\clmrg\\clbrdrr\\brdrs\\brdrw30\\cellx4500\\cellx6000\\intbl head\\cell\\cell\\cell x\\cell\\row\
+          \\trowd\\cellx1500\\cellx3000\\cellx4500\\cellx6000\\intbl a\\cell b\\cell c\\cell d\\cell\\row\
+          \\trowd\\clmrg\\cellx1500\\clvmgf\\clmgf\\cellx3000\\clmrg\\cellx4500\\cellx6000\\intbl e\\cell f\\cell\\cell g\\cell\\row\
+          \\trowd\\cellx1500\\clvmrg\\clmgf\\cellx3000\\clmrg\\cellx4500\\cellx6000\\intbl h\\cell\\cell\\cell i\\cell\\row\\pard after\\par}",
+    );
+    let t = tables(&doc)[0];
+    // Three cells are one that is three columns wide, with the line at the right of the last.
+    let head = &t.rows[0][0];
+    assert_eq!((head.span, head.width), (3, 300));
+    assert_eq!(head.edges.map(|e| e.map(|e| e.width)), Some([0, 2, 0, 1]));
+    assert_eq!(
+        t.rows.iter().map(|r| r.iter().map(|c| c.span).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        [vec![3, 1], vec![1, 1, 1, 1], vec![1, 2, 1], vec![1, 1]]
+    );
+    assert_eq!(t.columns(), 4);
+    // A cell that continues nothing (the first of a row) is a cell of its own.
+    assert_eq!(paras_text(&t.rows[2][0]), "e");
+    // A cell merged across and down is one cell over both.
+    assert_eq!((t.rows[2][1].span, t.rows[2][1].rows), (2, 2));
+    assert_eq!(t.places(), [vec![0, 3], vec![0, 1, 2, 3], vec![0, 1, 3], vec![0, 3]]);
+    assert_eq!(doc.text(), "head\tx\na\tb\tc\td\ne\tf\tg\nh\ti\nafter");
+}
+
+fn paras_text(cell: &crate::rich::Cell) -> String {
+    Doc { blocks: cell.blocks.clone(), ..Doc::default() }.text()
+}
+
+#[test]
+fn rtf_tables_stand_in_the_cells_of_tables() {
+    // As Word writes it (RTF 1.9.1, "Nested Tables"): the cells of the inner table end with
+    // \nestcell, its row is defined after them, and a reader that knows none of this is given
+    // a paragraph end in \nonesttables.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\colortbl;\\red204\\green0\\blue0;}\
+          \\trowd\\trgaph108\\clbrdrt\\brdrs\\cellx3000\\cellx6000\
+          \\pard\\intbl before\\par\
+          \\pard\\intbl\\itap2 one\\nestcell two\\nestcell\\nestcell\
+          {\\*\\nesttableprops\\trowd\\trgaph30\\clcbpat1\\clbrdrb\\brdrs\\brdrw30\\cellx1000\\clmgf\\cellx2000\\clmrg\\cellx2500\\nestrow}{\\nonesttables\\par}\
+          \\pard\\intbl\\itap2 three\\nestcell four\\nestcell\\nestcell\
+          {\\*\\nesttableprops\\trowd\\cellx1000\\cellx2000\\cellx2500\\nestrow}{\\nonesttables\\par}\
+          \\pard\\intbl after\\cell right\\cell\\row\
+          \\pard below\\par}",
+    );
+    let outer = tables(&doc)[0];
+    assert_eq!(outer.rows.len(), 1);
+    assert_eq!(doc.text(), "before one\ttwo three\tfour\t after\tright\nbelow");
+    // The row of the outer table keeps its own settings: the inner rows did not take them.
+    let cell = &outer.rows[0][0];
+    assert_eq!((cell.width, cell.padding, cell.edges.map(|e| e.map(|e| e.width))), (200, Some((1, 7)), Some([1, 0, 0, 0])));
+    assert_eq!(outer.rows[0][1].width, 200);
+    // What the cell holds, in the order it was written: a paragraph, the table, a paragraph.
+    let kinds: Vec<&str> = cell.blocks.iter().map(|b| if matches!(b, Block::Table(_)) { "table" } else { "para" }).collect();
+    assert_eq!(kinds, ["para", "table", "para"]);
+    let Some(Block::Table(inner)) = cell.blocks.get(1) else { panic!("{cell:?}") };
+    // The inner rows are as they were defined after their cells.
+    assert_eq!(
+        inner.rows.iter().map(|r| r.iter().map(|c| (c.span, c.width)).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        [vec![(1, 66), (2, 99)], vec![(1, 66), (1, 66), (1, 33)]]
+    );
+    let one = &inner.rows[0][0];
+    assert_eq!((one.background, one.padding, one.edges.map(|e| e.map(|e| e.width))), (Some([204, 0, 0]), Some((1, 2)), Some([0, 0, 2, 0])));
+
+    // Three deep, and a table that ends with its cell where nothing says so.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\trowd\\cellx3000\\cellx6000\\pard\\intbl\\itap3 deep\\nestcell deeper\\nestcell\
+          {\\*\\nesttableprops\\trowd\\cellx500\\cellx900\\nestrow}\
+          \\pard\\intbl\\itap2 mid\\nestcell dle\\nestcell{\\*\\nesttableprops\\trowd\\cellx1000\\cellx2000\\nestrow}\
+          \\pard\\intbl\\itap2 open\\nestcell ended\\cell last\\cell\\row}",
+    );
+    let outer = tables(&doc)[0];
+    let Some(Block::Table(mid)) = outer.rows[0][0].blocks.first() else { panic!("{outer:?}") };
+    assert!(matches!(mid.rows[0][0].blocks.first(), Some(Block::Table(deep)) if deep.rows[0].len() == 2), "{mid:?}");
+    assert_eq!(paras_text(&mid.rows[0][0]), "deep\tdeeper\nmid");
+    assert_eq!(mid.rows.len(), 2, "the row that was never defined is still a row: {mid:?}");
+    assert_eq!(doc.text(), "deep\tdeeper mid\tdle open ended\tlast");
+}
+
+#[test]
+fn hostile_rtf_nested_and_merged_tables_never_panic() {
+    let mut bodies: Vec<String> = vec![
+        // Ends without their beginnings, a definition with nothing to define, levels out of any range.
+        "{\\rtf1\\nestcell\\nestrow{\\*\\nesttableprops\\trowd\\cellx5\\nestrow}\\itap-5\\itap2147483647 a\\nestcell\\par}".into(),
+        "{\\rtf1\\trowd\\clmrg\\cellx1\\clmrg\\cellx2\\intbl\\cell\\cell\\cell\\row\\clmrg\\clmgf\\nestrow\\row\\cell}".into(),
+        // A definition that never closes, and one inside another.
+        "{\\rtf1\\intbl\\itap2 a\\nestcell{\\*\\nesttableprops\\trowd\\cellx9{\\*\\nesttableprops\\trowd\\cellx1\\nestrow} b\\cell".into(),
+        // The outer row is defined inside the definition of an inner one.
+        "{\\rtf1{\\*\\nesttableprops\\trowd\\cellx100\\cellx200}\\intbl a\\cell b\\cell\\row}".into(),
+    ];
+    // More cells merged into one than a cell may span, and more cells waiting than a row has.
+    let mut wide = String::from("{\\rtf1\\trowd\\clmgf\\cellx10");
+    for i in 0..500 {
+        wide.push_str(&format!("\\clmrg\\cellx{}", 20 + i));
+    }
+    wide.push_str("\\intbl a");
+    wide.push_str(&"\\cell x".repeat(500));
+    wide.push_str("\\row\\pard\\intbl\\itap2 ");
+    wide.push_str(&"n\\nestcell ".repeat(5000));
+    wide.push_str("{\\*\\nesttableprops\\trowd\\cellx1\\nestrow}\\cell\\row}");
+    bodies.push(wide);
+    // Deeper and deeper, then shallower, with nothing ever closed.
+    let mut deep = String::from("{\\rtf1 ");
+    for i in 0..3000 {
+        deep.push_str(&format!("\\intbl\\itap{} t\\nestcell\\par ", i % 400));
+    }
+    bodies.push(deep);
+    for body in &bodies {
+        let doc = crate::rtf::parse(body.as_bytes());
+        let _ = doc.text();
+        fn check(blocks: &[Block], depth: usize) {
+            assert!(depth <= 9, "tables stand no deeper than they may");
+            for block in blocks {
+                if let Block::Table(t) = block {
+                    for cell in t.rows.iter().flatten() {
+                        assert!((1..=64).contains(&cell.span));
+                        check(&cell.blocks, depth + 1);
+                    }
+                    let _ = (t.columns(), t.places());
+                }
+            }
+        }
+        check(&doc.blocks, 0);
+    }
+    // The widest merged cell is as wide as a cell may be, and the cells after it are cells.
+    let doc = crate::rtf::parse(bodies[4].as_bytes());
+    assert_eq!(tables(&doc)[0].rows[0][0].span, 64);
+}

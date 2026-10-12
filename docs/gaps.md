@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 19 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 20 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -30,9 +30,9 @@
    lines, curves, filled shapes and text in an installed font, [MS-WMF] 2.3.3 and [MS-EMF] 2.3.5), attachments in their places in the text
    (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object by the best picture it has, [MS-OLEDS]
    2.3.4 and 2.3.6, any other as a card with its name and size that a click saves),
-   and tables with each cell's own lines, fill, place and merge down; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
-   (a placeholder), list numbering beyond the text the writer left, nested tables,
-   cells merged across, paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
+   and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet: a metafile with a bitmap beside its drawing, a patterned brush or text that needs shaping in it
+   (a placeholder), list numbering beyond the text the writer left,
+   paragraph borders, tab stops, paragraph spacing and Outlook's highlight colours. MailCraft never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn; not yet: text beside a picture at the side (it is
    printed in the line), pictures on a server (never fetched; their place is named), kerning,
@@ -72,6 +72,7 @@
 
 ## Revision history
 
+- 20 · 2026-10-12 — nested tables and cells merged across are read (item 3).
 - 19 · 2026-10-12 — pictures written as bytes (`\bin`) are read (item 3).
 - 18 · 2026-10-12 — an attachment in the text is a card with its name, size and caution (item 3).
 - 17 · 2026-10-12 — text in metafiles is drawn, and is the picture's own text (item 3).
