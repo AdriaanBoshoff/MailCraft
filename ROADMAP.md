@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 46 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 47 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 210, all passing |
+| Tests | 216, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -81,7 +81,8 @@
 30. Done: bitmaps beside a metafile's drawing.
 31. Done: M2 is closed; what it leaves is scheduled under "Do later (from M2)".
 32. Done: right-to-left text is drawn and printed in the order it is read, and Arabic letters are joined (M2.41).
-33. Next: shaping from the font's own tables in print (M2.42); then M3 (writing `.pst`).
+33. Done: print shapes text from each font's own tables, and a PDF says what its glyphs stand for (M2.42).
+34. Next: M3 (writing `.pst`).
 
 ## Do later (from M2)
 
@@ -91,7 +92,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Do later | When |
 |---|---|
 | ~~Right-to-left text (Hebrew, Arabic) in the right order, and Arabic letters joined, on screen and in print~~ | done: M2.41 |
-| Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts; Arabic joined by the font's tables and across a change of look; copying text out of a PDF in the order it is read) | **now**: M2.42, before M3 |
+| ~~Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts; Arabic joined by the font's tables and across a change of look; copying text out of a PDF in the order it is read)~~ | done: M2.42 |
+| Shaping for the text print sets itself: the name and page number at the head and foot of a page, list markers, the header's field names and values | M3b |
+| Copying text out of our PDFs tried in PDF readers (the file says what its glyphs stand for; no reader was tried) | M3b |
 | Right-to-left text in the message list, the header of the reading pane, folder names and the compose box (drawn there as stored, so Hebrew and Arabic read backwards) | M3b |
 | For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
@@ -583,3 +586,25 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   on text we wrote and by looking at a Hebrew and Arabic message of ours on screen and on a
   printed page; Outlook's drawing of the same message was not compared, and nothing is claimed
   about it.
+- **2026-10-12** - M2.42: shaping in print. A stretch of text in one face, one look and one direction is
+  now handed whole to the face's own `GSUB` and `GPOS` tables (through `harfrust`, a Rust port
+  of HarfBuzz, MIT), in print, in the print preview and in a PDF: letters drawn as one glyph
+  are (fi, ffi), pairs stand as close as the font says, accents and vowel signs stand where the
+  font puts them, Arabic is joined by the font's own shapes with its marks placed, and scripts
+  that need their letters reordered or stacked (Devanagari, Thai) come out as the font draws
+  them. A stretch is shaped knowing the letters beside it, so Arabic joins across a change of
+  look (bold, colour) inside a word. A face with neither table, Arabic in a face that does not
+  join it, and any answer that is out of order or names a glyph the face has not got keep the
+  way of M2.41 (our own pairs and the presentation forms). Made better on the way: a PDF now
+  says what its glyphs stand for (`/ActualText`) wherever that is not the glyphs' own
+  characters one after another, and the pieces of a turned line are written in the order they
+  are read, so text copied from or searched in a PDF of Hebrew, Arabic or ligatures is the text
+  that was written; and a character the italic or bold face of a family lacks (Arial Italic has
+  no Arabic) is taken from the family's plain face, leant or thickened, where it was a box
+  before. Limits: a glyph is put no further from its place than twice its size and never
+  outside the line's room; a piece says at most 4,096 UTF-16 units. Not shaped yet, in "Do
+  later": the name and page number at the head and foot of a page, and list markers. Checked
+  by tests on fonts we make ourselves (with `GSUB` and `GPOS` tables written by the tests, and
+  300 damaged copies of them) and by looking at a printed page of our own text in Latin,
+  Arabic, Hebrew, Devanagari and Thai with the fonts installed here; no PDF reader's copying
+  was tried, and Outlook's printing of the same text was not compared.

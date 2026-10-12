@@ -4,7 +4,7 @@
 //!
 //! The file is laid out as the OpenType specification gives it ("Font file", and the tables
 //! `cmap`, `glyf`, `head`, `hhea`, `hmtx`, `loca`, `maxp`, `OS/2`; for pairs that stand closer
-//! together, `kern` or `GPOS`).
+//! together, `kern` or `GPOS`; for characters drawn with other glyphs than their own, `GSUB`).
 
 /// Font units to the em.
 pub const UNITS: u16 = 1000;
@@ -100,6 +100,119 @@ pub fn font_kerned(chars: &str, pairs: &[(char, char, i16)], gpos: bool) -> Vec<
     put(&mut table, &[1, sets]);
     put(&mut table, &firsts);
     build(chars, 0, vec![(*b"GPOS", table)])
+}
+
+/// A `GSUB` or `GPOS` table, version 1.0, of features that each have one lookup with one
+/// subtable: (the feature, the lookup's type, the subtable). One script, `DFLT`, whose default
+/// language system has them all ("OpenType Layout Common Table Formats").
+fn layout_table(mut features: Vec<([u8; 4], u16, Vec<u8>)>) -> Vec<u8> {
+    features.sort_by_key(|f| f.0);
+    let put = |table: &mut Vec<u8>, values: &[u16]| values.iter().for_each(|v| table.extend(v.to_be_bytes()));
+    let n = u16::try_from(features.len()).unwrap_or(0);
+    let mut table: Vec<u8> = Vec::new();
+    let (scripts, list) = (18 + 2 * n, 2 + 12 * n);
+    put(&mut table, &[1, 0, 10, 10 + scripts, 10 + scripts + list]);
+    put(&mut table, &[1]);
+    table.extend(b"DFLT");
+    put(&mut table, &[8, 4, 0, 0, 0xFFFF, n]);
+    put(&mut table, &(0..n).collect::<Vec<u16>>());
+    put(&mut table, &[n]);
+    for (i, (tag, ..)) in (0..n).zip(&features) {
+        table.extend(tag);
+        put(&mut table, &[2 + 6 * n + 6 * i]);
+    }
+    for i in 0..n {
+        put(&mut table, &[0, 1, i]);
+    }
+    put(&mut table, &[n]);
+    let mut at = 2 + 2 * n;
+    for (_, _, subtable) in &features {
+        put(&mut table, &[at]);
+        at += 8 + u16::try_from(subtable.len()).unwrap_or(0);
+    }
+    for (_, kind, subtable) in features {
+        put(&mut table, &[kind, 0, 1, 8]);
+        table.extend(subtable);
+    }
+    table
+}
+
+/// As [`font`], with tables of its own to shape text by. `drawn` is (a feature, the characters
+/// read, the character whose glyph they are drawn with): a `GSUB` feature with one lookup of
+/// type 4, so `("liga", "fi", X)` draws f and i as the glyph of X, and `("init", "b", Y)` draws
+/// b as the glyph of Y where the feature is asked for. `put` is (a character, to the right, up)
+/// in font units: where its glyph is drawn away from its place, as the `kern` feature of a
+/// `GPOS` table (a lookup of type 1).
+pub fn font_shaped(chars: &str, drawn: &[(&str, &str, char)], moved: &[(char, i16, i16)]) -> Vec<u8> {
+    let listed = listed(chars);
+    let glyph = |ch: char| listed.iter().position(|c| *c == ch).and_then(|at| u16::try_from(at + 1).ok());
+    let put = |table: &mut Vec<u8>, values: &[u16]| values.iter().for_each(|v| table.extend(v.to_be_bytes()));
+    let len = |bytes: &Vec<u8>| u16::try_from(bytes.len()).unwrap_or(0);
+    let mut tags: Vec<[u8; 4]> = Vec::new();
+    for (tag, ..) in drawn {
+        if let Ok(tag) = <[u8; 4]>::try_from(tag.as_bytes())
+            && !tags.contains(&tag)
+        {
+            tags.push(tag);
+        }
+    }
+    let mut gsub: Vec<([u8; 4], u16, Vec<u8>)> = Vec::new();
+    for tag in tags {
+        // (the glyphs read, the glyph drawn), by the first glyph read.
+        let mut rules: Vec<(Vec<u16>, u16)> = drawn
+            .iter()
+            .filter(|(t, ..)| t.as_bytes() == tag)
+            .filter_map(|(_, from, to)| Some((from.chars().map(glyph).collect::<Option<Vec<u16>>>().filter(|g| !g.is_empty())?, glyph(*to)?)))
+            .collect();
+        rules.sort_by_key(|r| r.0.first().copied());
+        let mut firsts: Vec<u16> = rules.iter().filter_map(|r| r.0.first().copied()).collect();
+        firsts.dedup();
+        let sets = u16::try_from(firsts.len()).unwrap_or(0);
+        let mut offsets: Vec<u16> = Vec::new();
+        let mut body: Vec<u8> = Vec::new();
+        for first in &firsts {
+            offsets.push(6 + 2 * sets + len(&body));
+            let of: Vec<&(Vec<u16>, u16)> = rules.iter().filter(|r| r.0.first() == Some(first)).collect();
+            let count = u16::try_from(of.len()).unwrap_or(0);
+            let mut set: Vec<u8> = Vec::new();
+            let mut starts: Vec<u16> = Vec::new();
+            for (from, to) in of {
+                starts.push(2 + 2 * count + len(&set));
+                put(&mut set, &[*to, u16::try_from(from.len()).unwrap_or(1)]);
+                put(&mut set, from.get(1..).unwrap_or_default());
+            }
+            put(&mut body, &[count]);
+            put(&mut body, &starts);
+            body.extend(set);
+        }
+        let mut sub: Vec<u8> = Vec::new();
+        put(&mut sub, &[1, 6 + 2 * sets + len(&body), sets]);
+        put(&mut sub, &offsets);
+        sub.extend(body);
+        put(&mut sub, &[1, sets]);
+        put(&mut sub, &firsts);
+        gsub.push((tag, 4, sub));
+    }
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = Vec::new();
+    if !gsub.is_empty() {
+        tables.push((*b"GSUB", layout_table(gsub)));
+    }
+    let mut places: Vec<(u16, i16, i16)> = moved.iter().filter_map(|(ch, dx, dy)| Some((glyph(*ch)?, *dx, *dy))).collect();
+    places.sort_unstable();
+    places.dedup_by_key(|p| p.0);
+    if !places.is_empty() {
+        // Format 2, each glyph with where it is put (value format 0x0003: across and up).
+        let count = u16::try_from(places.len()).unwrap_or(0);
+        let mut sub: Vec<u8> = Vec::new();
+        put(&mut sub, &[2, 8 + 4 * count, 0x0003, count]);
+        for (_, dx, dy) in &places {
+            put(&mut sub, &[*dx as u16, *dy as u16]);
+        }
+        put(&mut sub, &[1, count]);
+        put(&mut sub, &places.iter().map(|p| p.0).collect::<Vec<u16>>());
+        tables.push((*b"GPOS", layout_table(vec![(*b"kern", 1, sub)])));
+    }
+    build(chars, 0, tables)
 }
 
 fn build(chars: &str, fs_type: u16, more: Vec<([u8; 4], Vec<u8>)>) -> Vec<u8> {

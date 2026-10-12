@@ -168,6 +168,8 @@ fn edge(flow: &mut Flow, parts: &[String; 3], words: &[(String, String)], page: 
                 kerns: Vec::new(),
                 bold: pick.bold,
                 slant: pick.slant,
+                lift: 0.0,
+                actual: None,
             });
             x += advance;
         }

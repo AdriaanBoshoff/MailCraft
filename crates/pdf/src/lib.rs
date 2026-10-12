@@ -84,6 +84,9 @@ pub struct Piece<'a> {
     /// Kerning: how much further than its own width each glyph moves on before the next, in
     /// points. Empty, or shorter than the glyphs, where none is moved.
     pub kerns: &'a [f32],
+    /// What the glyphs say, where that is not their characters one after another (letters
+    /// drawn as one glyph, text written from the right): a reader finds and copies this.
+    pub actual: Option<&'a str>,
     /// Thicken the glyphs: the face has no bold of its own.
     pub bold: bool,
     /// Lean the glyphs: the face has no italic of its own.
@@ -264,6 +267,22 @@ impl Writer {
         let show = if kerned { format!("[{hex}] TJ") } else { format!("{hex} Tj") };
         let color = rgb(piece.color);
         let ops = &mut page.ops;
+        // The text the glyphs stand for, around the whole text object: in UTF-16 with its mark
+        // of order before it (14.9.4 replacement text, 7.9.2.2 text strings, 14.6 marked content).
+        if let Some(actual) = piece.actual {
+            ops.push_str("/Span << /ActualText <FEFF");
+            // Never half of a character that takes two units.
+            let mut units = 0usize;
+            for ch in actual.chars().take_while(|ch| {
+                units += ch.len_utf16();
+                units <= MAX_PIECE
+            }) {
+                for unit in ch.encode_utf16(&mut [0u16; 2]) {
+                    let _ = write!(ops, "{unit:04X}");
+                }
+            }
+            ops.push_str("> >> BDC ");
+        }
         let _ = write!(ops, "BT /F{} {} Tf {color} rg ", piece.font.0, num(size));
         if piece.bold {
             let _ = write!(ops, "{color} RG {} w 2 Tr ", num(size * 0.03));
@@ -271,7 +290,8 @@ impl Writer {
             ops.push_str("0 Tr ");
         }
         let lean = if piece.slant { "0.2" } else { "0" };
-        let _ = writeln!(ops, "1 0 {lean} 1 {} {} Tm {show} ET", num(piece.x), num(page.height - piece.baseline));
+        let closed = if piece.actual.is_some() { " EMC" } else { "" };
+        let _ = writeln!(ops, "1 0 {lean} 1 {} {} Tm {show} ET{closed}", num(piece.x), num(page.height - piece.baseline));
     }
 
     /// The finished file. `title` is what a reader's window shows for it.

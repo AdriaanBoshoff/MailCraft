@@ -40,6 +40,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 fontdb = "0.24"
 # The font reader egui itself uses; here it only checks a font file before egui is given it.
 skrifa = "0.44"
+# Shapes text from a font's own tables (a port of HarfBuzz to Rust; MIT).
+harfrust = "0.12"
 # The Unicode Bidirectional Algorithm (UAX #9): the order right-to-left text is drawn in.
 unicode-bidi = { version = "0.3", default-features = false, features = ["hardcoded-data"] }
 # zlib streams in PDF files.

@@ -213,6 +213,12 @@ pub struct Text {
     pub bold: bool,
     /// The face has no italic of its own: the glyphs are to be leant.
     pub slant: bool,
+    /// How far above the baseline the glyphs are drawn: a mark the font places over a letter.
+    pub lift: f32,
+    /// What the glyphs say, where that is not their characters one after another: letters
+    /// drawn as one glyph, or text written from the right, whose glyphs are in the order
+    /// they are seen in. Nothing for a mark that is read with its letter.
+    pub actual: Option<String>,
 }
 
 impl Page {
@@ -225,7 +231,10 @@ impl Page {
             if last.is_some_and(|y| (y - piece.y).abs() > 0.01) {
                 out.push('\n');
             }
-            out.extend(piece.glyphs.iter().map(|(_, ch)| *ch));
+            match &piece.actual {
+                Some(actual) => out.push_str(actual),
+                None => out.extend(piece.glyphs.iter().map(|(_, ch)| *ch)),
+            }
             last = Some(piece.y);
         }
         out

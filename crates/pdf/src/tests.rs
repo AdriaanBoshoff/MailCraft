@@ -37,11 +37,23 @@ fn a_file_holds_its_pages_text_and_fonts() {
         color: [204, 0, 0],
         glyphs: &[(1, 'a'), (2, 'b'), (3, ' '), (1, 'a')],
         kerns: &[],
+        actual: None,
         bold: false,
         slant: false,
     });
     assert!(w.page(595.0, 842.0));
-    w.text(Piece { font, size: 9.0, x: 36.0, baseline: 50.0, color: [0, 0, 0], glyphs: &[(4, '\u{c9}')], kerns: &[], bold: true, slant: true });
+    w.text(Piece {
+        font,
+        size: 9.0,
+        x: 36.0,
+        baseline: 50.0,
+        color: [0, 0, 0],
+        glyphs: &[(4, '\u{c9}')],
+        kerns: &[],
+        actual: None,
+        bold: true,
+        slant: true,
+    });
     let file = w.finish("A title: \u{e9}\n(x)").unwrap();
 
     assert!(file.starts_with(b"%PDF-1.7\n"));
@@ -115,7 +127,18 @@ fn fonts_that_may_not_be_embedded_are_refused() {
     assert_eq!(w.font(boxed("ab"), 9), Err(PdfError::Font));
     let whole = w.font(boxes::font_with("abc", 0x0100).into(), 0).unwrap();
     assert!(w.page(100.0, 100.0));
-    w.text(Piece { font: whole, size: 10.0, x: 0.0, baseline: 10.0, color: [0, 0, 0], glyphs: &[(1, 'a')], kerns: &[], bold: false, slant: false });
+    w.text(Piece {
+        font: whole,
+        size: 10.0,
+        x: 0.0,
+        baseline: 10.0,
+        color: [0, 0, 0],
+        glyphs: &[(1, 'a')],
+        kerns: &[],
+        actual: None,
+        bold: false,
+        slant: false,
+    });
     let file = w.finish("").unwrap();
     // All three boxes are in the file, though one was used.
     let program = streams(&file).into_iter().find(|s| s.starts_with(&[0, 1, 0, 0])).unwrap();
@@ -127,7 +150,18 @@ fn hostile_drawing_never_panics_and_stays_a_file() {
     let mut w = Writer::new();
     // Nothing is drawn before there is a page.
     w.fill(0.0, 0.0, 1.0, 1.0, [0; 3]);
-    w.text(Piece { font: FontId(7), size: 1.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &[(1, 'a')], kerns: &[], bold: false, slant: false });
+    w.text(Piece {
+        font: FontId(7),
+        size: 1.0,
+        x: 0.0,
+        baseline: 0.0,
+        color: [0; 3],
+        glyphs: &[(1, 'a')],
+        kerns: &[],
+        actual: None,
+        bold: false,
+        slant: false,
+    });
     let font = w.font(boxed("a"), 0).unwrap();
     assert!(w.page(f32::NAN, -5.0));
     assert!(w.page(f32::INFINITY, 1e30));
@@ -142,13 +176,25 @@ fn hostile_drawing_never_panics_and_stays_a_file() {
             color: [0; 3],
             glyphs: &[(65535, '\u{10ffff}'), (0, '\0'), (9, ')')],
             kerns: &[],
+            actual: None,
             bold: true,
             slant: true,
         });
-        w.text(Piece { font: FontId(usize::MAX), size: v, x: v, baseline: v, color: [0; 3], glyphs: &[], kerns: &[], bold: false, slant: false });
+        w.text(Piece {
+            font: FontId(usize::MAX),
+            size: v,
+            x: v,
+            baseline: v,
+            color: [0; 3],
+            glyphs: &[],
+            kerns: &[],
+            actual: None,
+            bold: false,
+            slant: false,
+        });
     }
     let long: Vec<(u16, char)> = (0..100_000u32).map(|i| ((i % 7) as u16, 'a')).collect();
-    w.text(Piece { font, size: 10.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &long, kerns: &[], bold: false, slant: false });
+    w.text(Piece { font, size: 10.0, x: 0.0, baseline: 0.0, color: [0; 3], glyphs: &long, kerns: &[], actual: None, bold: false, slant: false });
     let file = w.finish(&"\u{202e}(\\)>".repeat(10_000)).unwrap();
     for page in streams(&file).iter().filter(|s| has(s, " Tj ET")) {
         let ops = String::from_utf8_lossy(page);
@@ -199,6 +245,7 @@ fn damaged_fonts_never_panic() {
                     color: [0; 3],
                     glyphs: &[(4, 'x'), (60000, 'y')],
                     kerns: &[],
+                    actual: None,
                     bold: false,
                     slant: false,
                 });
@@ -261,6 +308,7 @@ fn kerned_glyphs_are_shown_with_the_room_between_them() {
         color: [0, 0, 0],
         glyphs: &[(1, 'a'), (2, 'b'), (3, 'c'), (1, 'a')],
         kerns,
+        actual: None,
         bold: false,
         slant: false,
     };
@@ -278,4 +326,42 @@ fn kerned_glyphs_are_shown_with_the_room_between_them() {
         shown,
         ["[<0001> 100 <00020003> -25 <0001>] TJ ET", "<0001000200030001> Tj ET", "<0001000200030001> Tj ET", "[<000100020003> 2000 <0001>] TJ ET"]
     );
+}
+
+#[test]
+fn glyphs_say_what_they_stand_for() {
+    let mut w = Writer::new();
+    let font = w.font(boxed("abc"), 0).unwrap();
+    assert!(w.page(200.0, 200.0));
+    let long = "\u{1f600}".repeat(10_000);
+    let piece = |actual| Piece {
+        font,
+        size: 10.0,
+        x: 10.0,
+        baseline: 20.0,
+        color: [0, 0, 0],
+        glyphs: &[(1, 'a'), (2, 'b')],
+        kerns: &[],
+        actual,
+        bold: false,
+        slant: false,
+    };
+    // Letters drawn as one glyph, text drawn from the right, a mark read with its letter, a
+    // character outside the first plane, and more than a piece may say.
+    for actual in [None, Some("fi\u{5d0}"), Some(""), Some("\u{1f600})>"), Some(long.as_str())] {
+        w.text(piece(actual));
+    }
+    let file = w.finish("t").unwrap();
+    let unpacked = streams(&file);
+    let page = String::from_utf8_lossy(unpacked.iter().find(|s| has(s, " Tm ")).unwrap()).to_string();
+    let lines: Vec<&str> = page.lines().filter(|l| l.contains(" Tm ")).collect();
+    assert_eq!(lines.len(), 5);
+    assert!(lines[0].starts_with("BT ") && lines[0].ends_with("<00010002> Tj ET"), "{}", lines[0]);
+    // UTF-16, big end first, after the mark of its order (PDF 32000-1, 7.9.2.2 and 14.9.4).
+    assert!(lines[1].starts_with("/Span << /ActualText <FEFF0066006905D0> >> BDC BT ") && lines[1].ends_with(" Tj ET EMC"), "{}", lines[1]);
+    assert!(lines[2].starts_with("/Span << /ActualText <FEFF> >> BDC BT "), "{}", lines[2]);
+    assert!(lines[3].starts_with("/Span << /ActualText <FEFFD83DDE000029003E> >> BDC BT "), "{}", lines[3]);
+    assert!(lines[4].len() < 4 * 4096 + 200 && lines[4].ends_with(" EMC"), "{}", lines[4].len());
+    // Marked content opens and closes as often.
+    assert_eq!(page.matches(" BDC ").count(), page.matches(" EMC").count());
 }

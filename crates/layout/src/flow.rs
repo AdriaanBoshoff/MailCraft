@@ -100,6 +100,12 @@ struct Glyph {
     /// stands (UAX #9): odd is right to left.
     at: usize,
     level: u8,
+    /// How many of the paragraph's characters it stands for: more than one for letters drawn
+    /// as one glyph, none for a glyph that is drawn with the one before it for one character.
+    span: u16,
+    /// How far from its place the font's tables put it: to the right, and up.
+    dx: f32,
+    dy: f32,
 }
 
 /// How a run's glyphs look.
@@ -186,6 +192,27 @@ fn set_tabs(glyphs: &mut [Glyph], tabs: &[Tab], pre: bool, room: f32) {
         }
         x += g.advance;
     }
+}
+
+/// How many letters beside a run its face is shown when it shapes the run.
+const CONTEXT: usize = 4;
+
+/// The most characters a piece of text says it stands for.
+const MAX_SAID: usize = 4_000;
+
+/// What the glyphs of a piece say, where that is not their own characters one after another:
+/// the characters they stand for (each glyph with its character, where that stands in the
+/// paragraph and how many characters it stands for) in the order they are read.
+fn said(run: &[(u16, char, usize, u16)], stored: &[char]) -> Option<String> {
+    let mut read: Vec<(usize, u16)> = run.iter().map(|(_, _, at, span)| (*at, *span)).collect();
+    read.sort_unstable();
+    let mut out = String::new();
+    for (at, span) in read {
+        let chars = stored.get(at..at.saturating_add(usize::from(span))).unwrap_or_default();
+        out.extend(chars.iter().take(MAX_SAID.saturating_sub(out.len())).map(|c| if *c == '\u{a0}' { ' ' } else { *c }));
+    }
+    let same = run.iter().map(|(_, ch, ..)| *ch).eq(out.chars());
+    (!same).then_some(out)
 }
 
 /// Where the line that starts at `start` ends when it has `width` of room, and where the next
@@ -407,11 +434,96 @@ impl<'f, 'l> Flow<'f, 'l> {
 
     /// The glyphs of a paragraph that has `room` across, the looks they point at, and the
     /// pictures among them. The run at `aside` stands at one side and is not among them.
-    fn glyphs<'p>(&mut self, para: &'p Para, room: f32, aside: Option<usize>) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
+    fn glyphs<'p>(&mut self, para: &'p Para, room: f32, aside: Option<usize>) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>, Vec<char>) {
         let mut stored: Vec<char> = Vec::new();
         let (mut out, looks, pictures) = self.glyphs_stored(para, room, aside, &mut stored);
         self.directed(para.rtl, &mut out, &stored, &looks);
-        (out, looks, pictures)
+        let out = self.shaped(out, &stored, &looks);
+        (out, looks, pictures, stored)
+    }
+
+    /// The glyphs of a paragraph as the fonts' own tables shape them: each stretch of one
+    /// face, one look and one direction is handed to the face whole, so letters that are
+    /// drawn as one glyph are, letters that join their neighbours do, marks stand where the
+    /// font puts them and pairs stand as close as it says. A stretch its face does not shape
+    /// stays as it was set, glyph for character.
+    fn shaped(&mut self, glyphs: Vec<Glyph>, stored: &[char], looks: &[Look]) -> Vec<Glyph> {
+        let plain = |g: &Glyph| g.picture.is_none() && g.kind != Kind::Break && g.ch != '\t';
+        let mut out: Vec<Glyph> = Vec::with_capacity(glyphs.len());
+        let mut i = 0usize;
+        while let Some(first) = glyphs.get(i) {
+            let same = |g: &Glyph| plain(g) && g.pick == first.pick && g.look == first.look && g.level == first.level;
+            let count = if plain(first) { glyphs.get(i..).unwrap_or_default().iter().take_while(|g| same(g)).count().max(1) } else { 1 };
+            let run = glyphs.get(i..i.saturating_add(count)).unwrap_or_default();
+            i += count;
+            let before = out.len();
+            if !plain(first) || self.shape_run(run, stored, looks, &mut out).is_none() || out.len() > MAX_PARA_GLYPHS {
+                out.truncate(before);
+                out.extend_from_slice(run);
+            }
+        }
+        out
+    }
+
+    /// One stretch of glyphs shaped by its face, added to `out` in the order it is read.
+    /// `None` when the face does not shape it; what was added by then is not to be kept.
+    fn shape_run(&mut self, run: &[Glyph], stored: &[char], looks: &[Look], out: &mut Vec<Glyph>) -> Option<()> {
+        let (first, last) = (run.first()?, run.last()?);
+        let size = looks.get(first.look)?.size;
+        let rtl = first.level % 2 == 1;
+        // What stands between two of the glyphs and has none of its own is read with them: a
+        // joiner, a letter another took into itself.
+        let end = last.at.checked_add(usize::from(last.span.max(1)))?;
+        let text: Vec<(usize, char)> = (first.at..end).filter_map(|at| stored.get(at).map(|c| (at, *c))).filter(|(_, c)| !c.is_control()).collect();
+        // The letters beside the run, as far as the word goes.
+        let letter = |c: &&char| !c.is_control() && !c.is_whitespace() && **c != '\u{fffc}';
+        let before: String =
+            stored.get(..first.at).unwrap_or_default().iter().rev().take_while(letter).take(CONTEXT).collect::<Vec<_>>().into_iter().rev().collect();
+        let after: String = stored.get(end..).unwrap_or_default().iter().take_while(letter).take(CONTEXT).collect();
+        let mut shaped = self.fonts.shape(first.pick.face, &text, rtl, &before, &after)?;
+        if shaped.is_empty() || shaped.len() > text.len().saturating_mul(4).saturating_add(16) {
+            return None;
+        }
+        // The face was picked for the shapes the letters were given, and may not have the
+        // letters themselves: then the shapes stay.
+        if shaped.iter().any(|s| s.glyph == 0) && run.iter().all(|g| g.glyph != 0) {
+            return None;
+        }
+        // The shaper gives the glyphs from the left; here they are kept in the order read.
+        if rtl {
+            shaped.reverse();
+        }
+        if shaped.windows(2).any(|pair| matches!(pair, [a, b] if a.cluster > b.cluster)) {
+            return None;
+        }
+        let face = self.fonts.face(first.pick.face)?;
+        for (n, s) in shaped.iter().enumerate() {
+            // The glyph the character had says what it is: a space, or ink.
+            let had = run.get(run.partition_point(|g| g.at <= s.cluster).saturating_sub(1)).copied()?;
+            let starts = n.checked_sub(1).and_then(|before| shaped.get(before)).is_none_or(|before| before.cluster != s.cluster);
+            let next = shaped.get(n + 1..).unwrap_or_default().iter().find(|after| after.cluster != s.cluster).map_or(end, |after| after.cluster);
+            let span = if starts { u16::try_from(next.saturating_sub(s.cluster)).unwrap_or(u16::MAX) } else { 0 };
+            let advance = s.advance * size;
+            // No glyph is put further from its place than two of its own size.
+            let (dx, dy) = (s.dx.clamp(-2.0, 2.0) * size, s.dy.clamp(-2.0, 2.0) * size);
+            if !(advance.is_finite() && dx.is_finite() && dy.is_finite()) || advance < 0.0 {
+                return None;
+            }
+            out.push(Glyph {
+                ch: stored.get(s.cluster).copied().unwrap_or(had.ch),
+                glyph: s.glyph,
+                advance,
+                // What the face's tables changed of the width the glyph has by itself.
+                kern: Some(advance - face.advance(s.glyph, size)).filter(|kern| kern.abs() > size / 10_000.0).unwrap_or(0.0),
+                kind: if had.at == s.cluster { had.kind } else { Kind::Ink },
+                at: s.cluster,
+                span,
+                dx,
+                dy,
+                ..had
+            });
+        }
+        Some(())
     }
 
     /// Say how deep in right-to-left text each glyph stands, and turn round the brackets that
@@ -533,6 +645,9 @@ impl<'f, 'l> Flow<'f, 'l> {
                     out.push(Glyph {
                         at: stored.len() - 1,
                         level: 0,
+                        span: 1,
+                        dx: 0.0,
+                        dy: 0.0,
                         ch: '\u{fffc}',
                         pick,
                         glyph,
@@ -626,6 +741,10 @@ impl<'f, 'l> Flow<'f, 'l> {
                 out.push(Glyph {
                     at: stored.len() - 1,
                     level: 0,
+                    // A lam drawn as one glyph with the alef after it stands for both.
+                    span: if taken { 2 } else { 1 },
+                    dx: 0.0,
+                    dy: 0.0,
                     ch: if kind == Kind::Break { '\n' } else { ch },
                     pick,
                     glyph,
@@ -695,7 +814,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             }
             self.aside = Some(Aside { left: float == Float::Left, width: wide + FLOAT_GAP, page: at.page, bottom: at.y + tall + FLOAT_GAP / 2.0 });
         }
-        let (mut glyphs, looks, pictures) = self.glyphs(para, room, stand.map(|s| s.0));
+        let (mut glyphs, looks, pictures, stored) = self.glyphs(para, room, stand.map(|s| s.0));
         set_tabs(&mut glyphs, &para.tabs, matches!(para.kind, ParaKind::Pre), room);
         let own_size = looks.first().map_or(self.base.size, |l| l.size);
         let (mut from, mut n) = (0usize, 0usize);
@@ -713,7 +832,8 @@ impl<'f, 'l> Flow<'f, 'l> {
             // A line with right-to-left text in it is drawn in another order than it is read
             // (UAX #9, L2).
             let drawn: Vec<Glyph>;
-            let line = if para.rtl || line.iter().any(|g| g.level > 0) {
+            let turned = para.rtl || line.iter().any(|g| g.level > 0);
+            let line = if turned {
                 let chars: Vec<char> = line.iter().map(|g| g.ch).collect();
                 let levels: Vec<u8> = line.iter().map(|g| g.level).collect();
                 drawn = script::order(&chars, &levels, u8::from(para.rtl)).into_iter().filter_map(|i| line.get(i).copied()).collect();
@@ -758,7 +878,10 @@ impl<'f, 'l> Flow<'f, 'l> {
                     Align::Center => ((room.min(width - inset) - wide) / 2.0).max(0.0),
                     Align::Right => (room.min(width - inset) - wide).max(0.0),
                 };
-            // Glyphs that follow one another in one face and one look make one piece.
+            // Glyphs that follow one another in one face, one look and one direction make one
+            // piece. The pieces of the line, each with the first of the paragraph's characters
+            // it stands for.
+            let mut set: Vec<(usize, Text)> = Vec::new();
             let mut i = 0usize;
             while let Some(first) = line.get(i) {
                 if let Some(picture) = first.picture.and_then(|n| pictures.get(n)) {
@@ -770,7 +893,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     i += 1;
                     continue;
                 }
-                let same = |g: &Glyph| g.pick == first.pick && g.look == first.look && g.picture.is_none();
+                let same = |g: &Glyph| g.pick == first.pick && g.look == first.look && g.level == first.level && g.picture.is_none();
                 let piece = line.get(i..).unwrap_or_default();
                 let count = piece.iter().take_while(|g| same(g)).count().max(1);
                 let piece = piece.get(..count).unwrap_or_default();
@@ -793,50 +916,70 @@ impl<'f, 'l> Flow<'f, 'l> {
                     }
                     // A tab is drawn as room, not as glyphs.
                     let mut x = pen;
-                    let mut run: Vec<(u16, char)> = Vec::new();
+                    let mut run: Vec<(u16, char, usize, u16)> = Vec::new();
                     let mut kerns: Vec<f32> = Vec::new();
                     let mut run_x = pen;
-                    let mut texts: Vec<Text> = Vec::new();
                     let mut leads: Vec<(f32, f32, Leader)> = Vec::new();
-                    let mut close = |run: &mut Vec<(u16, char)>, kerns: &mut Vec<f32>, from: f32, to: f32| {
+                    let mut close = |run: &mut Vec<(u16, char, usize, u16)>, kerns: &mut Vec<f32>, from: f32, to: f32, lift: f32| {
                         let moved = kerns.iter().any(|k| *k != 0.0);
                         let kerns = std::mem::take(kerns);
-                        if !run.is_empty() {
-                            texts.push(Text {
+                        let run = std::mem::take(run);
+                        let Some(starts) = run.iter().map(|(_, _, at, _)| *at).min() else { return };
+                        let glyphs: Vec<(u16, char)> = run.iter().map(|(glyph, ch, ..)| (*glyph, *ch)).collect();
+                        set.push((
+                            starts,
+                            Text {
                                 x: from,
                                 y: baseline - look.rise,
                                 face: first.pick.face,
                                 size: look.size,
                                 color: look.color,
-                                glyphs: std::mem::take(run),
+                                actual: said(&run, &stored),
+                                glyphs,
                                 width: to - from,
                                 kerns: if moved { kerns } else { Vec::new() },
                                 bold: first.pick.bold,
                                 slant: first.pick.slant,
-                            });
-                        }
+                                lift,
+                            },
+                        ));
                     };
                     for g in piece {
                         if g.ch == '\t' {
-                            close(&mut run, &mut kerns, run_x, x);
+                            close(&mut run, &mut kerns, run_x, x, 0.0);
                             leads.push((x, g.advance, g.lead));
                             run_x = x + g.advance;
+                        } else if g.dx != 0.0 || g.dy != 0.0 {
+                            // A glyph the font puts somewhere else than where the line has got
+                            // to is a piece of its own.
+                            close(&mut run, &mut kerns, run_x, x, 0.0);
+                            run.push((g.glyph, g.ch, g.at, g.span));
+                            kerns.push(0.0);
+                            // Never outside the room the line has.
+                            let from = (x + g.dx).min(left + room - g.advance).max(left);
+                            close(&mut run, &mut kerns, from, from + g.advance, g.dy);
+                            run_x = x + g.advance;
                         } else {
-                            run.push((g.glyph, if g.ch == '\u{a0}' { ' ' } else { g.ch }));
+                            run.push((g.glyph, if g.ch == '\u{a0}' { ' ' } else { g.ch }, g.at, g.span));
                             kerns.push(g.kern);
                         }
                         x += g.advance;
                     }
-                    close(&mut run, &mut kerns, run_x, x);
-                    if let Some(page) = self.page(page) {
-                        page.texts.extend(texts);
-                    }
+                    close(&mut run, &mut kerns, run_x, x, 0.0);
                     for (from, wide, lead) in leads {
                         self.leader(page, from, wide, baseline, look, lead);
                     }
                 }
                 pen += piece_wide;
                 i += count;
+            }
+            // In the file the pieces of a line follow one another as they are read, wherever
+            // each is drawn, so that text copied out of it is in that order.
+            if turned {
+                set.sort_by_key(|(starts, _)| *starts);
+            }
+            if let Some(page) = self.page(at.page) {
+                page.texts.extend(set.into_iter().map(|(_, text)| text));
             }
             for level in 0..para.quote.min(8) {
                 let bar = x + (f32::from(level) * QUOTE + 4.0) * PX;
@@ -904,6 +1047,8 @@ impl<'f, 'l> Flow<'f, 'l> {
                     kerns: Vec::new(),
                     bold: pick.bold,
                     slant: pick.slant,
+                    lift: 0.0,
+                    actual: None,
                 });
             }
             x += advance;

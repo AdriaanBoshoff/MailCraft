@@ -991,10 +991,34 @@ fn hostile_lists_are_printed_within_the_limits() {
 const BOTH_WAYS: &str =
     "abcdefgh12() \u{5d0}\u{5d1}\u{5d2}\u{5d3}\u{5d4}\u{5d5}\u{627}\u{628}\u{644}\u{fe8e}\u{fe8f}\u{fe90}\u{fe91}\u{fe92}\u{fefb}";
 
+/// The glyphs of the first line of the body, from the left as they are drawn.
 fn glyphs_of(printed: &Printed) -> Vec<u16> {
     let page = &printed.pages[0];
     let y = page.texts.iter().map(|t| t.y).find(|y| *y > SMALL.margin + 20.0).unwrap();
-    page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).flat_map(|t| t.glyphs.iter().map(|(glyph, _)| *glyph)).collect()
+    let mut line: Vec<&Text> = page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).collect();
+    line.sort_by(|a, b| a.x.total_cmp(&b.x));
+    line.iter().flat_map(|t| t.glyphs.iter().map(|(glyph, _)| *glyph)).collect()
+}
+
+/// The lines of the body as they are seen: the characters of the glyphs from the left.
+fn seen_lines(page: &Page) -> Vec<String> {
+    let mut lines: Vec<(f32, Vec<&Text>)> = Vec::new();
+    for text in &page.texts {
+        match lines.last_mut() {
+            Some((y, line)) if (*y - text.y).abs() < 0.01 => line.push(text),
+            _ => lines.push((text.y, vec![text])),
+        }
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for (_, mut line) in lines {
+        line.sort_by(|a, b| a.x.total_cmp(&b.x));
+        seen.push(line.iter().flat_map(|t| t.glyphs.iter().map(|(_, ch)| *ch)).collect());
+    }
+    seen.pop();
+    if seen.first().is_some_and(|l| l == "Owner") {
+        seen.remove(0);
+    }
+    seen
 }
 
 #[test]
@@ -1016,7 +1040,14 @@ fn right_to_left_text_is_printed_from_the_right() {
     ]);
     let printed = print_in(boxes::font(BOTH_WAYS), &body, SMALL);
     within(&printed, SMALL);
-    let lines = body_lines(&printed.pages[0]);
+    // What a page says is what is read, whichever way it is drawn: text copied from the page
+    // or looked for in it is in that order.
+    let read = body_lines(&printed.pages[0]);
+    assert_eq!(read[0], "ab \u{5d0}\u{5d1}\u{5d2} cd");
+    assert_eq!(read[1], "\u{5d0}\u{5d1} ab 12 \u{5d2}\u{5d3}");
+    assert_eq!(read[2], "\u{5d0}(\u{5d1})");
+    assert_eq!(read[5], "plain");
+    let lines = seen_lines(&printed.pages[0]);
     assert_eq!(lines[0], "ab \u{5d2}\u{5d1}\u{5d0} cd");
     assert_eq!(lines[1], "\u{5d3}\u{5d2} ab 12 \u{5d1}\u{5d0}");
     // The characters are the ones stored; the glyph of the bracket is the other one.
@@ -1033,7 +1064,9 @@ fn right_to_left_text_is_printed_from_the_right() {
     let glyph_of = |c: char| brackets.iter().find(|(_, ch)| *ch == c).unwrap().0;
     assert_eq!(i32::from(glyph_of(')')) - i32::from(glyph_of('(')), open as i32 - close as i32);
     // A right-to-left line ends at the right margin.
-    let ends: Vec<f32> = page.texts.iter().filter(|t| t.glyphs.iter().any(|(_, c)| *c == '\u{5d3}')).map(|t| t.x + t.width).collect();
+    let has = |t: &&Text| t.glyphs.iter().any(|(_, c)| *c == '\u{5d3}');
+    let end_of = |y: f32| page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).map(|t| t.x + t.width).fold(0.0, f32::max);
+    let ends: Vec<f32> = page.texts.iter().filter(has).map(|t| end_of(t.y)).collect();
     assert!(ends.iter().all(|end| (end - (SMALL.width - SMALL.margin)).abs() < 0.01), "{ends:?}");
 }
 
@@ -1094,4 +1127,153 @@ fn text_at_the_right_of_a_narrow_cell_stays_inside_it() {
     let find = |text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap();
     let (one, two, three) = (find("on"), find("tw"), find("three"));
     assert!(one.x + one.width <= two.x && two.x + two.width <= three.x, "{one:?} {two:?} {three:?}");
+}
+
+/// Letters, two glyphs that stand for more than one letter ("fi" is drawn as the glyph of `1`,
+/// "ffl" as that of `2`), an accent the font lifts over its letter, and beh with its shapes.
+const SHAPED: &str = "abcdefil12 \u{301}\u{5d0}\u{5d1}\u{5d2}\u{628}\u{fe8f}\u{fe90}\u{fe91}\u{fe92}";
+
+fn shaped_font() -> Vec<u8> {
+    boxes::font_shaped(
+        SHAPED,
+        &[
+            ("liga", "ffl", '2'),
+            ("liga", "fi", '1'),
+            ("isol", "\u{628}", '\u{fe8f}'),
+            ("fina", "\u{628}", '\u{fe90}'),
+            ("init", "\u{628}", '\u{fe91}'),
+            ("medi", "\u{628}", '\u{fe92}'),
+        ],
+        &[('\u{301}', -300, 150)],
+    )
+}
+
+fn glyph_in(chars: &str, ch: char) -> u16 {
+    chars.chars().position(|c| c == ch).unwrap() as u16 + 1
+}
+
+#[test]
+fn letters_are_drawn_with_the_glyphs_the_font_s_own_tables_give() {
+    let printed = print_in(shaped_font(), &doc(vec![Block::Para(para("afib baffle"))]), SMALL);
+    within(&printed, SMALL);
+    // "fi" is one glyph and "ffl" is one: seven glyphs and two spaces... of eleven characters.
+    let glyphs = glyphs_of(&printed);
+    let of = |text: &str| -> Vec<u16> { text.chars().map(|c| glyph_in(SHAPED, c)).collect() };
+    assert_eq!(glyphs, of("a1b ba2e"));
+    // The line is as wide as its glyphs, not as its characters.
+    let page = &printed.pages[0];
+    let line: Vec<&Text> = page.texts.iter().filter(|t| t.glyphs.iter().any(|(g, _)| *g == glyph_in(SHAPED, '2'))).collect();
+    assert_eq!(line.len(), 1);
+    let size = line[0].size;
+    let wide = (7.0 * f32::from(boxes::ADVANCE) + f32::from(boxes::SPACE)) / f32::from(boxes::UNITS) * size;
+    assert!((line[0].width - wide).abs() < 0.01, "{} {wide}", line[0].width);
+    // What the page says is what was written.
+    assert_eq!(body_lines(page)[0], "afib baffle");
+    assert_eq!(line[0].actual.as_deref(), Some("afib baffle"));
+    // A line with nothing of the kind says nothing more than its glyphs do.
+    let printed = print_in(shaped_font(), &doc(vec![Block::Para(para("abc def"))]), SMALL);
+    assert!(printed.pages[0].texts.iter().all(|t| t.actual.is_none() && t.lift == 0.0));
+    assert_eq!(body_lines(&printed.pages[0])[0], "abc def");
+
+    // A word too long for a line is still cut, between glyphs.
+    let long = "fi".repeat(400);
+    let printed = print_in(shaped_font(), &doc(vec![Block::Para(para(&long))]), SMALL);
+    within(&printed, SMALL);
+    let read: String = printed.pages.iter().flat_map(body_lines).collect();
+    assert_eq!(read, long);
+}
+
+#[test]
+fn a_glyph_stands_where_the_font_puts_it() {
+    let printed = print_in(shaped_font(), &doc(vec![Block::Para(para("ae\u{301}b"))]), SMALL);
+    within(&printed, SMALL);
+    let page = &printed.pages[0];
+    let accent = page.texts.iter().find(|t| t.glyphs.iter().any(|(g, _)| *g == glyph_in(SHAPED, '\u{301}'))).unwrap();
+    let letters: Vec<&Text> = page.texts.iter().filter(|t| (t.y - accent.y).abs() < 0.01 && !std::ptr::eq(*t, accent)).collect();
+    let (size, left) = (accent.size, letters.iter().map(|t| t.x).fold(f32::MAX, f32::min));
+    // Three tenths of the size back from where the line had got to after "ae", and lifted.
+    assert!((accent.x - (left + size - 0.3 * size)).abs() < 0.01, "{} {left} {size}", accent.x);
+    assert!((accent.lift - 0.15 * size).abs() < 0.01);
+    assert_eq!(accent.glyphs.len(), 1);
+    // The text is read once, in order, whatever pieces it is drawn in.
+    assert_eq!(body_lines(page)[0], "ae\u{301}b");
+}
+
+#[test]
+fn arabic_letters_are_joined_by_the_font_s_own_tables() {
+    let font = shaped_font;
+    let one = |body: &Doc| glyphs_of(&print_in(font(), body, SMALL));
+    let of = |text: &str| -> Vec<u16> { text.chars().map(|c| glyph_in(SHAPED, c)).collect() };
+    // Drawn from the right: the shape that ends a word stands first from the left.
+    let three = doc(vec![Block::Para(Para { rtl: true, ..para("\u{628}\u{628}\u{628}") })]);
+    assert_eq!(one(&three), of("\u{fe90}\u{fe92}\u{fe91}"));
+    assert_eq!(one(&doc(vec![Block::Para(Para { rtl: true, ..para("\u{628}") })])), of("\u{fe8f}"));
+    // The letters join across a change of look: each piece is shaped knowing its neighbour.
+    let bold = Run { style: Style { bold: true, ..Style::default() }, ..run("\u{628}") };
+    let mixed = doc(vec![Block::Para(Para { runs: vec![run("\u{628}"), bold, run("\u{628}")], rtl: true, ..Para::default() })]);
+    assert_eq!(one(&mixed), of("\u{fe90}\u{fe92}\u{fe91}"));
+    // What is read is the letters as they were written, not the shapes.
+    let printed = print_in(font(), &three, SMALL);
+    assert_eq!(body_lines(&printed.pages[0])[0], "\u{628}\u{628}\u{628}");
+    // Hebrew in the same font is turned as before.
+    let printed = print_in(font(), &doc(vec![Block::Para(para("ab \u{5d0}\u{5d1}\u{5d2} cd"))]), SMALL);
+    assert_eq!(seen_lines(&printed.pages[0])[0], "ab \u{5d2}\u{5d1}\u{5d0} cd");
+    assert_eq!(body_lines(&printed.pages[0])[0], "ab \u{5d0}\u{5d1}\u{5d2} cd");
+}
+
+#[test]
+fn hostile_shaping_tables_never_panic() {
+    let body = doc(vec![
+        Block::Para(para(&("fi\u{301}".repeat(2000) + &"\u{301}".repeat(3000)))),
+        Block::Para(Para { rtl: true, ..para(&"\u{628}\u{301}fi \u{200d}\u{200c}".repeat(500)) }),
+        Block::Para(para("\u{301}")),
+        Block::Para(para("f\ti\nf\u{ad}i")),
+    ]);
+    let whole = shaped_font();
+    let good = print_in(whole.clone(), &body, SMALL);
+    within(&good, SMALL);
+    // Bytes turned over anywhere inside the two tables text is shaped by.
+    let table = |tag: &[u8; 4]| {
+        let entry = whole.windows(4).position(|w| w == tag).unwrap();
+        let word = |at: usize| u32::from_be_bytes(whole[at..at + 4].try_into().unwrap()) as usize;
+        word(entry + 8)..word(entry + 8) + word(entry + 12)
+    };
+    let tables = [table(b"GSUB"), table(b"GPOS")];
+    let mut state = 0x2545_f491u32;
+    for round in 0..300usize {
+        let mut font = whole.clone();
+        let inside = &tables[round % 2];
+        for _ in 0..=(round % 5) {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let at = inside.start + (state >> 8) as usize % inside.len();
+            font[at] = (state >> 3) as u8;
+        }
+        let printed = print_in(font, &doc(vec![Block::Para(para("afib\u{301} baffle \u{628}\u{628}\u{5d0}"))]), SMALL);
+        within(&printed, SMALL);
+    }
+    // Moves that are as far as a font can say.
+    let far = boxes::font_shaped(SHAPED, &[("liga", "fi", '1')], &[('a', i16::MAX, i16::MIN), ('b', i16::MIN, i16::MAX)]);
+    let printed = print_in(far, &doc(vec![Block::Para(para(&"ab fi ".repeat(200)))]), SMALL);
+    assert!(!printed.pages.is_empty());
+}
+
+#[test]
+fn a_character_the_italic_face_lacks_comes_from_the_plain_face_leant() {
+    let library = Library::empty();
+    let mut fonts = Fonts::new(&library);
+    for family in ["Segoe UI", "Times New Roman", "Calibri"] {
+        fonts.give(family, false, false, Face { data: boxes::font("ab \u{5d0}"), index: 0 });
+        fonts.give(family, false, true, Face { data: boxes::font("ab "), index: 0 });
+    }
+    let italic = Run { style: Style { italic: true, ..Style::default() }, ..run("a\u{5d0}") };
+    let body = doc(vec![Block::Para(Para { runs: vec![italic], ..Para::default() })]);
+    let printed = memo(&Memo { owner: "Owner", fields: &[], body: &body, plain: false, sizes: &|_| None }, SMALL, &mut fonts).unwrap();
+    let page = &printed.pages[0];
+    let of = |ch: char| page.texts.iter().find(|t| t.glyphs.iter().any(|(_, c)| *c == ch)).unwrap();
+    // The letter the italic face has is drawn with it, as it is.
+    assert!(!of('a').slant && of('a').glyphs.iter().all(|(glyph, _)| *glyph != 0));
+    // The one it lacks is no box: the plain face has it, and is leant.
+    let hebrew = of('\u{5d0}');
+    assert!(hebrew.slant && hebrew.face != of('a').face);
+    assert!(hebrew.glyphs.iter().all(|(glyph, _)| *glyph != 0));
 }

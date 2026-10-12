@@ -2350,6 +2350,7 @@ dependencies = [
 name = "openmailclient-layout"
 version = "0.1.0"
 dependencies = [
+ "harfrust",
  "openmailclient-fonts",
  "openmailclient-formats",
  "skrifa",

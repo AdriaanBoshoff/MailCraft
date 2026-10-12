@@ -105,7 +105,7 @@ fn draw<'a>(canvas: &mut Canvas, printed: &Printed, page: &Page, s: f32, picture
 
 fn glyphs(canvas: &mut Canvas, printed: &Printed, text: &Text, s: f32, shapes: &mut HashMap<(usize, u16, bool), Vec<Ring>>) -> Option<()> {
     let Some(face) = printed.faces.get(text.face) else { return Some(()) };
-    if !(text.size.is_finite() && text.size > 0.0 && text.x.is_finite() && text.y.is_finite()) {
+    if !(text.size.is_finite() && text.size > 0.0 && text.x.is_finite() && text.y.is_finite() && text.lift.is_finite()) {
         return Some(());
     }
     let new: Vec<u16> = text.glyphs.iter().map(|g| g.0).filter(|g| !shapes.contains_key(&(text.face, *g, text.slant))).collect();
@@ -119,7 +119,7 @@ fn glyphs(canvas: &mut Canvas, printed: &Printed, text: &Text, s: f32, shapes: &
     let mut pen = text.x;
     for (n, (glyph, _)) in text.glyphs.iter().enumerate() {
         if let Some(rings) = shapes.get(&(text.face, *glyph, text.slant)).filter(|rings| !rings.is_empty()) {
-            let (x, y) = (pen * s, text.y * s);
+            let (x, y) = (pen * s, (text.y - text.lift) * s);
             let smears: &[f32] = if text.bold { &[-BOLD, 0.0, BOLD] } else { &[0.0] };
             for smear in smears {
                 let placed: Vec<Ring> = rings.iter().map(|ring| ring.iter().map(|p| (x + (p.0 + smear) * em, y + p.1 * em)).collect()).collect();

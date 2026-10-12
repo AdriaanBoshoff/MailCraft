@@ -5,6 +5,11 @@
 //! Pairs of glyphs that stand closer or further apart than their widths say (kerning) are
 //! read from the `kern` feature of the `GPOS` table (pair adjustment, lookup type 2), or
 //! from the `kern` table (format 0) of a face that has no such feature.
+//!
+//! A face with a `GSUB` or a `GPOS` table shapes its own text ([`Fonts::shape`]): the glyphs a
+//! run of characters is drawn with, how far each moves on and where it stands are worked out
+//! from those tables by `harfrust`, a port of HarfBuzz. The measures above are what is left
+//! for a face that has neither table.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,6 +57,31 @@ enum Pairs {
     Table,
 }
 
+/// What shaping text from a face's own tables needs, read once.
+#[derive(Clone)]
+struct Shaping {
+    data: Arc<harfrust::ShaperData>,
+    /// The face joins Arabic letters itself (it has an `init` feature).
+    joins: bool,
+}
+
+impl std::fmt::Debug for Shaping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shaping").field("joins", &self.joins).finish()
+    }
+}
+
+/// One glyph of a shaped run: which, the character of the run it comes from, and in ems how
+/// far it moves the line on and how far from its place it stands (up is more).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Shaped {
+    pub glyph: u16,
+    pub cluster: usize,
+    pub advance: f32,
+    pub dx: f32,
+    pub dy: f32,
+}
+
 /// A face that is used: its file, and its measures in font units.
 #[derive(Clone, Debug)]
 pub struct Loaded {
@@ -65,6 +95,7 @@ pub struct Loaded {
     chars: HashMap<char, u16>,
     pairs: Pairs,
     kerns: HashMap<(u16, u16), i16>,
+    shaping: Option<Shaping>,
 }
 
 impl Loaded {
@@ -230,6 +261,13 @@ fn load(face: Face) -> Option<Loaded> {
         None if font.kern().is_ok() => Pairs::Table,
         None => Pairs::None,
     };
+    let init = Tag::new(b"init");
+    let joins =
+        font.gsub().ok().and_then(|gsub| gsub.feature_list().ok()).is_some_and(|list| list.feature_records().iter().any(|r| r.feature_tag() == init));
+    let shaping = (table(b"GSUB").is_some() || table(b"GPOS").is_some())
+        .then(|| harfrust::FontRef::from_index(&face.data, face.index).ok())
+        .flatten()
+        .map(|font| Shaping { data: Arc::new(harfrust::ShaperData::new(&font)), joins });
     Some(Loaded {
         data: face.data.into(),
         index: face.index,
@@ -241,6 +279,7 @@ fn load(face: Face) -> Option<Loaded> {
         chars: HashMap::new(),
         pairs,
         kerns: HashMap::new(),
+        shaping,
     })
 }
 
@@ -337,6 +376,44 @@ impl<'a> Fonts<'a> {
         f32::from(units) * size / loaded.units
     }
 
+    /// A run of characters, each with its number in its paragraph, as the face's own tables
+    /// shape it: the glyphs from the left as they are drawn, so for text written from the right
+    /// the last character's glyph comes first. `None` for a face that does not shape its own
+    /// text, for Arabic in a face that does not join it, and for an answer that names a glyph
+    /// the face has not got. `before` and `after` are what stands beside the run in another
+    /// face or look: a letter joins the one beside it across such a change.
+    pub(crate) fn shape(&self, face: usize, text: &[(usize, char)], rtl: bool, before: &str, after: &str) -> Option<Vec<Shaped>> {
+        let loaded = self.faces.get(face)?;
+        let shaping = loaded.shaping.as_ref()?;
+        if !shaping.joins && text.iter().any(|(_, c)| matches!(c, '\u{0600}'..='\u{06FF}')) {
+            return None;
+        }
+        let font = harfrust::FontRef::from_index(&loaded.data, loaded.index).ok()?;
+        let shaper = shaping.data.shaper(&font).build();
+        let mut buffer = harfrust::UnicodeBuffer::new();
+        for (at, ch) in text {
+            buffer.add(*ch, u32::try_from(*at).ok()?);
+        }
+        buffer.set_pre_context(before);
+        buffer.set_post_context(after);
+        buffer.set_direction(if rtl { harfrust::Direction::RightToLeft } else { harfrust::Direction::LeftToRight });
+        buffer.guess_segment_properties();
+        let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
+        let em = |units: i32| units as f32 / loaded.units;
+        let mut out = Vec::with_capacity(shaped.glyph_infos().len());
+        for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+            let glyph = u16::try_from(info.glyph_id).ok().filter(|glyph| usize::from(*glyph) < loaded.advances.len())?;
+            out.push(Shaped {
+                glyph,
+                cluster: usize::try_from(info.cluster).ok()?,
+                advance: em(pos.x_advance),
+                dx: em(pos.x_offset),
+                dy: em(pos.y_offset),
+            });
+        }
+        Some(out)
+    }
+
     pub(crate) fn glyph(&mut self, face: usize, ch: char) -> u16 {
         let Some(loaded) = self.faces.get_mut(face) else { return 0 };
         if let Some(glyph) = loaded.chars.get(&ch) {
@@ -376,6 +453,21 @@ impl<'a> Fonts<'a> {
                 return Some((pick, glyph));
             }
             first = first.or(Some(pick));
+        }
+        // An italic or a bold face often has fewer characters than the plain face of its
+        // family (no Arabic, no Hebrew): then the plain one is leant or thickened, which is
+        // better than a box.
+        if chain.bold || chain.italic {
+            for k in 0..chain.names.len() {
+                let Some(name) = chain.names.get(k).cloned() else { continue };
+                for (bold, italic) in [(chain.bold, false), (false, chain.italic), (false, false)] {
+                    let Some(face) = self.exact(&name, bold, italic) else { continue };
+                    let glyph = self.glyph(face, ch);
+                    if glyph != 0 {
+                        return Some((Pick { face, bold: chain.bold && !bold, slant: chain.italic && !italic }, glyph));
+                    }
+                }
+            }
         }
         first.map(|pick| (pick, 0))
     }

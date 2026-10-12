@@ -589,10 +589,11 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
                     font: *font,
                     size: text.size,
                     x: text.x,
-                    baseline: text.y,
+                    baseline: text.y - text.lift,
                     color: text.color,
                     glyphs: &text.glyphs,
                     kerns: &text.kerns,
+                    actual: text.actual.as_deref(),
                     bold: text.bold,
                     slant: text.slant,
                 });
