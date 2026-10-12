@@ -1,6 +1,6 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 44 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 45 · 2026-10-12
 
 ## Headline numbers
 
@@ -17,8 +17,9 @@
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
-| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "What M2 leaves" |
+| M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | not started |
+| M3b | The do-later batch from M2 (see "Do later (from M2)") | not started |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -78,33 +79,31 @@
 28. Done: a print preview with the page setup in it.
 29. Done: Table Style: a folder's list printed as a table.
 30. Done: bitmaps beside a metafile's drawing.
-31. Done: M2 is closed; what it leaves is listed under "What M2 leaves".
-32. Next: nothing more in M2. The work goes on in M3 (writing `.pst`).
+31. Done: M2 is closed; what it leaves is scheduled under "Do later (from M2)".
+32. Next: right-to-left text and joined Arabic letters (M2.41), then shaping in print (M2.42);
+    then M3 (writing `.pst`).
 
-## What M2 leaves
+## Do later (from M2)
 
-M2 is closed with these not done. Each is in [docs/gaps.md](docs/gaps.md) (item 3) and is taken
-up when it hurts more than what is ahead of it; none blocks M3.
+M2 closed with these not done. They are not dropped: each has a slot, and is struck from this
+table when it lands. The slots are a plan, and an item moves up when it starts to hurt.
 
-- **Text.** Complex-script shaping and right-to-left text, on screen and in print: such text is
-  drawn glyph by glyph in the order it is stored. Borders on text within a line, rounded
-  corners, Outlook's highlight colours, list numbers an override changes (`\lfolevel`).
-- **Pictures.** SVG, WebP and TIFF show a labelled placeholder; a GIF shows its first frame
-  only. Several pictures at the sides of one paragraph. A backing for see-through pictures on
-  the dark pane. Pictures on a server are never fetched, by design; loading them on an explicit
-  command belongs with accounts (M4).
-- **Metafiles.** A part of a bitmap, a bitmap mirrored, turned, packed in runs or not copied
-  as it is, patterned brushes, regions of many boxes, text that needs shaping: a metafile that
-  asks for one of these is left as its place rather than half drawn.
-- **Blocks.** Boxes inside one another, a fill behind a table in a block and behind the whole
-  body.
-- **Printing.** Sending pages to a printer (a PDF file is written instead), print styles other
-  than Memo and Table, the view's own columns and group headings in Table Style, the selected
-  rows only, keeping the page setup between runs, a zoom in the preview.
-- **Unchecked.** Nothing printed was compared with what Outlook prints: its print pane and
-  dialog are not driven on the shared machine. Bodies were compared with Outlook's display for
-  one HTML and one RTF message of ours ([docs/ui-parity.md](docs/ui-parity.md)); metafiles and
-  Table Style were checked only by our own tests and by eye.
+| Do later | When |
+|---|---|
+| Right-to-left text (Hebrew, Arabic) in the right order, and Arabic letters joined, on screen and in print | **now**: M2.41, before M3 |
+| Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts) | M2.42, before M3 |
+| Complex scripts shaped on screen (needs our own text drawing in the reading pane, not egui's) | with M5, when the item windows get their own text drawing |
+| Keeping the page setup between runs | M3, with the first settings that are saved |
+| The selected rows only, the view's own columns and group headings in Table Style | M3b, the batch after M3 |
+| A zoom in the print preview | M3b |
+| SVG, WebP and TIFF pictures; GIF animation | M3b |
+| A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph | M3b |
+| Boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners | M3b |
+| Outlook's highlight colours; list numbers an override changes (`\lfolevel`) | M3b |
+| Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes | M3b |
+| Pictures on a server, loaded on an explicit command (never by themselves) | M4, with accounts |
+| Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
+| Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -557,3 +556,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   roadmap under "What M2 leaves" and ranked in docs/gaps.md (item 3); none of it is claimed
   as done. Nothing printed was compared with Outlook's print output. M1's checks against
   Outlook-written files stay open. Next is M3, writing `.pst`.
+- **2026-10-12** - What M2 left is now scheduled, not just listed: "Do later (from M2)" gives
+  every item a slot (M2.41 and M2.42 before M3, a batch M3b after it, M4, M5), and an item is
+  struck from the table when it lands. Right-to-left text and shaping are taken first, before
+  M3, because without them whole languages are unreadable.

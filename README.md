@@ -29,7 +29,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | | Milestone | State |
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
-| M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([what it leaves](ROADMAP.md#what-m2-leaves)) |
+| M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3 | **Writing `.pst`**: journalled, crash-safe writes | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
@@ -81,8 +81,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - **Writing `.pst` files.** Data files are read-only; changes to them are refused.
 - **Parts of formatted bodies.** Shaping of complex scripts and right-to-left text; SVG, WebP and
   TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a
-  patterned brush; printing to a printer. The full list is in
-  [ROADMAP.md](ROADMAP.md#what-m2-leaves).
+  patterned brush; printing to a printer. Each is scheduled in
+  [ROADMAP.md](ROADMAP.md#do-later-from-m2).
 - Calendar, People and Tasks.
 - The MCP server, the control channel and the web build.
 

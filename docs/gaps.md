@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 34 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 35 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -8,7 +8,8 @@
    files the message in Outbox and says so.
 2. **`.pst`/`.ost` are read-only.** No writer exists; every change to such a store is refused. Changes
    made in the sample mailbox live in memory and are lost on exit.
-3. **Formatted bodies are partly drawn.** HTML bodies show text styles, colours, headings, lists,
+3. **Formatted bodies are partly drawn.** Every "not yet" below has a slot in
+   [ROADMAP.md](../ROADMAP.md#do-later-from-m2). HTML bodies show text styles, colours, headings, lists,
    quotations, rules and tables, and pictures the message carries as attachments (`cid:`) or
    writes into itself (`data:`; PNG, JPEG, GIF first frame, BMP) at the size the body asks for, in
    the line of text or at its side (`align`) with what follows beside them until they end or a
@@ -70,6 +71,7 @@
 
 ## Revision history
 
+- 35 · 2026-10-12 — what item 3 leaves is scheduled in ROADMAP.md, "Do later (from M2)".
 - 34 · 2026-10-12 — M2 closed; item 3 is what it leaves.
 - 33 · 2026-10-12 — bitmaps beside a metafile's drawing (item 1).
 - 32 · 2026-10-12 — Table Style (item 3).
