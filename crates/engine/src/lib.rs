@@ -171,6 +171,8 @@ pub struct Session {
     pub set_aside: Vec<Draft>,
     /// How pages are set up for printing: `file.pageSetup` changes it.
     pub page_setup: openmailclient_layout::Setup,
+    /// What is printed: the open message, or the folder's list. `file.pageSetup` changes it.
+    pub print_style: print::Style,
 }
 
 impl Default for Session {
@@ -205,6 +207,7 @@ impl Session {
             undo: Vec::new(),
             set_aside: Vec::new(),
             page_setup: openmailclient_layout::Setup::default(),
+            print_style: print::Style::default(),
         }
     }
 

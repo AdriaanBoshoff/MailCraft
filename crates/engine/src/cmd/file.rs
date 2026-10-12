@@ -69,8 +69,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "Ctrl+P",
-            params: r#"{"path": target ending in .pdf, "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "paper", "orientation", "margins", "header", "footer"}; returns {"path", "pages", "truncated", "links"}"#,
-            enabled: has_selection,
+            params: r#"{"path": target ending in .pdf, "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page); returns {"path", "pages", "truncated", "links", "style"}"#,
+            enabled: printable,
             run: print,
         },
         CommandSpec {
@@ -79,8 +79,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "",
-            params: r#"{"page": which page, from 1 (default 1), "path": where to write that page as a picture, ending in .png (left out: nothing is written), "dpi": pixels to the inch of the picture, 24 to 600 (default 96), "links" as file.print; and, for this look only, anything file.pageSetup takes}; the page is drawn from what file.print writes; returns {"pages", "page", "truncated", "links", "setup"} and with a path {"path", "width", "height"} in pixels"#,
-            enabled: has_selection,
+            params: r#"{"page": which page, from 1 (default 1), "path": where to write that page as a picture, ending in .png (left out: nothing is written), "dpi": pixels to the inch of the picture, 24 to 600 (default 96), "links" as file.print; and, for this look only, anything file.pageSetup takes}; the page is drawn from what file.print writes; returns {"pages", "page", "truncated", "links", "style", "setup"} and with a path {"path", "width", "height"} in pixels"#,
+            enabled: printable,
             run: print_preview,
         },
         CommandSpec {
@@ -233,6 +233,11 @@ fn save_all_attachments(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"count": paths.len(), "untrusted_content": {"paths": paths}}))
 }
 
+/// There is something to print: a message that is open, or a folder whose list is shown.
+fn printable(s: &Session) -> bool {
+    has_selection(s) || s.current.is_some()
+}
+
 /// Which links a print lists, as the parameters ask.
 fn print_links(p: &Value) -> Result<crate::print::Links, EngineError> {
     match p_str(p, "links") {
@@ -266,15 +271,14 @@ fn print_preview(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     let setup = crate::print::setup_with(&s.page_setup, p)?;
+    let style = crate::print::style_with(s.print_style, p)?;
     let links = print_links(p)?;
-    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
-    let laid = crate::print::laid(item, &crate::print::job(s, &setup, links))?;
+    let laid = crate::print::laid_as(s, style, &setup, links)?;
     let pages = laid.printed.pages.len();
     if page > pages {
-        return Err(EngineError::BadParams(format!("there is no page {page}: the message takes {pages}")));
+        return Err(EngineError::BadParams(format!("there is no page {page}: there are {pages}")));
     }
-    let mut out =
-        json!({"pages": pages, "page": page, "truncated": laid.printed.truncated, "links": laid.links, "setup": crate::print::setup_json(&setup)});
+    let mut out = json!({"pages": pages, "page": page, "truncated": laid.printed.truncated, "links": laid.links, "style": style.name(), "setup": crate::print::setup_json(&setup)});
     if let Some(path) = path {
         let image =
             crate::print::raster(&laid, page - 1, dpi as f32 / 72.0).ok_or_else(|| EngineError::Format("the page could not be drawn".into()))?;
@@ -294,23 +298,30 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::BadParams("printing writes a PDF file: the path must end in .pdf".into()));
     }
     let setup = crate::print::setup_with(&s.page_setup, p)?;
+    let style = crate::print::style_with(s.print_style, p)?;
     let links = print_links(p)?;
-    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
-    let printed = crate::print::pdf(item, &crate::print::job(s, &setup, links))?;
+    let printed = crate::print::pdf_as(s, style, &setup, links)?;
     io::write_atomic(path, &printed.file)?;
     s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
-    Ok(json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated, "links": printed.links}))
+    Ok(
+        json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated, "links": printed.links, "style": style.name()}),
+    )
 }
 
 /// Change how pages are set up for printing, and say how they are.
 fn page_setup(s: &mut Session, p: &Value) -> CmdResult {
-    let from = if p_bool(p, "reset") == Some(true) { openmailclient_layout::Setup::default() } else { s.page_setup.clone() };
+    let reset = p_bool(p, "reset") == Some(true);
+    let from = if reset { openmailclient_layout::Setup::default() } else { s.page_setup.clone() };
     let setup = crate::print::setup_with(&from, p)?;
-    if setup != s.page_setup {
+    let style = crate::print::style_with(if reset { crate::print::Style::default() } else { s.print_style }, p)?;
+    if setup != s.page_setup || style != s.print_style {
         s.page_setup = setup;
+        s.print_style = style;
         s.status = "Page setup changed".to_string();
     }
-    Ok(crate::print::setup_json(&s.page_setup))
+    let mut out = crate::print::setup_json(&s.page_setup);
+    out["style"] = json!(s.print_style.name());
+    Ok(out)
 }
 
 fn close_store(s: &mut Session, p: &Value) -> CmdResult {

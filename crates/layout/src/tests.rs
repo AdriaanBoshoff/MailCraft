@@ -891,3 +891,97 @@ fn pages_are_set_up_as_asked() {
         }
     }
 }
+
+fn list_on(listed: &Listed, paper: impl Into<Setup>) -> Result<Printed, LayoutError> {
+    let library = Library::empty();
+    let mut fonts = Fonts::new(&library);
+    fonts.give("Segoe UI", false, false, Face { data: boxes::font(CHARS), index: 0 });
+    list(listed, paper, &mut fonts)
+}
+
+#[test]
+fn a_list_is_a_table_whose_names_stand_on_every_page() {
+    let columns = [
+        Column { name: "From", share: 30, right: false },
+        Column { name: "Subject", share: 50, right: false },
+        Column { name: "Size", share: 20, right: true },
+    ];
+    let rows: Vec<Row> = (0..40).map(|n| Row { cells: vec![format!("who{n}"), format!("about{n}"), format!("{n}")], bold: n == 3 }).collect();
+    let listed = Listed { owner: "Owner", title: "Inbox", note: "40 items", columns: &columns, rows: &rows };
+    let printed = list_on(&listed, SMALL).unwrap();
+    within(&printed, SMALL);
+    assert!(printed.pages.len() > 2 && !printed.truncated, "{} pages", printed.pages.len());
+
+    // The first page is headed by the owner, the folder and the note; every page has the names
+    // of the columns over its rows, and every row is on some page once, in order.
+    let lines: Vec<Vec<String>> = printed.pages.iter().map(|p| p.text().lines().map(str::to_string).collect()).collect();
+    assert_eq!(lines[0][..4], ["Owner", "Inbox", "40 items", "FromSubjectSize"]);
+    let mut seen = Vec::new();
+    for (n, page) in lines.iter().enumerate() {
+        let names = page.iter().position(|l| l == "FromSubjectSize").unwrap_or_else(|| panic!("page {n}: {page:?}"));
+        assert_eq!(page.iter().filter(|l| *l == "FromSubjectSize").count(), 1);
+        assert_eq!(names, if n == 0 { 3 } else { 0 }, "page {n}");
+        seen.extend(page[names + 1..page.len() - 1].iter().cloned());
+        assert_eq!(page.last().unwrap(), &format!("{} of {}", n + 1, lines.len()));
+    }
+    assert_eq!(seen, (0..40).map(|n| format!("who{n}about{n}{n}")).collect::<Vec<_>>());
+
+    // Columns stand at the same places on every page: at their shares of the 160 of room.
+    let at =
+        |page: &Page, first: char| page.texts.iter().filter(|t| t.glyphs.first().is_some_and(|g| g.1 == first)).map(|t| t.x).fold(f32::MAX, f32::min);
+    for page in &printed.pages {
+        assert!((at(page, 'F') - at(&printed.pages[0], 'F')).abs() < 0.01);
+        assert!((at(page, 'w') - at(page, 'F')).abs() < 0.01);
+        assert!((at(page, 'a') - at(page, 'F') - 48.0).abs() < 0.01, "{}", at(page, 'a') - at(page, 'F'));
+    }
+    // Sizes end at the right edge of their column, and the unread row is thickened.
+    let first = &printed.pages[0];
+    let ends: Vec<f32> =
+        first.texts.iter().filter(|t| t.size > 8.2 && t.glyphs.iter().all(|g| g.1.is_ascii_digit())).map(|t| t.x + t.width).collect();
+    assert!(ends.len() > 2 && ends.iter().all(|e| (e - ends[0]).abs() < 0.01), "{ends:?}");
+    let bold = |word: &str| {
+        printed.pages.iter().flat_map(|p| &p.texts).any(|t| t.bold && t.glyphs.iter().map(|g| g.1).collect::<String>().starts_with(word))
+    };
+    assert!(bold("who3") && bold("From") && bold("Inbox") && !bold("who4"));
+    // A line under each row: black under the names, grey under the rest.
+    assert!(first.rules.iter().any(|r| r.color == [0, 0, 0] && r.width < 1.0));
+    assert!(first.rules.iter().filter(|r| r.color == [200, 200, 200]).count() >= 3);
+
+    // The setup is followed, and the folder's name can stand in a header.
+    let mut setup = Setup::from(SMALL);
+    setup.header = [String::new(), "[Folder]".into(), String::new()];
+    setup.words = vec![("Folder".into(), "Inbox".into())];
+    let headed = list_on(&listed, setup).unwrap();
+    for (n, page) in headed.pages.iter().enumerate() {
+        assert_eq!(page.text().lines().filter(|l| *l == "Inbox").count(), if n == 0 { 2 } else { 1 }, "page {n}");
+    }
+}
+
+#[test]
+fn hostile_lists_are_printed_within_the_limits() {
+    let wide: Vec<Column> = (0..40).map(|_| Column { name: "N", share: 255, right: true }).collect();
+    let none: [Column; 0] = [];
+    let zero = [Column { name: "", share: 0, right: false }];
+    let long = "x".repeat(100_000);
+    let rows = vec![
+        Row { cells: Vec::new(), bold: true },
+        Row { cells: vec![long.clone(); 50], bold: false },
+        Row { cells: vec!["\u{0}\u{7}\n\t".into(), "a b c".into()], bold: false },
+    ];
+    for columns in [&wide[..], &none[..], &zero[..]] {
+        let printed = list_on(&Listed { owner: &long, title: &long, note: "\n", columns, rows: &rows }, SMALL).unwrap();
+        within(&printed, SMALL);
+        assert!(!printed.pages.is_empty() && printed.pages.len() < 200, "{}", printed.pages.len());
+        // No cell holds more than its 300 characters.
+        let glyphs: usize = printed.pages.iter().flat_map(|p| &p.texts).filter(|t| t.size < 9.0).map(|t| t.glyphs.len()).sum();
+        assert!(glyphs <= 12 * 300 * 2 + 400, "{glyphs}");
+    }
+    // More rows than may be printed: the list says so and stops.
+    let many: Vec<Row> = (0..MAX_ROWS + 5).map(|n| Row { cells: vec![format!("{n}")], bold: false }).collect();
+    let columns = [Column { name: "N", share: 100, right: false }];
+    let printed = list_on(&Listed { owner: "Owner", title: "Inbox", note: "", columns: &columns, rows: &many }, Paper::A4).unwrap();
+    assert!(printed.truncated);
+    let text: String = printed.pages.iter().map(|p| p.text()).collect::<Vec<_>>().join("\n");
+    assert!(text.lines().any(|l| l == (MAX_ROWS - 1).to_string()) && !text.lines().any(|l| l == MAX_ROWS.to_string()));
+    assert!(printed.pages.len() < MAX_PAGES);
+}

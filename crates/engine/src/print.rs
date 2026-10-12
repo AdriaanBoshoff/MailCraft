@@ -1,10 +1,11 @@
-//! Printing: the open message laid out in Memo Style and written as a PDF file.
+//! Printing: the open message laid out in Memo Style, or the folder's list in Table Style,
+//! and written as a PDF file.
 
 use openmailclient_fonts::Library;
 use openmailclient_formats::links::{self, Concern};
-use openmailclient_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style};
-use openmailclient_layout::{Fonts, LayoutError, Line, MM, Memo, Paper, Printed, Setup};
-use openmailclient_model::{Item, RECIP_BCC, RECIP_CC, RECIP_TO, time};
+use openmailclient_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style as Look};
+use openmailclient_layout::{Column, Fonts, LayoutError, Line, Listed, MM, Memo, Paper, Printed, Row, Setup};
+use openmailclient_model::{Flag, FolderKind, Item, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, time};
 use openmailclient_pdf::{Piece, Stroke, Writer};
 use serde_json::{Value, json};
 
@@ -42,6 +43,52 @@ impl Links {
             "all" => Some(Self::All),
             _ => None,
         }
+    }
+}
+
+/// How a print is laid out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Style {
+    /// The open message: its fields, then its body.
+    #[default]
+    Memo,
+    /// The folder's list as it is shown, a message to a row.
+    Table,
+}
+
+impl Style {
+    pub const ALL: [Style; 2] = [Style::Memo, Style::Table];
+
+    /// By name, in any letter case, with or without "style" after it.
+    pub fn named(name: &str) -> Option<Style> {
+        let name = name.trim().to_ascii_lowercase();
+        match name.strip_suffix("style").map_or(name.as_str(), str::trim_end) {
+            "memo" => Some(Self::Memo),
+            "table" => Some(Self::Table),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Memo => "memo",
+            Self::Table => "table",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Memo => "Memo Style",
+            Self::Table => "Table Style",
+        }
+    }
+}
+
+/// The style `p` asks for, or `now` when it asks for none.
+pub fn style_with(now: Style, p: &Value) -> Result<Style, EngineError> {
+    match p.get("style") {
+        None | Some(Value::Null) => Ok(now),
+        Some(v) => v.as_str().and_then(Style::named).ok_or_else(|| EngineError::BadParams("unknown style: memo or table".into())),
     }
 }
 
@@ -97,7 +144,7 @@ fn number_links(blocks: &mut [Block], which: Links, noted: &mut Vec<Noted>, dept
                     };
                     runs.push(Run {
                         text: format!("[{number}]"),
-                        style: Style { script: Script::Super, size: run.style.size, ..Style::default() },
+                        style: Look { script: Script::Super, size: run.style.size, ..Look::default() },
                         ..Run::default()
                     });
                 }
@@ -118,7 +165,7 @@ fn listed(noted: &[Noted], which: Links) -> Vec<Block> {
     if noted.is_empty() {
         return Vec::new();
     }
-    let run = |text: String, bold: bool| Run { text, style: Style { bold, size: Some(9.0), ..Style::default() }, ..Run::default() };
+    let run = |text: String, bold: bool| Run { text, style: Look { bold, size: Some(9.0), ..Look::default() }, ..Run::default() };
     let title = if which == Links::All { "Links in this message" } else { "Links that are not what they say" };
     let mut blocks = vec![Block::Rule, Block::Para(Para { runs: vec![run(title.to_string(), true)], ..Para::default() })];
     for (n, link) in noted.iter().enumerate() {
@@ -402,6 +449,98 @@ pub fn layout(item: &Item, job: &Job, library: &Library) -> Result<Laid, EngineE
             LayoutError::NoFont => EngineError::Format(e.to_string()),
         })?;
     Ok(Laid { links, printed, pictures })
+}
+
+/// Characters of a search that the head of a printed list repeats.
+const MAX_SEARCH_SHOWN: usize = 80;
+
+/// Lay the folder's list out as it is shown (searched, filtered and ordered), in the fonts
+/// of `library`.
+pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<Laid, EngineError> {
+    let folder = s.current_folder().ok_or(StoreError::NoFolder)?;
+    let outgoing = matches!(folder.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox);
+    let columns = [
+        Column { name: if outgoing { "To" } else { "From" }, share: 22, right: false },
+        Column { name: "Subject", share: 38, right: false },
+        Column { name: if outgoing { "Sent" } else { "Received" }, share: 18, right: false },
+        Column { name: "Size", share: 9, right: true },
+        Column { name: "Notes", share: 13, right: false },
+    ];
+    let rows: Vec<Row> = s
+        .rows
+        .iter()
+        .take(openmailclient_layout::MAX_ROWS.saturating_add(1))
+        .map(|row| {
+            let who = if outgoing || row.from.is_empty() { &row.to } else { &row.from };
+            let when = if row.time > 0 {
+                let at = time::civil(row.time, job.tz_offset_min);
+                format!("{}/{}/{} {}", at.month, at.day, at.year, at.time_short())
+            } else {
+                String::new()
+            };
+            let mut notes: Vec<&str> = Vec::new();
+            if row.importance > 1 {
+                notes.push("High");
+            }
+            if row.has_attachments {
+                notes.push("Attachment");
+            }
+            match row.flag {
+                Flag::None => {}
+                Flag::Complete => notes.push("Done"),
+                _ => notes.push("Flagged"),
+            }
+            Row { cells: vec![who.clone(), row.subject.clone(), when, attachments::size_words(row.size as usize), notes.join(", ")], bold: !row.read }
+        })
+        .collect();
+    let unread = s.rows.iter().filter(|row| !row.read).count();
+    let mut note = format!("{} item{}, {unread} unread", s.rows.len(), if s.rows.len() == 1 { "" } else { "s" });
+    if s.unread_only {
+        note.push_str("; unread only");
+    }
+    if !s.search.trim().is_empty() {
+        note.push_str(&format!("; search: {}", shown(s.search.trim(), MAX_SEARCH_SHOWN)));
+    }
+    note.push_str(&format!("; by {}", s.sort.name()));
+    let now = time::civil(job.now, job.tz_offset_min);
+    let mut setup = job.setup.clone();
+    setup.words = vec![
+        ("Date".to_string(), format!("{} {}, {}", now.month_name(), now.day, now.year)),
+        ("Time".to_string(), now.time_short()),
+        ("User".to_string(), job.owner.to_string()),
+        ("Folder".to_string(), folder.name.clone()),
+        ("Subject".to_string(), folder.name.clone()),
+    ];
+    let mut fonts = Fonts::new(library);
+    let listed = Listed { owner: job.owner, title: &folder.name, note: &note, columns: &columns, rows: &rows };
+    let printed = openmailclient_layout::list(&listed, setup, &mut fonts).map_err(|e| match e {
+        LayoutError::NoFont => EngineError::Format(e.to_string()),
+    })?;
+    Ok(Laid { links: 0, printed, pictures: Pictures::default() })
+}
+
+/// What a print of the session in `style` is called: the message's subject, or the folder's name.
+pub fn title(s: &crate::Session, style: Style) -> String {
+    match style {
+        Style::Memo => s.open.as_ref().map(Item::subject).unwrap_or_default(),
+        Style::Table => s.current_folder().map(|f| f.name.clone()).unwrap_or_default(),
+    }
+}
+
+/// Lay out what the session shows in `style`, in the installed fonts: the open message, or
+/// the folder's list.
+pub fn laid_as(s: &crate::Session, style: Style, setup: &Setup, links: Links) -> Result<Laid, EngineError> {
+    let job = job(s, setup, links);
+    match style {
+        Style::Memo => layout(s.open.as_ref().ok_or(StoreError::NoItem)?, &job, library()),
+        Style::Table => list_layout(s, &job, library()),
+    }
+}
+
+/// Print what the session shows in `style` to a PDF file's bytes, in the installed fonts.
+pub fn pdf_as(s: &crate::Session, style: Style, setup: &Setup, links: Links) -> Result<Print, EngineError> {
+    let Laid { links, printed, pictures } = laid_as(s, style, setup, links)?;
+    Ok(Print { file: write(&printed, &pictures, &title(s, style))?, pages: printed.pages.len(), truncated: printed.truncated, links })
 }
 
 /// Write laid-out pages as a PDF file.

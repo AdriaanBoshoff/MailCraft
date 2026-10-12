@@ -1081,6 +1081,7 @@ impl Builder {
                 frame: t.frame,
                 line: t.line,
                 snug: false,
+                repeat: false,
             }));
         }
         self.gap = true;

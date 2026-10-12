@@ -52,7 +52,8 @@ impl App {
                     }
                 }
                 UiRequest::Print => {
-                    let name = self.ui.session.open.as_ref().map(|it| safe_file_name(&it.subject())).unwrap_or_default();
+                    let session = &self.ui.session;
+                    let name = safe_file_name(&openmailclient_engine::print::title(session, session.print_style));
                     let picked = rfd::FileDialog::new()
                         .set_title("Print to PDF")
                         .set_file_name(format!("{name}.pdf"))

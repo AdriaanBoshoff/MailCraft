@@ -4,8 +4,9 @@
 //! holds. Every control runs `file.pageSetup`; printing itself is asked of the host.
 
 use egui::{Align2, Color32, ColorImage, Key, Rect, Sense, TextureHandle, TextureOptions, pos2, vec2};
-use openmailclient_engine::print::{self, Laid, Links};
+use openmailclient_engine::print::{self, Laid, Links, Style};
 use openmailclient_layout::{MM, Paper, Setup};
+use openmailclient_model::FolderId;
 use serde_json::{Value, json};
 
 use crate::{MailUi, UiRequest, bold, font};
@@ -20,13 +21,16 @@ const MAX_PIXELS: f32 = 2400.0;
 pub(crate) struct Preview {
     /// The page looked at; the first is 0.
     pub page: usize,
-    /// What the pages were laid out for: the message and the setup.
-    of: Option<(Option<u64>, Setup)>,
+    /// What the pages were laid out for: the message, the folder and its list, the style and
+    /// the setup.
+    of: Option<Of>,
     /// The pages, or why there are none.
     pub laid: Option<Result<Laid, String>>,
     /// The drawn page, with which page it is and how many pixels wide.
     shown: Option<(TextureHandle, usize, usize)>,
 }
+
+type Of = (Option<u64>, Option<(usize, FolderId)>, (usize, usize), Style, Setup);
 
 impl Preview {
     /// The window opened at `page`.
@@ -56,12 +60,14 @@ fn paper_label(name: &str) -> &'static str {
 impl MailUi {
     pub(crate) fn preview_window(&mut self, ctx: &egui::Context) {
         let Some(mut pv) = self.preview.take() else { return };
-        // The window is about the open message: with none there is nothing to show.
-        if self.session.open.is_none() {
+        // With no message open and no folder shown there is nothing to print.
+        if !self.session.is_enabled("file.print") {
             return;
         }
         let t = self.tokens.clone();
-        let of = (self.session.selected, self.session.page_setup.clone());
+        let style = self.session.print_style;
+        let listed = (self.session.rows.len(), self.session.rows.iter().filter(|row| !row.read).count());
+        let of = (self.session.selected, self.session.current, listed, style, self.session.page_setup.clone());
         if pv.of.as_ref() != Some(&of) {
             pv.of = Some(of);
             pv.laid = None;
@@ -69,7 +75,7 @@ impl MailUi {
         }
         if pv.laid.is_none() {
             let s = &self.session;
-            pv.laid = s.open.as_ref().map(|item| print::laid(item, &print::job(s, &s.page_setup, Links::default())).map_err(|e| e.to_string()));
+            pv.laid = Some(print::laid_as(s, style, &s.page_setup, Links::default()).map_err(|e| e.to_string()));
         }
         let pages = pv.pages();
         pv.page = pv.page.min(pages.saturating_sub(1));
@@ -84,7 +90,14 @@ impl MailUi {
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(236.0);
-                    ui.add(head("Memo Style"));
+                    ui.add(head("Print"));
+                    ui.horizontal(|ui| {
+                        for one in Style::ALL {
+                            if ui.selectable_label(style == one, one.label()).clicked() && style != one {
+                                changes.push(json!({ "style": one.name() }));
+                            }
+                        }
+                    });
                     ui.add_space(6.0);
                     ui.add(dim("Paper"));
                     let now = setup.paper.name().unwrap_or("");
@@ -134,14 +147,14 @@ impl MailUi {
                     }
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("[Page]  [Pages]  [Page of Pages]  [Date]  [Time]  [User]  [Subject]")
+                            egui::RichText::new("[Page]  [Pages]  [Page of Pages]  [Date]  [Time]  [User]  [Subject]  [Folder]")
                                 .font(font(11.0))
                                 .color(t.text_faint),
                         )
                         .wrap(),
                     );
                     ui.add_space(6.0);
-                    if ui.add_enabled(setup != Setup::default(), egui::Button::new("Defaults")).clicked() {
+                    if ui.add_enabled(setup != Setup::default() || style != Style::default(), egui::Button::new("Defaults")).clicked() {
                         changes.push(json!({ "reset": true }));
                     }
                     ui.add_space(14.0);

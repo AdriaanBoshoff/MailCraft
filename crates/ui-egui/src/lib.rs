@@ -327,7 +327,7 @@ impl MailUi {
                 if params.get("close").and_then(Value::as_bool) == Some(true) {
                     self.preview = None;
                 } else if !self.session.is_enabled("file.print") {
-                    return Err("No message is open".to_string());
+                    return Err("There is nothing to print".to_string());
                 } else {
                     self.menu = None;
                     let page = number("page").and_then(|n| usize::try_from(n).ok()).unwrap_or(1).saturating_sub(1);

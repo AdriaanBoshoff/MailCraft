@@ -1054,6 +1054,31 @@ impl<'f, 'l> Flow<'f, 'l> {
         at
     }
 
+    /// Set a table's first row once more, at `at`, in the columns the table has. Gives where
+    /// the row after it starts.
+    fn first_row_again(&mut self, table: &Table, places: &[Vec<usize>], columns: (&[f32], &[f32], f32), at: At, depth: usize) -> At {
+        let (lefts, widths, gap) = columns;
+        let (Some(row), Some(starts)) = (table.rows.first(), places.first()) else { return at };
+        let lined = Edge { width: 1, color: Some(table.line.unwrap_or(GREY)), line: Line::Solid };
+        let fill_depth = u16::try_from(depth).unwrap_or(u16::MAX - 1).saturating_add(1).min(u16::MAX - 1);
+        let mut set: Vec<(&Cell, f32, f32)> = Vec::new();
+        let mut end = at;
+        for (cell, col) in row.iter().zip(starts) {
+            let Some(left) = lefts.get(*col).copied() else { continue };
+            let span = usize::from(cell.span.max(1));
+            let wide: f32 = widths.iter().skip(*col).take(span).sum::<f32>() + gap * (span.saturating_sub(1) as f32);
+            let pad = padding(table, cell);
+            let below = self.blocks(&cell.blocks, left + pad.0, (wide - pad.0 * 2.0).max(6.0), At { page: at.page, y: at.y + pad.1 }, depth + 1);
+            end = later(end, At { page: below.page, y: below.y + pad.1 });
+            set.push((cell, left, wide));
+        }
+        for (cell, left, wide) in set {
+            let edges = cell.edges.unwrap_or(if table.border { [lined; 4] } else { [Edge::default(); 4] });
+            self.boxed(at, end, left, wide, &edges, cell.background, fill_depth, true);
+        }
+        At { page: end.page, y: end.y + gap }
+    }
+
     fn table(&mut self, table: &Table, x: f32, width: f32, at: At, depth: usize) -> At {
         let columns = table.columns();
         if columns == 0 || columns > MAX_COLUMNS || depth >= MAX_TABLE_DEPTH || width / (columns as f32) < MIN_COLUMN {
@@ -1119,11 +1144,21 @@ impl<'f, 'l> Flow<'f, 'l> {
         let mut at = At { page: start.page, y: start.y + rim + gap };
         let mut waiting: Vec<Waiting> = Vec::new();
         let rows = table.rows.len();
+        // The page the first row last stood on, for a table that repeats it.
+        let mut headed = start.page;
         for (r, (row, starts)) in table.rows.iter().zip(&places).enumerate() {
             if self.full {
                 break;
             }
-            let row_start = self.room(at, line_tall);
+            let mut row_start = self.room(at, line_tall);
+            if r == 0 {
+                headed = row_start.page;
+            } else if table.repeat && row_start.page > headed {
+                headed = row_start.page;
+                row_start = self.first_row_again(table, &places, (&lefts, &widths, gap), row_start, depth);
+                // A first row that fills its page leaves the rest to go on without it.
+                headed = headed.max(row_start.page);
+            }
             for (cell, col) in row.iter().zip(starts) {
                 let Some(left) = lefts.get(*col).copied() else { continue };
                 let span = usize::from(cell.span.max(1)).min(columns - (*col).min(columns));

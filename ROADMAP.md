@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 41 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 42 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 190, all passing |
+| Tests | 193, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -76,8 +76,9 @@
 26. Done: text beside pictures, and kerning, in print.
 27. Done: page setup for print.
 28. Done: a print preview with the page setup in it.
-29. Next: what is left of M2, in this order: Table Style; metafiles with a bitmap beside
-    the drawing.
+29. Done: Table Style: a folder's list printed as a table.
+30. Next: what is left of M2: metafiles with a bitmap beside the drawing; then M2 is
+    closed and what it leaves is listed.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -494,3 +495,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
 - **2026-10-12** - The project is renamed from MailCraft to OpenMailClient: crates, binaries
   (`openmailclient`, `openmailclient-cli`), the settings folder and the documents. The repository
   is public. Nothing else changes.
+- **2026-10-12** - M2.39: Table Style. A folder's list is printed as it is shown (searched,
+  filtered and ordered): the owner's name over a line, the folder's name, a line saying
+  how many items there are, how many unread and how they are chosen, then a row to a
+  message with From (To in Sent Items, Drafts and Outbox), Subject, Received, Size and
+  Notes (High, Attachment, Flagged, Done). Unread rows are bold; the row of column names
+  stands again at the top of every page the table goes on to (`Table::repeat`, new in the
+  layout). `file.print` and `file.printPreview` take `"style": "memo"` or `"table"`,
+  `file.pageSetup` keeps it, and the print window chooses between the two; printing is
+  now offered whenever a folder is shown, and Memo Style with no message open says so.
+  `[Folder]` can be asked for in a header or footer. A list longer than 5,000 rows is cut
+  and says so; a column is never narrower than a short word. The columns and the head of
+  the page are our own: Outlook's Table Style was not observed (it would need its print
+  dialog), so nothing is compared with it or claimed to go beyond it. Not yet: the
+  columns of the view as the person arranged them, group headings, the selected rows
+  only.

@@ -66,6 +66,8 @@ fn hostile_params_never_panic() {
         json!({"path": "Z:\\no\\such\\dir\\file.msg", "folder": "/", "name": "\u{7}", "field": "to", "value": "<<<>>>;;;,,,\"", "index": 99999}),
         json!({"show": "yes", "on": 3, "descending": "no", "clear": "true"}),
         json!({"address": 7, "confirm": 7}),
+        json!({"style": "table", "page": 2, "dpi": 24}),
+        json!({"style": {"table": 1}, "reset": "yes"}),
         json!({"page": 0, "dpi": 1e9, "path": "Z:/no/such/dir/x.png"}),
         json!({"page": 1e300, "dpi": "x", "path": "Z:/no/such/dir/con.png", "margins": 149}),
         json!({"margins": 1e308, "orientation": 7, "reset": "x", "header": {"left": "[".repeat(70_000)}, "footer": []}),
@@ -1164,7 +1166,7 @@ fn a_message_prints_to_a_pdf_file() {
     std::fs::create_dir_all(&dir).unwrap();
     let mut s = session();
     // Nothing is open: there is nothing to print.
-    assert!(!s.is_enabled("file.print"));
+    assert!(!Session::new().is_enabled("file.print"));
     run(&mut s, "mail.select", json!({"index": 0}));
     // The target and the paper are checked before anything is laid out or written.
     let wrong = dir.join("print.msg");
@@ -1714,7 +1716,7 @@ fn page_setup_is_kept_and_printed_with() {
     let was = run(&mut s, "file.pageSetup", json!({}));
     assert_eq!(
         was,
-        json!({"paper": "a4", "width_mm": 210.0, "height_mm": 297.0, "orientation": "portrait",
+        json!({"style": "memo", "paper": "a4", "width_mm": 210.0, "height_mm": 297.0, "orientation": "portrait",
             "margins": {"top": 12.7, "right": 12.7, "bottom": 12.7, "left": 12.7},
             "header": {"left": "", "center": "", "right": ""}, "footer": {"left": "", "center": "[Page of Pages]", "right": ""}})
     );
@@ -1814,7 +1816,7 @@ fn page_setup_is_kept_and_printed_with() {
 #[test]
 fn a_page_can_be_looked_at_before_it_is_printed() {
     let mut s = session();
-    assert!(!s.is_enabled("file.printPreview"));
+    assert!(!Session::new().is_enabled("file.printPreview"));
     run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
     let dir = std::env::temp_dir().join(format!("openmailclient-preview-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1895,5 +1897,87 @@ fn a_page_can_be_looked_at_before_it_is_printed() {
         Err(e) => assert!(matches!(e, EngineError::Format(_)), "{e}"),
     }
     assert_eq!(s.page_setup, kept);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_folders_list_is_printed_as_a_table() {
+    let mut s = session();
+    assert!(!Session::new().is_enabled("file.print"));
+    // With a folder shown there is a list to print, though no message is open.
+    assert!(s.open.is_none() && s.is_enabled("file.print") && s.is_enabled("file.printPreview"));
+    let dir = std::env::temp_dir().join(format!("openmailclient-table-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(matches!(s.run("file.print", &json!({"path": dir.join("memo.pdf")})), Err(EngineError::Store(_))));
+    for bad in [json!({"style": "grid"}), json!({"style": 7}), json!({"style": ""}), json!({"style": ["table"]})] {
+        assert!(matches!(s.run("file.printPreview", &bad), Err(EngineError::BadParams(_))), "{bad}");
+        assert!(matches!(s.run("file.pageSetup", &bad), Err(EngineError::BadParams(_))), "{bad}");
+    }
+    assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
+
+    // The list as it is shown, in the test font: a row to a message, in the list's order, the
+    // unread in bold, under the owner, the folder and what is listed.
+    let library = openmailclient_fonts::Library::empty();
+    let laid = |s: &Session| {
+        let setup = s.page_setup.clone();
+        let job = crate::print::job(s, &setup, crate::print::Links::default());
+        // The layout asks the library for its fonts; the test font stands in for them all.
+        let folder = s.current_folder().unwrap();
+        let columns = [openmailclient_layout::Column { name: "From", share: 100, right: false }];
+        let rows: Vec<openmailclient_layout::Row> = Vec::new();
+        let listed = openmailclient_layout::Listed { owner: job.owner, title: &folder.name, note: "", columns: &columns, rows: &rows };
+        let mut fonts = openmailclient_layout::Fonts::new(&library);
+        assert!(openmailclient_layout::list(&listed, openmailclient_layout::Paper::A4, &mut fonts).is_err(), "no font, no print");
+        crate::print::list_layout(s, &job, &library)
+    };
+    assert!(matches!(laid(&s), Err(EngineError::Format(_))));
+
+    // Through the commands, in the installed fonts (or the word that none is installed).
+    match s.run("file.printPreview", &json!({"style": "Table Style"})) {
+        Ok(told) => {
+            assert_eq!((told["style"].as_str(), told["pages"].as_u64(), told["links"].as_u64()), (Some("table"), Some(1), Some(0)));
+            assert_eq!(s.print_style, crate::print::Style::Memo, "a look keeps nothing");
+            let kept = run(&mut s, "file.pageSetup", json!({"style": "table", "header": "[Folder]"}));
+            assert_eq!(kept["style"], "table");
+            let laid = crate::print::laid_as(&s, s.print_style, &s.page_setup, crate::print::Links::default()).unwrap();
+            let text = laid.printed.pages[0].text();
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines[..4], ["Alex Morgan", "Inbox", "9 items, 3 unread; by Date", "FromSubjectReceivedSizeNotes"], "{text}");
+            // Each row is there, in the order of the list, and the folder's name heads the page.
+            let mut from = 0;
+            for row in &s.rows {
+                let at = text[from..].find(&row.subject).unwrap_or_else(|| panic!("{} after {from} in {text}", row.subject));
+                from += at;
+            }
+            assert!(lines.iter().filter(|l| **l == "Inbox").count() == 2, "{text}");
+            let bold =
+                |words: &str| laid.printed.pages[0].texts.iter().any(|t| t.bold && t.glyphs.iter().map(|g| g.1).collect::<String>().contains(words));
+            let unread = s.rows.iter().find(|r| !r.read).unwrap();
+            let read = s.rows.iter().find(|r| r.read).unwrap();
+            let face = |words: &str| {
+                let text = laid.printed.pages[0].texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>().contains(words)).unwrap();
+                (text.face, text.bold)
+            };
+            assert!(face(&unread.subject) != face(&read.subject) || bold(&unread.subject));
+            // The list is printed as it is shown: searched and ordered.
+            run(&mut s, "search.query", json!({"text": "rota"}));
+            let found = s.rows.len();
+            assert!(found > 0 && found < 9);
+            let laid = crate::print::laid_as(&s, s.print_style, &s.page_setup, crate::print::Links::default()).unwrap();
+            let text = laid.printed.pages[0].text();
+            assert!(text.contains("search: rota") && !text.contains("Budget numbers"), "{text}");
+            // To a file, with the style kept; a call may still ask for the other.
+            let told = run(&mut s, "file.print", json!({"path": dir.join("list.pdf")}));
+            assert_eq!((told["style"].as_str(), told["pages"].as_u64()), (Some("table"), Some(1)));
+            let file = std::fs::read(dir.join("list.pdf")).unwrap();
+            assert!(file.starts_with(b"%PDF-") && file.len() > 2000);
+            assert!(matches!(s.run("file.print", &json!({"path": dir.join("memo.pdf"), "style": "memo"})), Err(EngineError::Store(_))));
+            assert_eq!(run(&mut s, "file.pageSetup", json!({"reset": true}))["style"], "memo");
+        }
+        Err(e) => assert!(matches!(e, EngineError::Format(_)), "{e}"),
+    }
+    assert_eq!(crate::print::Style::named(" TABLE style "), Some(crate::print::Style::Table));
+    assert_eq!(crate::print::Style::named("memostyle"), Some(crate::print::Style::Memo));
+    assert_eq!(crate::print::Style::named("style"), None);
     std::fs::remove_dir_all(&dir).unwrap();
 }

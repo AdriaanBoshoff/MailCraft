@@ -7,7 +7,7 @@ use openmailclient_formats::rich::{Block, Cell, Doc, Edge, Frame, Line, Para, Pi
 
 use crate::flow::{Base, FOOT, Flow, HEAD};
 use crate::fonts::Fonts;
-use crate::{LayoutError, Printed, Setup, Text};
+use crate::{LayoutError, Page, Printed, Setup, Text};
 
 /// Fields a header shows, and characters of one field.
 const MAX_FIELDS: usize = 32;
@@ -18,7 +18,7 @@ const NAMES: u16 = 110;
 const MAX_EDGE_CHARS: usize = 400;
 const MAX_WORDS: usize = 32;
 
-const HEAD_FONT: &str = "Segoe UI, Arial, Liberation Sans, sans-serif";
+pub(crate) const HEAD_FONT: &str = "Segoe UI, Arial, Liberation Sans, sans-serif";
 const BODY_FONT: &str = "Times New Roman, Liberation Serif, serif";
 const PLAIN_FONT: &str = "Calibri, Carlito, Arial, sans-serif";
 
@@ -36,12 +36,13 @@ pub struct Memo<'a> {
     pub sizes: &'a dyn Fn(&Picture) -> Option<(u16, u16)>,
 }
 
-fn text(text: &str, bold: bool, size: Option<f32>) -> Para {
+pub(crate) fn text(text: &str, bold: bool, size: Option<f32>) -> Para {
     let text: String = text.chars().filter(|c| !c.is_control()).take(MAX_FIELD_CHARS).collect();
     Para { runs: vec![Run { text, style: Style { bold, size, ..Style::default() }, ..Run::default() }], ..Para::default() }
 }
 
-fn head(memo: &Memo) -> Vec<Block> {
+/// The owner's name over a thick line: what heads the first page of a print.
+pub(crate) fn owner(name: &str) -> Para {
     let line = Edge { width: 3, color: Some([0, 0, 0]), line: Line::Solid };
     let frame = Arc::new(Frame {
         edges: [Edge::default(), Edge::default(), line, Edge::default()],
@@ -50,8 +51,13 @@ fn head(memo: &Memo) -> Vec<Block> {
         between: Edge::default(),
         fill: None,
     });
-    let mut owner = text(memo.owner, true, Some(12.0));
+    let mut owner = text(name, true, Some(12.0));
     owner.frame = Some(frame);
+    owner
+}
+
+fn head(memo: &Memo) -> Vec<Block> {
+    let owner = owner(memo.owner);
     let cell = |para: Para, width: u16| Cell { blocks: vec![Block::Para(para)], span: 1, rows: 1, width, padding: Some((1, 0)), ..Cell::default() };
     let rows: Vec<Vec<Cell>> = memo
         .fields
@@ -178,6 +184,13 @@ pub fn memo(memo: &Memo, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<P
     let at = flow.blocks(&head(memo), x, width, start, 0);
     flow.base = if memo.plain { Base { family: PLAIN_FONT.into(), size: 11.0 } } else { Base { family: BODY_FONT.into(), size: 12.0 } };
     flow.blocks(&memo.body.blocks, x, width, at, 0);
+    let (pages, full) = finish(flow, &setup)?;
+    Ok(Printed { pages, faces: fonts.faces().to_vec(), truncated: full || memo.body.truncated })
+}
+
+/// The pages of a flow that is set, each with its header and footer; and whether there was
+/// more than may be printed.
+pub(crate) fn finish(mut flow: Flow, setup: &Setup) -> Result<(Vec<Page>, bool), LayoutError> {
     if flow.no_font {
         return Err(LayoutError::NoFont);
     }
@@ -190,11 +203,11 @@ pub fn memo(memo: &Memo, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<P
             edge(&mut flow, &setup.footer, &setup.words, page, pages, false);
         }
     }
-    let truncated = flow.full || memo.body.truncated;
+    let full = flow.full;
     let mut pages = std::mem::take(&mut flow.pages);
     for page in &mut pages {
         // A fill deeper in tables lies over a shallower one.
         page.fills.sort_by_key(|fill| fill.depth);
     }
-    Ok(Printed { pages, faces: fonts.faces().to_vec(), truncated })
+    Ok((pages, full))
 }

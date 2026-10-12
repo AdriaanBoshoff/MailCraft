@@ -599,9 +599,10 @@ fn a_click_on_a_link_asks_and_only_the_answer_opens_it() {
 
 #[test]
 fn the_print_window_shows_the_pages_and_follows_the_setup() {
-    let mut ui = MailUi::new(Session::with_sample());
-    assert!(ui.execute("ui.printPreview", &Value::Null).is_err(), "no message is open");
+    let mut ui = MailUi::new(Session::new());
+    assert!(ui.execute("ui.printPreview", &Value::Null).is_err(), "nothing is shown");
     assert!(ui.preview.is_none());
+    let mut ui = MailUi::new(Session::with_sample());
     ui.execute("mail.select", &json!({"folder": "Inbox", "index": 4})).unwrap();
     ui.execute("ui.printPreview", &Value::Null).unwrap();
     assert!(ui.preview.as_ref().is_some_and(|p| p.page == 0 && p.laid.is_none()));
@@ -666,9 +667,26 @@ fn the_print_window_shows_the_pages_and_follows_the_setup() {
     ui.execute("ui.printPreview", &json!({"close": true})).unwrap();
     assert!(ui.preview.is_none());
     assert!(ui.requests.is_empty());
-    // With no message open the window has nothing to show and goes away.
+    // With no message open there is no memo to show, and the window says so; the folder's
+    // list can still be printed, as a table.
     ui.execute("ui.printPreview", &Value::Null).unwrap();
     ui.session.open = None;
+    ui.session.selected = None;
+    frame(&mut ui, Vec::new());
+    assert!(ui.preview.as_ref().unwrap().laid.as_ref().unwrap().is_err());
+    assert_eq!(ui.preview.as_ref().unwrap().pages(), 0);
+    ui.execute("file.pageSetup", &json!({"style": "table", "paper": "a4", "orientation": "portrait"})).unwrap();
+    frame(&mut ui, Vec::new());
+    assert_eq!(ui.preview.as_ref().unwrap().pages(), usize::from(laid));
+    // A message read or a list searched is laid out again.
+    let before = ui.session.rows.len();
+    ui.execute("search.query", &json!({"text": "rota"})).unwrap();
+    assert!(ui.session.rows.len() < before);
+    frame(&mut ui, Vec::new());
+    assert_eq!(ui.preview.as_ref().unwrap().pages(), usize::from(laid));
+    // With no folder shown either, there is nothing to print and the window goes away.
+    ui.session.current = None;
     frame(&mut ui, Vec::new());
     assert!(ui.preview.is_none());
+    assert!(ui.requests.is_empty());
 }

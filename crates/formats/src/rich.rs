@@ -327,6 +327,8 @@ pub struct Table {
     pub line: Option<Rgb>,
     /// The table stands right under what is before it, with no room left between them.
     pub snug: bool,
+    /// On paper, the first row stands again at the top of each page the table goes on to.
+    pub repeat: bool,
 }
 
 /// How wide a table asks to be.

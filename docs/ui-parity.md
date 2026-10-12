@@ -104,7 +104,8 @@ or its print dialog, and neither is driven on the shared machine. OpenMailClient
 owner's name over a line, field names in bold beside their values, the body, a page number at the
 foot) is laid out from general knowledge of the style, and its measures are our own. File > Print
 and Ctrl+P open a print window: the page as it will be printed beside the paper, direction, margins,
-header and footer; its button asks for a PDF file to write. The window's arrangement is our own;
+header and footer; its button asks for a PDF file to write. It prints the open message (Memo Style) or the
+folder's list (Table Style, with columns of our own choosing). The window's arrangement is our own;
 Outlook's print pane was not observed.
 
 ## Behaviour seen
