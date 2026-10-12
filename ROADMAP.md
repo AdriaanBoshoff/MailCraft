@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) in progress: changes to an open `.pst` are kept when saved · revision 51 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 52 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 246, all passing |
+| Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 248, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -18,8 +18,8 @@
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
-| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | in progress: a mailbox is saved as a new `.pst` and changes to an open one are kept (M3.1 to M3.4); rules and settings are M3.5 |
-| M3b | The do-later batch from M2 (see "Do later (from M2)") | not started |
+| M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | next |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -86,7 +86,8 @@
 35. Done: property lists and tables of a `.pst` are written (M3.2).
 36. Done: a mailbox is saved as a new `.pst`: folders, messages, attachments, the nodes every data file must have (M3.3).
 37. Done: changes to an open Unicode `.pst` are kept: `file.save` writes the file anew beside itself, with everything untouched copied as it is stored (M3.4).
-38. Next: M3.5 (rules and the page setup kept between runs), then the M3b batch.
+38. Done: settings are kept between runs: the page setup, the panes, the theme and ribbon, and the data files that were open (M3.5). M3 closed.
+39. Next: the M3b batch (the do-later list), starting with what guards mail: changes journalled as they are made.
 
 ## Do later (from M2)
 
@@ -102,7 +103,11 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Right-to-left text in the message list, the header of the reading pane, folder names and the compose box (drawn there as stored, so Hebrew and Arabic read backwards) | M3b |
 | For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
 | Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
-| Keeping the page setup between runs | M3, with the first settings that are saved |
+| ~~Keeping the page setup between runs~~ | done: M3.5 |
+| Rules kept between runs (there are no rules yet; they are kept in the data file as Outlook keeps them, and in the settings for accounts without one) | M5, with rules |
+| The window's size and place, the widths of the panes and the columns of the list kept between runs | M3b |
+| Each folder's own view (sort, grouping, reading pane) kept, in the data file where Outlook keeps it | M5, with views |
+| A settings page in the app (the file is written and read; nothing shows or edits it but the commands that change each setting) | M5 |
 | A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile); with it, where a message attached to a message is kept and the bucket of a named property, both written from the specification alone | when the owner says so |
 | ~~Hidden (associated) items and a folder's own properties beyond name, class and counts kept when an open `.pst` is saved~~ | done: M3.4 |
 | Hidden (associated) items and a folder's own properties carried by `file.export` (it goes through the model; it should copy nodes as `file.save` does when the source is a `.pst`) | M3b |
@@ -720,3 +725,24 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   file; saving off the UI thread; unknown properties of an attachment when a message's
   attachments change; stale cells for a changed message in search-folder tables; `file.export`
   still goes through the model.
+- **2026-10-12** - M3.5: settings are kept between runs, and M3 is closed. `settings.save` and
+  `settings.load` (`crates/engine/src/cmd/settings.rs`) write and read one small JSON file:
+  the page setup and print style, where the reading pane is, whether the folder pane shows,
+  the data files that were open, and what the window keeps for itself (light or dark, the
+  ribbon's kind, bodies read as plain text). The app keeps it in the per-user configuration
+  folder (`%APPDATA%\OpenMailClient\settings.json`; `~/.config/openmailclient/` on Linux,
+  `~/Library/Application Support/OpenMailClient/` on macOS) and opens last time's data files
+  again unless the run names a file or `--sample`; `--no-settings` neither reads nor writes
+  it. The file is read as anything else from disk: capped at 1 MB, taken a part at a time, a
+  part that makes no sense left out and counted, a file that is not ours changing nothing
+  and never failing the start; only `.pst`/`.ost` paths are opened again, at most 32, and
+  one that is gone is counted and said in the status line. It is written beside itself and
+  put in place in one step. No passwords or tokens will ever go in it (CLAUDE.md: those live
+  in the OS credential store). Made better on the way: settings are written when they
+  change, not only on the way out, so a run that ends badly keeps them; each part stands by
+  itself, so one bad value never costs the rest; the file is plain JSON a person can read
+  and carry to another machine. M3 closes with what it was for done (a mailbox written as a
+  `.pst`, changes to an open one kept, a check of the structure, settings kept); what its
+  first wording also named has a slot: changes journalled as they are made (M3b) and rules
+  kept between runs (M5, where rules are built). Nothing our writer made has been opened in
+  Outlook yet (needs the owner's say).

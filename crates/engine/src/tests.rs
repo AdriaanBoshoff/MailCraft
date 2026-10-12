@@ -2124,3 +2124,111 @@ fn changes_to_an_open_pst_are_saved_into_it() {
     assert_eq!(std::fs::read(&kept).unwrap(), first, "the file as it first was is not written over");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn settings_are_kept_between_runs() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-settings-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("settings.json");
+    let at = |path: &std::path::Path| json!({"path": path});
+
+    // The first run: no file, nothing changes, and that is not an error.
+    let mut s = Session::new();
+    let fresh = s.settings(None);
+    assert_eq!(run(&mut s, "settings.load", at(&file))["found"], false);
+    assert_eq!(s.settings(None), fresh);
+
+    // What was set is written, with what the window keeps for itself, and nothing is left beside it.
+    let pst = dir.join("kept.pst");
+    run(&mut session(), "file.export", json!({"path": pst}));
+    run(&mut s, "file.open", json!({"path": pst}));
+    run(&mut s, "file.pageSetup", json!({"paper": "letter", "orientation": "landscape", "margins": {"top": 12.5, "left": 30}, "footer": "[Page]"}));
+    run(&mut s, "view.readingPane", json!({"position": "bottom"}));
+    run(&mut s, "view.folderPane", json!({"show": false}));
+    let mut save = at(&file);
+    save["ui"] = json!({"theme": "dark"});
+    run(&mut s, "settings.save", save);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    let kept = s.settings(Some(&json!({"theme": "dark"})));
+    assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap(), kept);
+    assert_eq!(kept["dataFiles"].as_array().unwrap().len(), 1);
+
+    // The next run takes all of it; the data file only when it is asked to open them again.
+    let mut next = Session::new();
+    let took = run(&mut next, "settings.load", at(&file));
+    assert_eq!((took["found"].clone(), took["ignored"].clone(), took["opened"].clone()), (json!(true), json!(0), json!(0)));
+    assert_eq!(took["ui"], json!({"theme": "dark"}));
+    assert!(next.stores.is_empty());
+    assert_eq!((&next.page_setup, next.reading_pane, next.folder_pane), (&s.page_setup, crate::ReadingPane::Bottom, false));
+    let mut again = at(&file);
+    again["reopen"] = json!(true);
+    let took = run(&mut next, "settings.load", again.clone());
+    assert_eq!((took["opened"].clone(), took["missing"].clone()), (json!(1), json!(0)));
+    assert_eq!(next.settings(Some(&json!({"theme": "dark"}))), kept);
+    assert!(!next.unsaved());
+
+    // A data file that is gone is counted and said, and costs nothing else. Only data files are
+    // opened again, whatever the list names.
+    let mut all: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    all["dataFiles"] = json!([dir.join("gone.pst"), file, 7, pst]);
+    std::fs::write(&file, all.to_string()).unwrap();
+    let mut third = Session::new();
+    let took = run(&mut third, "settings.load", again.clone());
+    assert_eq!((took["opened"].clone(), took["missing"].clone()), (json!(1), json!(3)));
+    assert_eq!(third.stores.len(), 1);
+    assert!(third.status.starts_with("3 of the data files"), "{}", third.status);
+
+    // A part that makes no sense is left out; the others are taken.
+    std::fs::write(
+        &file,
+        json!({
+            "version": 99,
+            "pageSetup": {"paper": "papyrus", "orientation": "landscape", "margins": {"top": -4}, "header": [1, 2], "style": 9},
+            "readingPane": "ceiling",
+            "folderPane": false,
+            "dataFiles": "everything",
+            "ui": [1, 2, 3],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut odd = Session::new();
+    let default = odd.page_setup.clone();
+    let took = run(&mut odd, "settings.load", again.clone());
+    assert!(took["ignored"].as_u64().unwrap() >= 3 && took["applied"].as_u64().unwrap() >= 2, "{took}");
+    assert!(took.get("ui").is_none());
+    assert!(odd.page_setup.landscape && !odd.folder_pane);
+    assert_eq!(
+        (odd.page_setup.paper.name(), odd.page_setup.margins, odd.reading_pane),
+        (default.paper.name(), default.margins, crate::ReadingPane::Right)
+    );
+
+    // A file that is not ours: nothing is taken, nothing fails, and it is not touched.
+    let big = format!("{{\"folderPane\": false, \"x\": \"{}\"}}", "a".repeat(1 << 20));
+    for junk in [&b""[..], b"{", b"[1, 2]", b"\xff\xfe\x00junk", b"null", big.as_bytes()] {
+        std::fs::write(&file, junk).unwrap();
+        let mut s = Session::new();
+        let took = run(&mut s, "settings.load", again.clone());
+        assert_eq!((took["found"].clone(), took["applied"].clone()), (json!(true), json!(0)));
+        assert_eq!(s.settings(None), fresh);
+        assert_eq!(std::fs::read(&file).unwrap(), junk);
+    }
+
+    // Settings go to a .json file and nowhere else, and a failed write leaves no file behind.
+    let mut s = Session::new();
+    for path in [json!(pst), json!(dir.join("settings")), json!(7), Value::Null] {
+        for id in ["settings.save", "settings.load"] {
+            assert!(matches!(s.run(id, &json!({"path": path})), Err(EngineError::BadParams(_))), "{id} {path}");
+        }
+    }
+    assert!(matches!(s.run("settings.save", &at(&dir.join("no-such-folder").join("s.json"))), Err(EngineError::Io(_))));
+    // What the window keeps is carried only when it is an object of a sensible size.
+    for ui in [json!("dark"), json!({"x": "y".repeat(20_000)})] {
+        let mut save = at(&file);
+        save["ui"] = ui;
+        run(&mut s, "settings.save", save);
+        assert!(serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap().get("ui").is_none());
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

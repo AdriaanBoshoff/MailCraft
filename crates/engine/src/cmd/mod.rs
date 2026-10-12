@@ -6,6 +6,7 @@ mod file;
 mod folder;
 mod link;
 mod mail;
+pub(crate) mod settings;
 mod view;
 
 use crate::{CmdResult, EngineError, Session};
@@ -36,6 +37,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(compose::commands());
         v.extend(folder::commands());
         v.extend(view::commands());
+        v.extend(settings::commands());
         v
     })
 }

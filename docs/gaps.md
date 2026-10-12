@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 41 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 42 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -41,7 +41,7 @@
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
-   right-to-left text outside the body and the rest of what a right-to-left paragraph moves to the right (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, keeping the page setup between runs, sending pages to a printer,
+   right-to-left text outside the body and the rest of what a right-to-left paragraph moves to the right (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -76,6 +76,7 @@
 
 ## Revision history
 
+- 42 · 2026-10-12 — M3.5: settings (page setup, panes, theme, open data files) are kept between runs; M3 closed.
 - 41 · 2026-10-12 — M3.4: changes to an open Unicode `.pst` are kept by `file.save`; `.ost`, ANSI and 4K-page files stay read-only.
 - 40 · 2026-10-12 — M3.3: a mailbox is saved as a new `.pst` (`file.export`); changing an open `.pst` is M3.4.
 - 39 · 2026-10-12 — property lists and tables of a `.pst` are written (item 2).

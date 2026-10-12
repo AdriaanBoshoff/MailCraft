@@ -299,6 +299,24 @@ impl MailUi {
         self.ribbon_mode == RibbonMode::Simplified
     }
 
+    /// What the window keeps between runs.
+    pub fn settings(&self) -> Value {
+        json!({
+            "theme": if self.tokens.dark { "dark" } else { "light" },
+            "ribbon": if self.ribbon_mode == RibbonMode::Classic { "classic" } else { "simplified" },
+            "bodyFormat": if self.plain_bodies { "plain" } else { "formatted" },
+        })
+    }
+
+    /// Take what a settings file says of the window; what makes no sense in it is left out.
+    fn apply_settings(&mut self, ui: &Value) {
+        for (key, id, param) in [("theme", "ui.theme", "theme"), ("ribbon", "ui.ribbonMode", "mode"), ("bodyFormat", "ui.bodyFormat", "format")] {
+            if let Some(v) = ui.get(key).and_then(Value::as_str) {
+                let _ = self.ui_command(id, &json!({ param: v }));
+            }
+        }
+    }
+
     /// True when the window may close. With unsaved changes the first asking only says so;
     /// asking again straight after throws them away. No data file is written by closing.
     pub fn may_quit(&mut self) -> bool {
@@ -319,8 +337,19 @@ impl MailUi {
         if id.starts_with("ui.") {
             return self.ui_command(id, params);
         }
+        // The settings file carries what the window keeps for itself beside the engine's own.
+        if id == "settings.save" && params.is_object() {
+            let mut with_ui = params.clone();
+            with_ui["ui"] = self.settings();
+            return self.session.run(id, &with_ui).map_err(|e| e.to_string());
+        }
         let before = self.session.selected;
         let result = self.session.run(id, params).map_err(|e| e.to_string());
+        if id == "settings.load"
+            && let Ok(found) = &result
+        {
+            self.apply_settings(found.get("ui").unwrap_or(&Value::Null));
+        }
         if self.session.selected != before {
             self.scroll_to_selected = true;
         }

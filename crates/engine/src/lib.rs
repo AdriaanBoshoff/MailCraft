@@ -462,6 +462,12 @@ impl Session {
         Ok(())
     }
 
+    /// The settings kept between runs, as `settings.save` writes them. `ui` is what the
+    /// window keeps for itself.
+    pub fn settings(&self, ui: Option<&Value>) -> Value {
+        cmd::settings::current(self, ui)
+    }
+
     /// True when a data file has changes that are not in the file yet.
     pub fn unsaved(&self) -> bool {
         self.stores.iter().any(|s| s.unsaved())

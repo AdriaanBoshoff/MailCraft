@@ -1,8 +1,8 @@
 # OpenMailClient
 
-![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M2%20closed%20%C2%B7%20M3%20in%20progress-orange)
-![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-246%20passing-brightgreen)
+![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20next-orange)
+![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
+![tests](https://img.shields.io/badge/tests-248%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -30,7 +30,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 |---|---|---|
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
-| M3 | **Writing `.pst`**: journalled, crash-safe writes | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M3 | **Writing `.pst`**: a mailbox saved as a `.pst`, changes to an open one kept, settings kept | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
+| M3b | **The do-later batch**: journalled changes and what M2 and M3 left | ![next](https://img.shields.io/badge/-next-orange) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
@@ -40,12 +41,12 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | Area | Done | | |
 |---|---|---|---|
 | Mail | 32 of 67 | `██████████░░░░░░░░░░` | 48% |
-| File | 6 of 13 | `█████████░░░░░░░░░░░` | 46% |
+| File | 8 of 14 | `███████████░░░░░░░░░` | 57% |
 | Message window | 4 of 17 | `█████░░░░░░░░░░░░░░░` | 24% |
 | Calendar | 0 of 9 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | People | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | Tasks | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
-| **All** | **42 of 116** | `███████░░░░░░░░░░░░░` | **36%** |
+| **All** | **44 of 117** | `███████░░░░░░░░░░░░░` | **37%** |
 
 ### File formats and protocols
 
@@ -100,6 +101,14 @@ cargo run --release -p openmailclient -- --sample
 
 ```bash
 cargo run --release -p openmailclient -- path/to/archive.pst
+```
+
+The page setup, the panes, the theme and the data files that were open are kept between runs in
+`settings.json` in the per-user configuration folder (`%APPDATA%\OpenMailClient` on Windows) and
+the data files are opened again when a run names none. To start without it:
+
+```bash
+cargo run --release -p openmailclient -- --no-settings
 ```
 
 Without a window:

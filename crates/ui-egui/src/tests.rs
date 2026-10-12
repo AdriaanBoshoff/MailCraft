@@ -841,3 +841,33 @@ fn text_at_the_right_of_a_narrow_cell_stays_inside_it() {
     let (one, two, three) = (find("on"), find("tw"), find("three"));
     assert!(one.2 <= two.1 + 0.01 && two.2 <= three.1 + 0.01, "{spans:?}");
 }
+
+#[test]
+fn the_window_keeps_its_settings_in_the_settings_file() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-ui-settings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = json!({ "path": dir.join("settings.json") });
+
+    let mut ui = MailUi::new(Session::new());
+    let fresh = ui.settings();
+    ui.execute("ui.theme", &json!({ "theme": "dark" })).unwrap();
+    ui.execute("ui.ribbonMode", &json!({ "mode": "classic" })).unwrap();
+    ui.execute("ui.bodyFormat", &json!({ "format": "plain" })).unwrap();
+    let kept = ui.settings();
+    assert_ne!(kept, fresh);
+    ui.execute("settings.save", &at).unwrap();
+
+    let mut next = MailUi::new(Session::new());
+    assert_eq!(next.settings(), fresh);
+    next.execute("settings.load", &at).unwrap();
+    assert_eq!(next.settings(), kept);
+
+    // What the file says of the window is taken a part at a time, and junk changes nothing.
+    std::fs::write(dir.join("settings.json"), json!({ "ui": { "theme": "plaid", "ribbon": 4, "bodyFormat": "formatted", "more": [1] } }).to_string())
+        .unwrap();
+    next.execute("settings.load", &at).unwrap();
+    let mut mixed = kept.clone();
+    mixed["bodyFormat"] = json!("formatted");
+    assert_eq!(next.settings(), mixed);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

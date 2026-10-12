@@ -165,6 +165,11 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "saved": saved.len(), "kept": kept }))
 }
 
+/// Open a data file as `file.open` does.
+pub(super) fn open_data_file(s: &mut Session, path: &str) -> Result<(), EngineError> {
+    open(s, &json!({ "path": path })).map(|_| ())
+}
+
 fn open(s: &mut Session, p: &Value) -> CmdResult {
     let path = Path::new(need_str(p, "path")?);
     // A data file that is open already is gone to, not opened a second time beside itself.

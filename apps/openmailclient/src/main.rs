@@ -1,7 +1,7 @@
 //! The OpenMailClient desktop app.
 //!
 //! ```text
-//! openmailclient [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...
+//! openmailclient [--sample] [--dark] [--classic-ribbon] [--no-settings] [file.pst | file.ost | file.msg | file.eml | file.oft]...
 //! ```
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -13,6 +13,10 @@ use std::process::ExitCode;
 
 struct App {
     ui: MailUi,
+    /// Where the settings are kept; `None` when they are not (`--no-settings`).
+    settings: Option<std::path::PathBuf>,
+    /// The settings as they were last written or read.
+    kept: Value,
 }
 
 impl App {
@@ -20,6 +24,25 @@ impl App {
         if let Err(e) = self.ui.execute(id, &params) {
             self.ui.session.status = e;
         }
+    }
+
+    /// Write the settings when they are not what the file has: when they change, not only on
+    /// the way out, so that a run that ends badly keeps them too.
+    fn keep_settings(&mut self) {
+        let Some(path) = self.settings.clone() else { return };
+        let now = self.ui.session.settings(Some(&self.ui.settings()));
+        if now == self.kept {
+            return;
+        }
+        // The status line is for what the person did, not for housekeeping: a failure to
+        // write settings is not shown over it, and is tried again at the next change.
+        let status = self.ui.session.status.clone();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = self.ui.execute("settings.save", &json!({ "path": path.display().to_string() }));
+        self.ui.session.status = status;
+        self.kept = now;
     }
 
     /// Native dialogs for what the UI asked for. Only a user action queues these.
@@ -157,20 +180,49 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         self.serve(&ctx);
+        self.keep_settings();
     }
+
+    fn on_exit(&mut self) {
+        self.keep_settings();
+    }
+}
+
+/// Where the settings are kept: the per-user configuration folder of the system.
+fn settings_path() -> Option<std::path::PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    let dir = if cfg!(target_os = "windows") {
+        var("APPDATA")?.join("OpenMailClient")
+    } else if cfg!(target_os = "macos") {
+        var("HOME")?.join("Library").join("Application Support").join("OpenMailClient")
+    } else {
+        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|home| home.join(".config")))?.join("openmailclient")
+    };
+    Some(dir.join("settings.json"))
 }
 
 fn main() -> ExitCode {
     let mut session = Session::new();
     session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
-    let mut app = App { ui: MailUi::new(session) };
-    for arg in std::env::args().skip(1) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
+    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null };
+    if let Some(path) = app.settings.clone() {
+        // The data files of last time are opened again unless this run names what to open.
+        let reopen = !args.iter().any(|a| a == "--sample" || !a.starts_with("--"));
+        app.run("settings.load", json!({ "path": path.display().to_string(), "reopen": reopen }));
+        app.kept = app.ui.session.settings(Some(&app.ui.settings()));
+    }
+    for arg in args {
         match arg.as_str() {
+            "--no-settings" => {}
             "--sample" => app.run("file.openSample", Value::Null),
             "--dark" => app.run("ui.theme", json!({ "theme": "dark" })),
             "--classic-ribbon" => app.run("ui.ribbonMode", json!({ "mode": "classic" })),
             "--help" | "-h" => {
-                println!("openmailclient [--sample] [--dark] [--classic-ribbon] [file.pst | file.ost | file.msg | file.eml | file.oft]...");
+                println!(
+                    "openmailclient [--sample] [--dark] [--classic-ribbon] [--no-settings] [file.pst | file.ost | file.msg | file.eml | file.oft]..."
+                );
                 return ExitCode::SUCCESS;
             }
             flag if flag.starts_with("--") => {
