@@ -13,7 +13,7 @@ use mailcraft_fonts::Lettering;
 use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipped_destination};
 
 use crate::html;
-use crate::rich::{Align, Block, Cell, Doc, Edge, Edges, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, VAlign, any_edge};
+use crate::rich::{Align, Block, Cell, Doc, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Table, VAlign, any_edge};
 
 const MAX_BLOCKS: usize = 50_000;
 const MAX_RUNS: usize = 200_000;
@@ -32,6 +32,11 @@ const MAX_ROW_SPAN: u16 = 1000;
 /// The most columns one cell merged across covers, and how deep tables stand in tables.
 const MAX_SPAN: u16 = 64;
 const MAX_NEST: u8 = 8;
+/// Pixels of room a paragraph may ask for above it, and between its border and its text.
+const MAX_ABOVE: i32 = 96;
+const MAX_FRAME_ROOM: i32 = 64;
+/// Which sides of a paragraph's border the words that follow describe: all four.
+const ALL_SIDES: u8 = 4;
 /// Places for attachments one body may keep.
 const MAX_OBJECTS: usize = 256;
 /// Longest side a picture may ask to be shown at, in pixels.
@@ -183,6 +188,14 @@ struct Chars {
     itap: u8,
     /// Inside `\nesttableprops`: the row defined here is one of a table inside a cell.
     nest_props: bool,
+    /// The paragraph's border (top, right, bottom, left), which of its sides the words being
+    /// read describe, and the room between it and the text, in pixels.
+    edges: Edges,
+    side: Option<u8>,
+    pad: u16,
+    /// Pixels of room asked for above and below the paragraph (`\sb`, `\sa`).
+    before: u8,
+    after: u8,
 }
 
 #[derive(Default)]
@@ -198,6 +211,11 @@ struct Builder<'a> {
     outer: RowDef,
     inner: RowDef,
     inner_now: bool,
+    /// The border of the last paragraph that had one: paragraphs that follow one another with
+    /// the same border stand inside one.
+    frame: Option<Arc<Frame>>,
+    /// The room the paragraph before asked for below it.
+    below: u8,
     pict: Option<Pict>,
     written: Vec<Arc<[u8]>>,
     written_bytes: usize,
@@ -383,7 +401,13 @@ impl Builder<'_> {
                 cur.indent = 0;
                 cur.in_table = false;
                 cur.itap = 0;
+                cur.edges = Edges::default();
+                (cur.side, cur.pad, cur.before, cur.after) = (None, 0, 0, 0);
             }
+            // Twips, 15 to the pixel.
+            "sb" => cur.before = pixels(param, MAX_ABOVE),
+            "sa" => cur.after = pixels(param, MAX_ABOVE),
+            "brsp" => cur.pad = u16::from(pixels(param, MAX_FRAME_ROOM)),
             "ql" | "qj" => cur.align = Align::Left,
             "qc" => cur.align = Align::Center,
             "qr" => cur.align = Align::Right,
@@ -434,38 +458,37 @@ impl Builder<'_> {
                 self.table.end_row(&RowDef::default());
             }
             // The sides of a cell, in the order the model keeps them: top, right, bottom, left.
-            "clbrdrt" => self.def().side = Some(0),
-            "clbrdrr" => self.def().side = Some(1),
-            "clbrdrb" => self.def().side = Some(2),
-            "clbrdrl" => self.def().side = Some(3),
-            // Borders of rows and of paragraphs are not a cell's.
-            "trbrdrt" | "trbrdrl" | "trbrdrb" | "trbrdrr" | "trbrdrh" | "trbrdrv" | "brdrt" | "brdrb" | "brdrl" | "brdrr" | "brdrbtw" | "brdrbar"
-            | "box" | "chbrdr" | "cldglu" | "cldgll" => self.def().side = None,
-            "brdrs" | "brdrth" | "brdrsh" | "brdrhair" | "brdrinset" | "brdroutset" => self.edge(|e| e.line = Line::Solid),
-            "brdrdb" => self.edge(|e| e.line = Line::Double),
-            "brdrdot" => self.edge(|e| e.line = Line::Dotted),
-            "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" => self.edge(|e| e.line = Line::Dashed),
+            "clbrdrt" => self.sides(cur, Some(0), None),
+            "clbrdrr" => self.sides(cur, Some(1), None),
+            "clbrdrb" => self.sides(cur, Some(2), None),
+            "clbrdrl" => self.sides(cur, Some(3), None),
+            // The sides of a paragraph's border (RTF 1.9.1, "Paragraph Borders"), in the same order.
+            "brdrt" => self.sides(cur, None, Some(0)),
+            "brdrr" => self.sides(cur, None, Some(1)),
+            "brdrb" => self.sides(cur, None, Some(2)),
+            "brdrl" => self.sides(cur, None, Some(3)),
+            "box" => self.sides(cur, None, Some(ALL_SIDES)),
+            // Borders of rows, of characters and between paragraphs are neither a cell's nor a
+            // paragraph's.
+            "trbrdrt" | "trbrdrl" | "trbrdrb" | "trbrdrr" | "trbrdrh" | "trbrdrv" | "brdrbtw" | "brdrbar" | "chbrdr" | "cldglu" | "cldgll" => {
+                self.sides(cur, None, None);
+            }
+            "brdrs" | "brdrth" | "brdrsh" | "brdrhair" | "brdrinset" | "brdroutset" => self.edge(cur, |e| e.line = Line::Solid),
+            "brdrdb" => self.edge(cur, |e| e.line = Line::Double),
+            "brdrdot" => self.edge(cur, |e| e.line = Line::Dotted),
+            "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" => self.edge(cur, |e| e.line = Line::Dashed),
             "brdrnone" | "brdrnil" | "brdrtbl" => {
-                let row = self.def();
-                if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
-                    *edge = Edge::default();
-                }
-                row.side = None;
+                self.each_edge(cur, |e| *e = Edge::default());
+                self.sides(cur, None, None);
             }
             // Twips, 15 to the pixel; a line is never thinner than one pixel.
             "brdrw" => {
-                let width = u8::try_from(((param.unwrap_or(0).max(0) + 7) / 15).clamp(1, i32::from(MAX_EDGE))).unwrap_or(1);
-                let row = self.def();
-                if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
-                    edge.width = width;
-                }
+                let width = u8::try_from((param.unwrap_or(0).max(0).saturating_add(7) / 15).clamp(1, i32::from(MAX_EDGE))).unwrap_or(1);
+                self.each_edge(cur, |e| e.width = width);
             }
             "brdrcf" => {
                 let rgb = color(&self.colors);
-                let row = self.def();
-                if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
-                    edge.color = rgb;
-                }
+                self.each_edge(cur, |e| e.color = rgb);
             }
             "clcbpat" => {
                 let rgb = color(&self.colors);
@@ -510,11 +533,53 @@ impl Builder<'_> {
     }
 
     /// Set the kind of line of the side of the cell that border words apply to now.
-    fn edge(&mut self, set: impl Fn(&mut Edge)) {
+    fn edge(&mut self, cur: &mut Chars, set: impl Fn(&mut Edge)) {
+        self.each_edge(cur, |edge| {
+            set(edge);
+            edge.width = edge.width.max(1);
+        });
+    }
+
+    /// Say which border the words that follow describe: a side of a cell of the row being
+    /// defined, a side (or all sides) of the paragraph, or neither.
+    fn sides(&mut self, cur: &mut Chars, cell: Option<usize>, para: Option<u8>) {
+        self.def().side = cell;
+        cur.side = para;
+    }
+
+    /// Change the sides the words being read describe.
+    fn each_edge(&mut self, cur: &mut Chars, set: impl Fn(&mut Edge)) {
         let row = self.def();
         if let Some(edge) = row.side.and_then(|side| row.def.edges.get_mut(side)) {
             set(edge);
-            edge.width = edge.width.max(1);
+            return;
+        }
+        match cur.side {
+            Some(ALL_SIDES) => cur.edges.iter_mut().for_each(set),
+            Some(side) => {
+                if let Some(edge) = cur.edges.get_mut(usize::from(side)) {
+                    set(edge);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// The border a paragraph stands inside: the one the paragraph before stands inside, when
+    /// it is the same.
+    fn frame_of(&mut self, cur: &Chars) -> Option<Arc<Frame>> {
+        if !any_edge(&cur.edges) {
+            return None;
+        }
+        // Where the body says nothing, a little room so that the text does not touch the lines.
+        let frame = Frame { edges: cur.edges, padding: (cur.pad.max(1), cur.pad.max(4)), indent: cur.indent };
+        match &self.frame {
+            Some(last) if **last == frame => Some(Arc::clone(last)),
+            _ => {
+                let frame = Arc::new(frame);
+                self.frame = Some(Arc::clone(&frame));
+                Some(frame)
+            }
         }
     }
 
@@ -655,7 +720,11 @@ impl Builder<'_> {
             }
             runs.push(text_run("\u{a0}", Style::default()));
         }
-        let para = Block::Para(Para { runs, kind: ParaKind::Body, align: cur.align, indent: cur.indent, ..Para::default() });
+        let frame = self.frame_of(cur);
+        let above = cur.before.saturating_add(std::mem::replace(&mut self.below, cur.after)).min(u8::try_from(MAX_ABOVE).unwrap_or(u8::MAX));
+        // A border stands at the paragraph's indent, and the text just inside it.
+        let indent = if frame.is_some() { 0 } else { cur.indent };
+        let para = Block::Para(Para { runs, kind: ParaKind::Body, align: cur.align, indent, frame, above, ..Para::default() });
         if depth > 0 {
             self.open_cell().push(para);
         } else {
@@ -673,6 +742,11 @@ impl Builder<'_> {
         let table = std::mem::take(&mut self.table);
         self.blocks.extend(table.finish());
     }
+}
+
+/// Twips as pixels, 15 to the pixel, and never more than `most`.
+fn pixels(twips: Option<i32>, most: i32) -> u8 {
+    u8::try_from((twips.unwrap_or(0).max(0) / 15).min(most)).unwrap_or(0)
 }
 
 /// How many tables deep a paragraph is: none, or one where it says no more than that it is in

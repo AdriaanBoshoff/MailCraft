@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 30 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 31 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 164, all passing |
+| Tests | 166, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -65,7 +65,8 @@
 15. Done: an attachment that stands in the text is a card there, with its name and size.
 16. Done: pictures written as bytes (`\bin`) are read.
 17. Done: tables inside the cells of tables, and cells merged across, in RTF bodies.
-18. Next: paragraph spacing, tab stops and paragraph borders in RTF bodies.
+18. Done: paragraph borders and the room paragraphs ask for above and below, in RTF bodies.
+19. Next: tab stops and list numbering in RTF bodies.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -344,4 +345,17 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   deep and a cell spans at most 64 columns; an inner table nothing closes ends with the cell
   it is in. The sample receipt has a row merged across and a table in a cell. Nothing here
   goes beyond Outlook: these are cases it reads and MailCraft did not.
+- **2026-10-12** - M2.28: a paragraph of an RTF body has its border (RTF 1.9.1, "Paragraph
+  Borders": `\brdrt`, `\brdrr`, `\brdrb`, `\brdrl`, `\box`, with the line, width and colour
+  words cells already had, and `\brsp` for the room inside) and the room it asks for above
+  and below (`\sb`, `\sa`), on screen and in print. Paragraphs that follow one another with
+  the same border stand inside one; a border stands at the paragraph's indent with the text
+  just inside it, and where the body says nothing of the room the text still does not touch
+  the lines. A cell's lines and its paragraphs' lines are told apart. Room above is at most
+  96 pixels and room inside a border at most 64. Crash fix, found by the new hostile-input
+  test: a border width near the largest number (`\brdrw2147483647`) overflowed while being
+  rounded, in cells as well as paragraphs; it now saturates
+  (`hostile_rtf_paragraph_borders_and_spacing_never_panic`). The sample receipt's note has a
+  border at its left and room around it. Not read yet: the line between paragraphs
+  (`\brdrbtw`), line spacing (`\sl`). Nothing here goes beyond Outlook.
 

@@ -192,11 +192,12 @@ fn frame_room(frame: &Frame) -> (Vec2, Vec2) {
 
 /// Paragraphs inside one border.
 fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
-    if at > 0 && matches!(paras.first(), Some(Block::Para(p)) if p.gap) {
-        ui.add_space(9.0);
+    if let (true, Some(Block::Para(p))) = (at > 0, paras.first()) {
+        ui.add_space(f32::from(p.lead()));
     }
     let top = ui.cursor().top();
-    let full = ui.available_rect_before_wrap();
+    let mut full = ui.available_rect_before_wrap();
+    full.min.x += (f32::from(frame.indent.min(12)) * INDENT).min(full.width() * 0.6);
     let (near, far) = frame_room(frame);
     let left = (full.left() + near.x).min(full.right());
     let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0), top + near.y));
@@ -426,8 +427,8 @@ fn card(ui: &Ui, filed: &Filed, at: Rect, look: Look) {
 /// start below it are not drawn but handed back, to go under the picture. A picture of the
 /// paragraph's own that is left standing past its text is handed back too.
 fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool, until: Option<f32>) -> (Option<Aside>, Option<Vec<Run>>) {
-    if para.gap && after_another {
-        ui.add_space(if matches!(para.kind, ParaKind::Heading(_)) { 12.0 } else { 9.0 });
+    if after_another {
+        ui.add_space(f32::from(para.lead()));
     }
     let (_, width) = room(ui, para);
     let whole = Spot { left: 0.0, width, min_height: 0.0, marker: true };
@@ -880,7 +881,7 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
                 let (job, ..) = job(ui, &p.runs, look, f32::INFINITY, rich::Align::Left);
                 let border = p.frame.as_ref().map_or(0.0, |frame| {
                     let (near, far) = frame_room(frame);
-                    near.x + far.x
+                    near.x + far.x + f32::from(frame.indent.min(12)) * INDENT
                 });
                 inset(p) + ui.painter().layout_job(job).size().x + 2.0 + border
             }

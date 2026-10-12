@@ -1,5 +1,6 @@
 use crate::html::parse;
-use crate::rich::{Align, Block, Doc, Float, Para, ParaKind, Picture, Script};
+use crate::rich::{Align, Block, Doc, Float, Line, Para, ParaKind, Picture, Script};
+use std::sync::Arc;
 
 fn paras(doc: &Doc) -> Vec<&Para> {
     doc.blocks
@@ -1937,4 +1938,72 @@ fn hostile_rtf_nested_and_merged_tables_never_panic() {
     // The widest merged cell is as wide as a cell may be, and the cells after it are cells.
     let doc = crate::rtf::parse(bodies[4].as_bytes());
     assert_eq!(tables(&doc)[0].rows[0][0].span, 64);
+}
+
+#[test]
+fn rtf_paragraphs_have_borders_and_room_above() {
+    // RTF 1.9.1, "Paragraph Borders" and "Spacing".
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\colortbl;\\red0\\green102\\blue153;}\
+          \\pard plain\\par\
+          \\pard\\sb240\\sa120\\box\\brdrdb\\brdrw30\\brdrcf1\\brsp80 one\\par two\\par\
+          \\pard\\sb60\\brdrl\\brdrs\\brdrw45\\brdrb\\brdrdot left\\par\
+          \\pard\\brdrl\\brdrs\\brdrw45\\brdrb\\brdrdot\\brdrt\\brdrnone again\\par\
+          \\pard\\brdrt\\brdrs\\brdrbtw\\brdrs\\brdrw90 top\\par\
+          \\pard\\sa30000 none\\par\\pard last\\par}",
+    );
+    let p = paras(&doc);
+    assert_eq!(doc.text(), "plain\none\ntwo\nleft\nagain\ntop\nnone\nlast");
+    assert_eq!(p[0].frame, None);
+    // All four sides at once, and the room between the lines and the text.
+    let boxed = p[1].frame.as_ref().unwrap();
+    assert!(boxed.edges.iter().all(|e| (e.width, e.color, e.line) == (2, Some([0, 102, 153]), Line::Double)));
+    assert_eq!(boxed.padding, (5, 5));
+    // Paragraphs that follow one another with the same border stand inside one.
+    assert!(Arc::ptr_eq(boxed, p[2].frame.as_ref().unwrap()));
+    // Sides of their own; where nothing is said of the room, the text still does not touch.
+    let left = p[3].frame.as_ref().unwrap();
+    assert_eq!(left.edges.map(|e| (e.width, e.line)), [(0, Line::Solid), (0, Line::Solid), (1, Line::Dotted), (3, Line::Solid)]);
+    assert_eq!(left.padding, (1, 4));
+    // The same border written again is the same border: a side that is said to have no line
+    // has none, and the line between paragraphs is not a side.
+    assert!(Arc::ptr_eq(left, p[4].frame.as_ref().unwrap()));
+    assert_eq!(p[5].frame.as_ref().unwrap().edges.map(|e| e.width), [1, 0, 0, 0]);
+    assert_eq!(p[6].frame, None, "\\pard takes the border away");
+    // Room above is what the paragraph asks for above it and the one before asked for below.
+    assert_eq!(p.iter().map(|p| p.above).collect::<Vec<_>>(), [0, 16, 24, 12, 0, 0, 0, 96]);
+    assert_eq!((p[1].lead(), p[0].lead()), (16, 0));
+
+    // A cell's lines are not its paragraphs', and a paragraph's are not its cell's.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\trowd\\clbrdrt\\brdrs\\brdrw30\\cellx3000\\cellx6000\\pard\\intbl\\brdrb\\brdrs\\brdrw60 a\\cell\\pard\\intbl b\\cell\\row}",
+    );
+    let t = tables(&doc)[0];
+    assert_eq!(t.rows[0][0].edges.map(|e| e.map(|e| e.width)), Some([2, 0, 0, 0]));
+    let Some(Block::Para(a)) = t.rows[0][0].blocks.first() else { panic!("{t:?}") };
+    assert_eq!(a.frame.as_ref().unwrap().edges.map(|e| e.width), [0, 0, 4, 0]);
+    let Some(Block::Para(b)) = t.rows[0][1].blocks.first() else { panic!("{t:?}") };
+    assert_eq!(b.frame, None);
+
+    // A border stands where the paragraph's indent puts it, with the text just inside.
+    let doc = crate::rtf::parse(b"{\\rtf1\\pard\\li1440\\brdrl\\brdrs in\\par\\pard\\li1440 bare\\par}");
+    let p = paras(&doc);
+    assert_eq!((p[0].indent, p[0].frame.as_ref().unwrap().indent), (0, 2));
+    assert_eq!((p[1].indent, &p[1].frame), (2, &None));
+}
+
+#[test]
+fn hostile_rtf_paragraph_borders_and_spacing_never_panic() {
+    let mut body = String::from("{\\rtf1\\brdrw-5\\brdrcf99\\brdrs\\brsp-7\\sb-2147483648\\sa2147483647 a\\par");
+    body.push_str("\\box\\brdrw2147483647\\brsp2147483647\\brdrcf-1 b\\par\\brdrnone\\brdrnone c\\par");
+    for i in 0..3000 {
+        body.push_str(&format!("\\pard\\brdrt\\brdrw{}\\sb{} p\\par", i * 7919, i * 104_729));
+    }
+    let doc = crate::rtf::parse(body.as_bytes());
+    for p in paras(&doc) {
+        assert!(p.above <= 96 && p.lead() <= 108);
+        if let Some(frame) = &p.frame {
+            assert!(frame.edges.iter().all(|e| e.width <= 12) && frame.padding.0 <= 64 && frame.padding.1 <= 64);
+        }
+    }
 }

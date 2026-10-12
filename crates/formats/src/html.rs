@@ -351,6 +351,7 @@ impl Builder {
             gap: head.gap,
             frame: head.frame,
             clear: head.clear,
+            above: 0,
         }));
     }
 
@@ -704,7 +705,7 @@ impl Builder {
             && block
             && !matches!(name, "body" | "html" | "blockquote")
         {
-            self.fmt.frame = Some(Arc::new(Frame { edges, padding: self.css_padding.unwrap_or((0, 0)) }));
+            self.fmt.frame = Some(Arc::new(Frame { edges, padding: self.css_padding.unwrap_or((0, 0)), indent: 0 }));
         }
         // Word-processor paragraphs ("MsoNormal" and friends) are written with no margins.
         if margin == Some(false) || (name == "p" && attr(attrs, "class").is_some_and(|c| c.trim_start().to_ascii_lowercase().starts_with("mso"))) {

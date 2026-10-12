@@ -196,7 +196,7 @@ fn a_table_stands_in_columns_inside_its_lines() {
 fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
     let rows: Vec<Vec<Cell>> = (0..60).map(|i| vec![cell(&format!("r{i}")), cell("v")]).collect();
     let edge = Edge { width: 4, color: Some([0, 0, 90]), line: Line::Double };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4) });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4), indent: 0 });
     let framed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Table(Table { rows, border: true, frame: [edge; 4], ..Table::default() }), framed("in"), framed("frame")]);
     let printed = print(&body, SMALL);
@@ -242,7 +242,7 @@ fn nested(depth: usize) -> Block {
 #[test]
 fn hostile_bodies_never_panic_and_stay_within_the_limits() {
     let wild = Edge { width: 255, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX) });
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX), indent: u8::MAX });
     let odd = |size: f32| Run {
         text: "odd \u{10ffff}\u{0}\n\n\t".repeat(20),
         style: Style { size: Some(size), family: Some(",,,;\"".into()), ..Style::default() },

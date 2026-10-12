@@ -46,6 +46,8 @@ pub struct Para {
     pub frame: Option<Arc<Frame>>,
     /// The paragraph starts below any picture standing at a side.
     pub clear: bool,
+    /// Pixels of room asked for above the paragraph, beside any margin it has.
+    pub above: u8,
 }
 
 /// One side of a border.
@@ -81,6 +83,8 @@ pub struct Frame {
     pub edges: Edges,
     /// Room between the border and what it holds: above and below, then left and right.
     pub padding: (u16, u16),
+    /// How far in the border itself stands, in the levels a paragraph's indent is counted in.
+    pub indent: u8,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -279,6 +283,16 @@ impl Doc {
 }
 
 impl Para {
+    /// Pixels of room between this paragraph and one above it.
+    pub fn lead(&self) -> u16 {
+        let margin = match (self.gap, &self.kind) {
+            (false, _) => 0,
+            (true, ParaKind::Heading(_)) => 12,
+            (true, _) => 9,
+        };
+        margin + u16::from(self.above)
+    }
+
     pub fn text(&self) -> String {
         self.runs.iter().map(|r| r.text.as_str()).collect()
     }

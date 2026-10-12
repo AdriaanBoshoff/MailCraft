@@ -431,8 +431,8 @@ impl<'f, 'l> Flow<'f, 'l> {
         if self.full {
             return at;
         }
-        if para.gap && !first && at.y > self.top() + 0.01 {
-            at.y += if matches!(para.kind, ParaKind::Heading(_)) { 12.0 * PX } else { 9.0 * PX };
+        if !first && at.y > self.top() + 0.01 {
+            at.y += px(para.lead());
         }
         let inset = Self::inset(para, width);
         let (left, room) = (x + inset, (width - inset).max(24.0));
@@ -613,7 +613,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         let inset = Self::inset(para, f32::MAX)
             + para.frame.as_ref().map_or(0.0, |f| {
                 let (near, far) = frame_room(f);
-                near.0 + far.0
+                near.0 + far.0 + f32::from(f.indent.min(12)) * INDENT * PX
             });
         (least.max(word) + inset, most.max(line) + inset)
     }
@@ -755,10 +755,12 @@ impl<'f, 'l> Flow<'f, 'l> {
     /// Paragraphs inside one border.
     fn framed(&mut self, paras: &[Block], frame: &Frame, x: f32, width: f32, at: At, first: bool) -> At {
         let mut at = at;
-        if !first && matches!(paras.first(), Some(Block::Para(p)) if p.gap) && at.y > self.top() + 0.01 {
-            at.y += 9.0 * PX;
+        if let (false, Some(Block::Para(p)), true) = (first, paras.first(), at.y > self.top() + 0.01) {
+            at.y += px(p.lead());
         }
         let (near, far) = frame_room(frame);
+        let inset = (f32::from(frame.indent.min(12)) * INDENT * PX).min(width * 0.6);
+        let (x, width) = (x + inset, width - inset);
         let start = self.room(at, near.1 + self.base.size * 1.3);
         let mut inner = At { page: start.page, y: start.y + near.1 };
         let left = (x + near.0).min(x + width);
