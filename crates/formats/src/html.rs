@@ -173,6 +173,10 @@ struct Fmt {
     /// The border the paragraphs here stand inside.
     frame: Option<Arc<Frame>>,
     leading: Leading,
+    /// Written from right to left (`dir`, CSS `direction`).
+    rtl: bool,
+    /// `dir="auto"`: each paragraph is written the way its first letter is.
+    by_text: bool,
 }
 
 struct Open {
@@ -224,6 +228,8 @@ struct ParaHead {
     frame: Option<Arc<Frame>>,
     clear: bool,
     leading: Leading,
+    rtl: bool,
+    by_text: bool,
 }
 
 #[derive(Default)]
@@ -314,6 +320,8 @@ impl Builder {
             frame: self.fmt.frame.clone(),
             clear: std::mem::take(&mut self.clear),
             leading: self.fmt.leading,
+            rtl: self.fmt.rtl,
+            by_text: self.fmt.by_text,
         });
         self.last_space = true;
     }
@@ -348,7 +356,7 @@ impl Builder {
             // Only a line break: an empty line.
             runs.push(Run { text: "\u{a0}".to_string(), ..Run::default() });
         }
-        self.push_block(Block::Para(Para {
+        let para = Para {
             runs,
             kind: head.kind,
             align: head.align,
@@ -360,7 +368,16 @@ impl Builder {
             above: 0,
             tabs: Vec::new(),
             leading: head.leading,
-        }));
+            rtl: head.rtl && !head.by_text,
+        };
+        // `dir="auto"`: the way the paragraph's first letter is written, and its side with it.
+        let para = if head.by_text {
+            let align = if head.rtl && para.align == Align::Right { Align::Left } else { para.align };
+            Para { align, ..para }.by_its_text()
+        } else {
+            para
+        };
+        self.push_block(Block::Para(para));
     }
 
     fn text(&mut self, raw: &str) {
@@ -751,7 +768,11 @@ impl Builder {
 
     /// Attributes any element may carry. Returns whether the style asks for a margin.
     fn common(&mut self, name: &str, attrs: &[(String, String)]) -> Option<bool> {
-        if let Some(a) = attr(attrs, "align").and_then(align)
+        // The direction first: what it does to the side text stands at, `align` may undo.
+        if let Some(dir) = attr(attrs, "dir") {
+            self.direction(dir);
+        }
+        if let Some(a) = attr(attrs, "align").and_then(|v| self.align(v))
             && name != "table"
             && name != "img"
         {
@@ -774,8 +795,33 @@ impl Builder {
         if css.is_empty() { None } else { self.css(&css) }
     }
 
+    /// `dir` and CSS `direction` (HTML 3.2.6.4, CSS Writing Modes 3, 2.1). Text that is not told a
+    /// side stands at the start of its direction.
+    fn direction(&mut self, dir: &str) {
+        let was = self.fmt.rtl;
+        match dir.trim().to_ascii_lowercase().as_str() {
+            "rtl" => (self.fmt.rtl, self.fmt.by_text) = (true, false),
+            "ltr" => (self.fmt.rtl, self.fmt.by_text) = (false, false),
+            "auto" => self.fmt.by_text = true,
+            _ => return,
+        }
+        match (was, self.fmt.rtl, self.fmt.align) {
+            (false, true, Align::Left) => self.fmt.align = Align::Right,
+            (true, false, Align::Right) => self.fmt.align = Align::Left,
+            _ => {}
+        }
+    }
+
+    fn align(&self, v: &str) -> Option<Align> {
+        align(v).map(|a| sided(a, &v.to_ascii_lowercase(), self.fmt.rtl))
+    }
+
     /// Style declarations, in the order they apply (CSS 2.1 and CSS Text Decoration property names).
     fn css(&mut self, css: &str) -> Option<bool> {
+        // The direction first, wherever it is written: `text-align` beside it has the last word.
+        if let Some(dir) = css_value(css, "direction") {
+            self.direction(&dir);
+        }
         let mut zero_top = None;
         let mut zero_bottom = None;
         let mut edges: Option<Edges> = None;
@@ -836,7 +882,8 @@ impl Builder {
                     }
                 }
                 "text-align" => {
-                    if let Some(a) = align(v) {
+                    let rtl = self.fmt.rtl;
+                    if let Some(a) = align(v).map(|a| sided(a, v, rtl)) {
                         self.fmt.align = a;
                     }
                 }
@@ -1237,6 +1284,15 @@ fn is_mono_family(v: &str) -> bool {
 
 fn is_zero(v: &str) -> bool {
     v.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '%').parse::<f32>().is_ok_and(|n| n == 0.0)
+}
+
+/// `start` and `end` are sides of the way the text is written (CSS Text 3, 7.1).
+fn sided(a: Align, v: &str, rtl: bool) -> Align {
+    match (v.trim(), rtl) {
+        ("start", true) => Align::Right,
+        ("end", true) => Align::Left,
+        _ => a,
+    }
 }
 
 fn align(v: &str) -> Option<Align> {

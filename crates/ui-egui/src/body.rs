@@ -20,6 +20,7 @@ use crate::{bold, clip_text, font, text_width};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
+use openmailclient_fonts::script;
 use openmailclient_formats::rich::{
     self, Block, Doc, Edge, Edges, Filed, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
 };
@@ -798,6 +799,226 @@ fn job_and_leaders<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wr
     (job, ends, placed, leaders)
 }
 
+/// The section each character of a text to lay out belongs to.
+fn sections_of(job: &LayoutJob) -> Vec<usize> {
+    let mut out = vec![0usize; job.text.chars().count()];
+    let mut starts = job.text.char_indices().map(|(byte, _)| byte).enumerate().peekable();
+    for (n, section) in job.sections.iter().enumerate() {
+        let end: usize = section.byte_range.end.into();
+        while let Some((at, _)) = starts.next_if(|(_, byte)| *byte < end) {
+            if let Some(slot) = out.get_mut(at) {
+                *slot = n;
+            }
+        }
+    }
+    out
+}
+
+/// The most characters and the most words of a paragraph whose order is worked out; a longer
+/// one is drawn as it is stored.
+const MAX_TURNED_CHARS: usize = 60_000;
+const MAX_TURNED_WORDS: usize = 8_000;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    Word,
+    Blank,
+    Break,
+}
+
+/// A word, the blanks between two words, or the end of a line: characters of one look that
+/// stand equally deep in right-to-left text.
+struct Word {
+    /// The characters it is, of the text as it is stored.
+    chars: (usize, usize),
+    section: usize,
+    level: u8,
+    /// Whether its letters are ones written from the right: the text shaper turns those round.
+    rtl: bool,
+    part: Part,
+    wide: f32,
+}
+
+/// Adds `text` to a text to lay out as a section of its own. The text shaper works section by
+/// section and takes each to run one way; `LayoutJob::append` would make one section of
+/// neighbours that look alike.
+fn section_of_its_own(job: &mut LayoutJob, text: &str, lead: f32, format: TextFormat) {
+    let start = job.text.len();
+    job.text.push_str(text);
+    job.sections.push(egui::text::LayoutSection {
+        leading_space: lead,
+        byte_range: egui::text::ByteIndex(start)..egui::text::ByteIndex(job.text.len()),
+        format,
+    });
+}
+
+/// A paragraph with right-to-left writing in it, as it is drawn.
+pub(crate) struct Turned {
+    /// The text with its lines broken and each in the order it is seen in.
+    pub(crate) job: LayoutJob,
+    /// For each line, what stands in it from the left: where it starts and ends, counted from
+    /// where the line starts, and which characters of the stored text it is.
+    pub(crate) rows: Vec<Vec<(f32, f32, (usize, usize))>>,
+    /// The pictures in the order they are met line by line from the left: for each, which of
+    /// the paragraph's pictures it is.
+    pictures: Vec<usize>,
+}
+
+/// Whether the text shaper takes `text` to be written from right to left: it goes by the
+/// first letter that belongs to one script, and is not told what stands around the text.
+fn shaped_from_the_right(text: &[char]) -> bool {
+    text.iter().find(|c| c.is_alphanumeric() && !c.is_ascii_digit() && **c != '\u{0640}').is_some_and(|c| script::is_rtl(*c))
+}
+
+/// A word as it is handed to the text shaper so that it is drawn the way `level` says. The
+/// shaper turns a word of right-to-left letters round, and its brackets with it; whatever else
+/// is to be turned is turned here.
+fn spelled(text: &[char], level: u8) -> String {
+    match (level % 2 == 1, shaped_from_the_right(text)) {
+        (true, true) | (false, false) => text.iter().collect(),
+        (true, false) => text.iter().rev().map(|c| script::mirrored(*c)).collect(),
+        // Turned here, and turned back by the shaper: digits written with Arabic letters.
+        (false, true) => text.iter().rev().collect(),
+    }
+}
+
+/// A text with right-to-left writing in it, as it is drawn: its lines broken at its words and
+/// each put in the order it is seen in (UAX #9, L1 and L2). The text shaper is handed one
+/// piece of a word at a time, letters written from the right apart from everything else,
+/// because it takes all it is handed at once to run one way. `None` for text that is drawn as
+/// it is stored.
+pub(crate) fn turned(ui: &Ui, para: &Para, job: &LayoutJob) -> Option<Turned> {
+    if !para.rtl && !script::has_rtl(&job.text) {
+        return None;
+    }
+    let chars: Vec<char> = job.text.chars().collect();
+    if chars.len() > MAX_TURNED_CHARS {
+        return None;
+    }
+    let levels = script::levels(&job.text, Some(para.rtl));
+    let sections = sections_of(job);
+    let part = |c: char| match c {
+        '\n' => Part::Break,
+        c if c.is_whitespace() => Part::Blank,
+        _ => Part::Word,
+    };
+    let mut words: Vec<Word> = Vec::new();
+    for (at, c) in chars.iter().enumerate() {
+        let (section, level, part) = (sections.get(at).copied()?, levels.get(at).copied()?, part(*c));
+        let rtl = part == Part::Word && script::is_rtl(*c);
+        match words.last_mut() {
+            Some(last) if part != Part::Break && last.part == part && last.section == section && last.level == level && last.rtl == rtl => {
+                last.chars.1 = at + 1
+            }
+            _ => words.push(Word { chars: (at, at + 1), section, level, rtl, part, wide: 0.0 }),
+        }
+        if words.len() > MAX_TURNED_WORDS {
+            return None;
+        }
+    }
+    // The room before a section stands before the first of its words.
+    let mut led = vec![false; job.sections.len()];
+    let mut texts: Vec<(String, f32)> = Vec::with_capacity(words.len());
+    for word in &mut words {
+        let from = job.sections.get(word.section)?;
+        let first = led.get_mut(word.section).is_some_and(|led| !std::mem::replace(led, true));
+        let lead = if first { from.leading_space } else { 0.0 };
+        if word.part == Part::Break {
+            texts.push(("\n".to_string(), 0.0));
+            continue;
+        }
+        let text = spelled(chars.get(word.chars.0..word.chars.1)?, word.level);
+        let mut alone = LayoutJob::default();
+        alone.append(&text, lead, from.format.clone());
+        word.wide = ui.painter().layout_job(alone).size().x;
+        texts.push((text, lead));
+    }
+    // Lines break before the word there is no room for; blanks stay where they are. A word is
+    // all its pieces up to the next blank.
+    let wrap = job.wrap.max_width;
+    let mut lines: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut x = 0.0f32;
+    for (n, word) in words.iter().enumerate() {
+        let has_words = lines.last().is_some_and(|line| !line.is_empty());
+        let starts =
+            word.part == Part::Word && !n.checked_sub(1).and_then(|before| words.get(before)).is_some_and(|before| before.part == Part::Word);
+        let whole: f32 =
+            if starts { words.get(n..).unwrap_or_default().iter().take_while(|w| w.part == Part::Word).map(|w| w.wide).sum() } else { 0.0 };
+        if word.part == Part::Break || (starts && has_words && x + whole > wrap + 0.5) {
+            lines.push(Vec::new());
+            x = 0.0;
+        }
+        if word.part != Part::Break
+            && let Some(line) = lines.last_mut()
+        {
+            line.push(n);
+            x += word.wide;
+        }
+    }
+    let holders: Vec<usize> = words.iter().enumerate().filter(|(_, word)| holds_picture(job, word.section)).map(|(n, _)| n).collect();
+    let mut out = LayoutJob { text: String::new(), sections: Vec::new(), ..job.clone() };
+    out.wrap.max_width = f32::INFINITY;
+    let mut rows = Vec::with_capacity(lines.len());
+    let mut pictures = Vec::new();
+    let mut last_section = 0usize;
+    for (n, line) in lines.iter().enumerate() {
+        let stand_ins: Vec<char> = line.iter().map(|w| if words.get(*w).is_some_and(|word| word.part == Part::Blank) { ' ' } else { 'a' }).collect();
+        let depth: Vec<u8> = line.iter().map(|w| words.get(*w).map_or(0, |word| word.level)).collect();
+        let wide: f32 = line.iter().filter_map(|w| words.get(*w)).map(|word| word.wide).sum();
+        let mut x = match job.halign {
+            Align::Min => 0.0,
+            Align::Center => -wide / 2.0,
+            Align::Max => -wide,
+        };
+        let mut row = Vec::with_capacity(line.len());
+        for i in script::order(&stand_ins, &depth, u8::from(para.rtl)) {
+            let at = line.get(i).copied()?;
+            let (word, (text, lead)) = (words.get(at)?, texts.get(at)?);
+            section_of_its_own(&mut out, text, *lead, job.sections.get(word.section)?.format.clone());
+            row.push((x, x + word.wide, word.chars));
+            x += word.wide;
+            last_section = word.section;
+            if let Ok(nth) = holders.binary_search(&at) {
+                pictures.push(nth);
+            }
+        }
+        rows.push(row);
+        if n + 1 < lines.len() {
+            section_of_its_own(&mut out, "\n", 0.0, job.sections.get(last_section)?.format.clone());
+        }
+    }
+    Some(Turned { job: out, rows, pictures })
+}
+
+/// Whether a section of a text to lay out is the space that holds a picture's place
+/// ([`holder`]).
+fn holds_picture(job: &LayoutJob, section: usize) -> bool {
+    job.sections
+        .get(section)
+        .is_some_and(|s| s.format.color == Color32::TRANSPARENT && s.format.valign == Align::BOTTOM && s.format.line_height.is_some())
+}
+
+/// As [`spots`], for a text drawn in another order than it is stored: `order` says which of
+/// `placed` each picture met is.
+fn spots_turned(galley: &egui::Galley, placed: &[Placed], order: &[usize]) -> Vec<Rect> {
+    let mut out = vec![Rect::NOTHING; placed.len()];
+    let mut next = order.iter();
+    let mut want = next.next();
+    'rows: for row in &galley.rows {
+        for glyph in &row.glyphs {
+            let Some(p) = want.and_then(|nth| placed.get(*nth)) else { break 'rows };
+            if glyph.chr == p.holder.0 && (glyph.line_height - p.holder.1).abs() < 0.75 {
+                let bottom = row.pos.y + row.size.y - BASELINE;
+                if let Some(slot) = want.and_then(|nth| out.get_mut(*nth)) {
+                    *slot = Rect::from_min_size(pos2((row.pos.x + glyph.pos.x).round(), (bottom - p.size.y).round()), p.size);
+                }
+                want = next.next();
+            }
+        }
+    }
+    out
+}
+
 /// What fills the room of the tabs of a laid out text: marks from the end of what is before
 /// each tab to the tab, on the line of the letters. `pos` is the text's own corner.
 fn draw_leaders(ui: &Ui, galley: &egui::Galley, leaders: &[Lead], pos: egui::Pos2, color: Color32) {
@@ -925,7 +1146,13 @@ struct Spot {
 fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect {
     let (inset, _) = room(ui, para);
     let (job, ends, placed, leaders) = job_and_leaders(ui, para, runs, look, spot.width);
-    let galley = ui.painter().layout_job(job);
+    // Right-to-left writing is drawn in another order than it is stored.
+    let turned = turned(ui, para, &job).map(|turned| (ui.painter().layout_job(turned.job.clone()), turned));
+    let (galley, turned) = match turned {
+        // One line drawn for each that was made, or the text is drawn as it is stored.
+        Some((galley, turned)) if galley.rows.len() == turned.rows.len() => (galley, Some(turned)),
+        _ => (ui.painter().layout_job(job), None),
+    };
 
     let height = (galley.size().y + 2.0).max(spot.min_height);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag() - Sense::FOCUSABLE);
@@ -933,10 +1160,12 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
         return rect;
     }
     let text_left = rect.left() + inset + spot.left;
+    // Never past the room there is: a narrow table cell has less than the least a text wraps at.
+    let wide = spot.width.min((rect.right() - text_left).max(0.0));
     let pos = match para.align {
         rich::Align::Left => pos2(text_left, rect.top()),
-        rich::Align::Center => pos2(text_left + spot.width / 2.0, rect.top()),
-        rich::Align::Right => pos2(text_left + spot.width, rect.top()),
+        rich::Align::Center => pos2(text_left + wide / 2.0, rect.top()),
+        rich::Align::Right => pos2(text_left + wide, rect.top()),
     };
     quote_bars(ui, para, rect, look.t);
     if spot.marker
@@ -948,7 +1177,11 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
         ui.painter().text(pos2(rect.left() + inset - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, like, look.text());
     }
 
-    let spots: Vec<Rect> = spots(&galley, &placed).into_iter().map(|at| at.translate(pos.to_vec2())).collect();
+    let spots = match &turned {
+        Some(turned) => spots_turned(&galley, &placed, &turned.pictures),
+        None => spots(&galley, &placed),
+    };
+    let spots: Vec<Rect> = spots.into_iter().map(|at| at.translate(pos.to_vec2())).collect();
     // Where the pointer is: on a picture, or in the text, where a link shows its address and
     // nothing else happens.
     if let Some(pointer) = response.hover_pos() {
@@ -968,10 +1201,22 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
                 }
             }
         } else {
-            let cursor = galley.cursor_from_pos(pointer - pos);
-            let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
-            if (pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y) {
-                let index = cursor.index.0;
+            // The character under the pointer, as the text stores it.
+            let under = match &turned {
+                Some(turned) => {
+                    let (x, y) = (pointer.x - pos.x, pointer.y - pos.y);
+                    let row = galley.rows.iter().position(|row| y >= row.pos.y && y < row.pos.y + row.size.y);
+                    row.and_then(|n| turned.rows.get(n))
+                        .and_then(|row| row.iter().find(|(from, to, _)| x >= *from && x < *to))
+                        .map(|(.., chars)| chars.0)
+                }
+                None => {
+                    let cursor = galley.cursor_from_pos(pointer - pos);
+                    let at = galley.pos_from_cursor(cursor).translate(pos.to_vec2());
+                    ((pointer.x - at.center().x).abs() < 16.0 && at.y_range().contains(pointer.y)).then_some(cursor.index.0)
+                }
+            };
+            if let Some(index) = under {
                 let at = ends.iter().position(|end| index < *end);
                 if let Some(link) = at.and_then(|i| runs.get(i)).and_then(|r| r.style.link.as_ref()) {
                     let shown: String = link.chars().filter(|c| !c.is_control()).take(300).collect();
@@ -986,8 +1231,13 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             }
         }
     }
-    draw_leaders(ui, &galley, &leaders, pos, look.text());
-    LabelSelectionState::label_text_selection(ui, &response, pos, galley, look.text(), Stroke::NONE);
+    if turned.is_some() {
+        // Selecting would copy the letters in the order they are drawn: not offered yet.
+        ui.painter().galley(pos, galley, look.text());
+    } else {
+        draw_leaders(ui, &galley, &leaders, pos, look.text());
+        LabelSelectionState::label_text_selection(ui, &response, pos, galley, look.text(), Stroke::NONE);
+    }
     for (p, at) in placed.iter().zip(&spots) {
         if ui.is_rect_visible(*at) {
             picture(ui, p.run, p.stand, *at, look);

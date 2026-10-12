@@ -337,7 +337,7 @@ impl<'a> Fonts<'a> {
         f32::from(units) * size / loaded.units
     }
 
-    fn glyph(&mut self, face: usize, ch: char) -> u16 {
+    pub(crate) fn glyph(&mut self, face: usize, ch: char) -> u16 {
         let Some(loaded) = self.faces.get_mut(face) else { return 0 };
         if let Some(glyph) = loaded.chars.get(&ch) {
             return *glyph;

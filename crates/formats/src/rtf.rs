@@ -74,8 +74,9 @@ fn plain(text: &str) -> Doc {
             doc.truncated = true;
             break;
         }
-        doc.blocks
-            .push(Block::Para(Para { runs: vec![text_run(if line.is_empty() { "\u{a0}" } else { line }, Style::default())], ..Para::default() }));
+        doc.blocks.push(Block::Para(
+            Para { runs: vec![text_run(if line.is_empty() { "\u{a0}" } else { line }, Style::default())], ..Para::default() }.by_its_text(),
+        ));
     }
     doc
 }
@@ -231,6 +232,9 @@ struct Chars {
     star: bool,
     // Paragraph settings are saved and restored by groups like character ones.
     align: Align,
+    /// `\rtlpar`, and whether the paragraph was told a side to stand at.
+    rtl: bool,
+    sided: bool,
     indent: u8,
     in_table: bool,
     /// How many tables deep the paragraph is (`\itap`); 0 where it does not say.
@@ -506,6 +510,7 @@ impl Builder<'_> {
             "line" => self.text("\n", &cur.style),
             "pard" => {
                 cur.align = Align::Left;
+                (cur.rtl, cur.sided) = (false, false);
                 cur.indent = 0;
                 cur.in_table = false;
                 cur.itap = 0;
@@ -525,9 +530,12 @@ impl Builder<'_> {
             "sb" => cur.before = pixels(param, MAX_ABOVE),
             "sa" => cur.after = pixels(param, MAX_ABOVE),
             "brsp" => cur.pad = u16::from(pixels(param, MAX_FRAME_ROOM)),
-            "ql" | "qj" => cur.align = Align::Left,
-            "qc" => cur.align = Align::Center,
-            "qr" => cur.align = Align::Right,
+            "ql" | "qj" => (cur.align, cur.sided) = (Align::Left, true),
+            "qc" => (cur.align, cur.sided) = (Align::Center, true),
+            "qr" => (cur.align, cur.sided) = (Align::Right, true),
+            // The paragraph's direction (RTF 1.9.1, "Bidirectional Writing Order").
+            "rtlpar" => cur.rtl = true,
+            "ltrpar" => cur.rtl = false,
             // Twips; half an inch is one level.
             "li" => {
                 cur.left = param.unwrap_or(0).clamp(0, 31_680);
@@ -970,7 +978,9 @@ impl Builder<'_> {
             None => ParaKind::Body,
         };
         let tabs = if runs.iter().any(|r| r.picture.is_none() && r.text.contains('\t')) { tabs(cur) } else { Vec::new() };
-        let para = Block::Para(Para { runs, kind, align: cur.align, indent, frame, above, tabs, leading: leading(cur), ..Para::default() });
+        // A right-to-left paragraph that is told no side stands at the right.
+        let align = if cur.rtl && !cur.sided { Align::Right } else { cur.align };
+        let para = Block::Para(Para { runs, kind, align, indent, frame, above, tabs, leading: leading(cur), rtl: cur.rtl, ..Para::default() });
         if depth > 0 {
             self.open_cell().push(para);
         } else {

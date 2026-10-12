@@ -13,6 +13,7 @@ use openmailclient_formats::rich::{
 
 use crate::fonts::{Fonts, Pick};
 use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Setup, Text};
+use openmailclient_fonts::script;
 
 /// Points to the pixel.
 const PX: f32 = 0.75;
@@ -95,6 +96,10 @@ struct Glyph {
     tall: f32,
     /// A tab: what fills the room it takes.
     lead: Leader,
+    /// Which of the paragraph's characters it is, and how deep in right-to-left text it
+    /// stands (UAX #9): odd is right to left.
+    at: usize,
+    level: u8,
 }
 
 /// How a run's glyphs look.
@@ -403,6 +408,81 @@ impl<'f, 'l> Flow<'f, 'l> {
     /// The glyphs of a paragraph that has `room` across, the looks they point at, and the
     /// pictures among them. The run at `aside` stands at one side and is not among them.
     fn glyphs<'p>(&mut self, para: &'p Para, room: f32, aside: Option<usize>) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
+        let mut stored: Vec<char> = Vec::new();
+        let (mut out, looks, pictures) = self.glyphs_stored(para, room, aside, &mut stored);
+        self.directed(para.rtl, &mut out, &stored, &looks);
+        (out, looks, pictures)
+    }
+
+    /// Say how deep in right-to-left text each glyph stands, and turn round the brackets that
+    /// stand in it. `stored` is the paragraph's characters in the order they are read.
+    fn directed(&mut self, rtl: bool, glyphs: &mut [Glyph], stored: &[char], looks: &[Look]) {
+        if !rtl && !stored.iter().any(|c| script::is_rtl(*c)) {
+            return;
+        }
+        let text: String = stored.iter().collect();
+        let levels = script::levels(&text, Some(rtl));
+        for g in glyphs.iter_mut() {
+            g.level = levels.get(g.at).copied().unwrap_or(u8::from(rtl));
+            if g.level % 2 == 0 || g.picture.is_some() {
+                continue;
+            }
+            // Kerning is between a glyph and the one read after it, which here stands before it.
+            g.advance -= g.kern;
+            g.kern = 0.0;
+            let turned = script::mirrored(g.ch);
+            if turned == g.ch {
+                continue;
+            }
+            let glyph = self.fonts.glyph(g.pick.face, turned);
+            let size = looks.get(g.look).map_or(self.base.size, |l| l.size);
+            if glyph != 0
+                && let Some(advance) = self.fonts.face(g.pick.face).map(|f| f.advance(glyph, size))
+            {
+                (g.glyph, g.advance) = (glyph, advance);
+            }
+        }
+    }
+
+    /// Arabic letters as the shapes they have beside their neighbours, run by run; nothing for
+    /// a paragraph with none. A letter's neighbours may stand in another run.
+    fn shapes(&mut self, para: &Para) -> Vec<Vec<char>> {
+        let arabic = |c: char| matches!(c, '\u{0600}'..='\u{06FF}');
+        if !para.runs.iter().any(|run| run.picture.is_none() && run.text.chars().any(arabic)) {
+            return Vec::new();
+        }
+        let mut all: Vec<char> = Vec::new();
+        let mut counts: Vec<usize> = Vec::new();
+        for run in &para.runs {
+            let before = all.len();
+            match run.picture {
+                // A picture parts the letters at its sides.
+                Some(_) => all.push('\u{fffc}'),
+                None => all.extend(run.text.chars().take(MAX_PARA_GLYPHS.saturating_sub(before))),
+            }
+            counts.push(all.len() - before);
+        }
+        let mut chain = self.fonts.chain(&self.base.family.clone(), false, false, false);
+        let shaped = script::joined(&all, &mut |c| self.fonts.resolve(&mut chain, c).is_some_and(|(_, glyph)| glyph != 0));
+        let mut rest = shaped.as_slice();
+        counts
+            .into_iter()
+            .map(|count| {
+                let (own, after) = rest.split_at_checked(count).unwrap_or((rest, &[]));
+                rest = after;
+                own.to_vec()
+            })
+            .collect()
+    }
+
+    fn glyphs_stored<'p>(
+        &mut self,
+        para: &'p Para,
+        room: f32,
+        aside: Option<usize>,
+        stored: &mut Vec<char>,
+    ) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
+        let shapes = self.shapes(para);
         let mut out: Vec<Glyph> = Vec::new();
         let mut looks: Vec<Look> = Vec::new();
         let mut pictures: Vec<&'p Picture> = Vec::new();
@@ -449,7 +529,10 @@ impl<'f, 'l> Flow<'f, 'l> {
                         looks.push(plain);
                         looks.len() - 1
                     });
+                    stored.push('\u{fffc}');
                     out.push(Glyph {
+                        at: stored.len() - 1,
+                        level: 0,
                         ch: '\u{fffc}',
                         pick,
                         glyph,
@@ -488,7 +571,18 @@ impl<'f, 'l> Flow<'f, 'l> {
             });
             let family = s.family.clone().unwrap_or_else(|| self.base.family.clone());
             let mut chain = self.fonts.chain(&family, s.mono, s.bold, s.italic);
-            for ch in text.chars() {
+            // The shapes are of the run's own text, not of words that stand for a picture.
+            let shaped = shapes.get(n).filter(|_| run.picture.is_none());
+            let mut taken = false;
+            for (k, ch) in text.chars().enumerate() {
+                stored.push(ch);
+                // An alef that the lam before it took into itself.
+                if std::mem::take(&mut taken) {
+                    continue;
+                }
+                let joined = shaped.and_then(|s| s.get(k)).copied().filter(|j| *j != ch && *j != script::TAKEN);
+                let joined = joined.filter(|j| self.fonts.resolve(&mut chain, *j).is_some_and(|(_, glyph)| glyph != 0));
+                taken = joined.is_some() && shaped.and_then(|s| s.get(k + 1)) == Some(&script::TAKEN);
                 if out.len() >= MAX_PARA_GLYPHS || self.glyphs_left == 0 {
                     self.full = true;
                     return (out, looks, pictures);
@@ -504,7 +598,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                         continue;
                     }
                     c if c.is_control() => continue,
-                    c => (c, Kind::Ink, 1.0),
+                    c => (joined.unwrap_or(c), Kind::Ink, 1.0),
                 };
                 let Some((pick, glyph)) = self.fonts.resolve(&mut chain, shown) else {
                     self.no_font = true;
@@ -530,6 +624,8 @@ impl<'f, 'l> Flow<'f, 'l> {
                     }
                 }
                 out.push(Glyph {
+                    at: stored.len() - 1,
+                    level: 0,
                     ch: if kind == Kind::Break { '\n' } else { ch },
                     pick,
                     glyph,
@@ -614,6 +710,17 @@ impl<'f, 'l> Flow<'f, 'l> {
             // Spaces at the end of a line take no room.
             let seen = line.iter().rposition(|g| g.kind != Kind::Space).map_or(0, |last| last + 1);
             let line = line.get(..seen).unwrap_or_default();
+            // A line with right-to-left text in it is drawn in another order than it is read
+            // (UAX #9, L2).
+            let drawn: Vec<Glyph>;
+            let line = if para.rtl || line.iter().any(|g| g.level > 0) {
+                let chars: Vec<char> = line.iter().map(|g| g.ch).collect();
+                let levels: Vec<u8> = line.iter().map(|g| g.level).collect();
+                drawn = script::order(&chars, &levels, u8::from(para.rtl)).into_iter().filter_map(|i| line.get(i).copied()).collect();
+                drawn.as_slice()
+            } else {
+                line
+            };
             let (mut ascent, mut descent, mut gap) = (0.0f32, 0.0f32, 0.0f32);
             for g in line {
                 if g.picture.is_some() {
@@ -646,8 +753,10 @@ impl<'f, 'l> Flow<'f, 'l> {
             let mut pen = left
                 + match para.align {
                     Align::Left => 0.0,
-                    Align::Center => ((room - wide) / 2.0).max(0.0),
-                    Align::Right => (room - wide).max(0.0),
+                    // Never past the room there is: a narrow table cell has less than the
+                    // least a text wraps at.
+                    Align::Center => ((room.min(width - inset) - wide) / 2.0).max(0.0),
+                    Align::Right => (room.min(width - inset) - wide).max(0.0),
                 };
             // Glyphs that follow one another in one face and one look make one piece.
             let mut i = 0usize;

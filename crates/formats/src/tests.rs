@@ -2718,3 +2718,74 @@ fn hostile_bitmaps_in_drawings_never_panic() {
     // One of them alone is drawn.
     assert!(wmf_picture(&wmf(&records[..3]), Some((40, 40))).is_some());
 }
+
+/// Which way each paragraph of a document is written, and the side it stands at.
+fn ways(doc: &Doc) -> Vec<(bool, crate::rich::Align)> {
+    doc.blocks.iter().filter_map(|b| if let Block::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
+}
+
+#[test]
+fn a_paragraph_says_which_way_it_is_written() {
+    use crate::rich::Align::{Center, Left, Right};
+    // HTML: `dir`, and `direction` in a style; a right-to-left paragraph starts at the right
+    // unless it is told a side, and `start` and `end` are sides of the way it is written.
+    let doc = crate::html::parse(concat!(
+        "<p>a</p><p dir=rtl>b</p><p dir=RTL align=left>c</p><p style=\"direction:rtl\">d</p>",
+        "<p dir=rtl style=\"text-align:end\">e</p><p dir=rtl style=\"text-align:start\">f</p>",
+        "<p style=\"text-align:end\">g</p><p dir=rtl align=center>h</p><p dir=rtl style=\"direction:ltr\">i</p>",
+        "<div dir=rtl><p>j</p><p dir=ltr>k</p></div>",
+    ));
+    assert_eq!(
+        ways(&doc),
+        [
+            (false, Left),
+            (true, Right),
+            (true, Left),
+            (true, Right),
+            (true, Left),
+            (true, Right),
+            (false, Right),
+            (true, Center),
+            (false, Left),
+            (true, Right),
+            (false, Left)
+        ]
+    );
+    // `dir=auto`: by the first letter that has a direction; digits and signs have none.
+    let doc = crate::html::parse("<p dir=auto>12 (\u{5d0}) b</p><p dir=auto>12 b \u{5d0}</p><p dir=auto>12</p>");
+    assert_eq!(ways(&doc), [(true, Right), (false, Left), (false, Left)]);
+    // RTF: `\rtlpar` and `\ltrpar`, until `\pard`; `\ql` keeps a right-to-left paragraph left.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi \\pard\\rtlpar one\\par two\\par\\ql three\\par\\pard four\\par\\rtlpar\\ltrpar five\\par\\pard\\rtlpar\\qc six\\par}",
+    );
+    assert_eq!(ways(&doc), [(true, Right), (true, Right), (true, Left), (false, Left), (false, Left), (true, Center)]);
+    // Plain text says nothing: each paragraph goes by its own first letter.
+    let doc = Doc::plain("hello \u{5d0}\n\u{627}\u{644} hello\n123");
+    assert_eq!(ways(&doc), [(false, Left), (true, Right), (false, Left)]);
+}
+
+#[test]
+fn hostile_directions_never_panic() {
+    let deep = "<div dir=rtl>".repeat(5_000) + "\u{5d0}";
+    let long = format!("<p dir=\"{}\">x</p><p style=\"direction:{}\">y</p>", "rtl".repeat(100_000), "\u{202e}".repeat(50_000));
+    for html in [
+        deep.as_str(),
+        long.as_str(),
+        "<p dir>",
+        "<p dir=>a",
+        "<p dir=auto>",
+        "<p dir=auto>\u{202e}\u{202e}",
+        "<td dir=rtl>x",
+        "<p style=\"direction\">a<p style=\"direction:;text-align:start;text-align:end\">b",
+    ] {
+        let doc = crate::html::parse(html);
+        assert!(ways(&doc).len() <= 5_001);
+    }
+    let many = [b"{\\rtf1 ".as_slice(), &b"\\rtlpar\\ltrpar".repeat(50_000), b" x\\par}"].concat();
+    assert_eq!(crate::rtf::parse(&many).text().trim(), "x");
+    for rtf in [b"{\\rtf1\\rtlpar".as_slice(), b"{\\rtf1\\rtlpar-99999999999 a}", b"{\\rtf1\\ltrpar\\qr\\rtlpar}"] {
+        let _ = crate::rtf::parse(rtf);
+    }
+    let plain = "\u{5d0}\n".repeat(50_000) + &"\u{202e}".repeat(300_000);
+    assert!(!Doc::plain(&plain).blocks.is_empty());
+}

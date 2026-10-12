@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 35 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 36 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -36,7 +36,7 @@
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
-   complex-script shaping and right-to-left text, the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, keeping the page setup between runs, sending pages to a printer,
+   shaping from the font's own tables in print (M2.42), right-to-left text outside the body and the rest of what a right-to-left paragraph moves to the right (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, keeping the page setup between runs, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -71,6 +71,7 @@
 
 ## Revision history
 
+- 36 · 2026-10-12 — right-to-left text and joined Arabic letters (item 1).
 - 35 · 2026-10-12 — what item 3 leaves is scheduled in ROADMAP.md, "Do later (from M2)".
 - 34 · 2026-10-12 — M2 closed; item 3 is what it leaves.
 - 33 · 2026-10-12 — bitmaps beside a metafile's drawing (item 1).

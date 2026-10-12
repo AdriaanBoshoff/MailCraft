@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M2%20closed%20%C2%B7%20M3%20next-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-42%20of%20116%20%C2%B7%2036%25-yellow)
-![tests](https://img.shields.io/badge/tests-197%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-210%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -79,7 +79,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
 - **Writing `.pst` files.** Data files are read-only; changes to them are refused.
-- **Parts of formatted bodies.** Shaping of complex scripts and right-to-left text; SVG, WebP and
+- **Parts of formatted bodies.** Shaping of complex scripts in print; right-to-left text outside
+  the message body; SVG, WebP and
   TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a
   patterned brush; printing to a printer. Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).

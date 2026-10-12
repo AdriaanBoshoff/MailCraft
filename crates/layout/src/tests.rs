@@ -985,3 +985,113 @@ fn hostile_lists_are_printed_within_the_limits() {
     assert!(text.lines().any(|l| l == (MAX_ROWS - 1).to_string()) && !text.lines().any(|l| l == MAX_ROWS.to_string()));
     assert!(printed.pages.len() < MAX_PAGES);
 }
+
+/// Latin, Hebrew and Arabic letters, and the shapes Arabic letters take; beh has all four, lam
+/// with alef its one.
+const BOTH_WAYS: &str =
+    "abcdefgh12() \u{5d0}\u{5d1}\u{5d2}\u{5d3}\u{5d4}\u{5d5}\u{627}\u{628}\u{644}\u{fe8e}\u{fe8f}\u{fe90}\u{fe91}\u{fe92}\u{fefb}";
+
+fn glyphs_of(printed: &Printed) -> Vec<u16> {
+    let page = &printed.pages[0];
+    let y = page.texts.iter().map(|t| t.y).find(|y| *y > SMALL.margin + 20.0).unwrap();
+    page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).flat_map(|t| t.glyphs.iter().map(|(glyph, _)| *glyph)).collect()
+}
+
+#[test]
+fn right_to_left_text_is_printed_from_the_right() {
+    let rtl = |text: &str| Block::Para(Para { rtl: true, align: Align::Right, ..para(text) });
+    let body = doc(vec![
+        // Hebrew in a left-to-right paragraph: the word is turned, the line is not.
+        Block::Para(para("ab \u{5d0}\u{5d1}\u{5d2} cd")),
+        // A right-to-left paragraph: the first word at the right, Latin words and the digits after
+        // them as they are read.
+        rtl("\u{5d0}\u{5d1} ab 12 \u{5d2}\u{5d3}"),
+        // A bracket opens towards what it holds.
+        rtl("\u{5d0}(\u{5d1})"),
+        // Every line is turned by itself: the first words stay on the first line.
+        rtl(
+            "\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0} \u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1} \u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2} \u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}",
+        ),
+        Block::Para(para("plain")),
+    ]);
+    let printed = print_in(boxes::font(BOTH_WAYS), &body, SMALL);
+    within(&printed, SMALL);
+    let lines = body_lines(&printed.pages[0]);
+    assert_eq!(lines[0], "ab \u{5d2}\u{5d1}\u{5d0} cd");
+    assert_eq!(lines[1], "\u{5d3}\u{5d2} ab 12 \u{5d1}\u{5d0}");
+    // The characters are the ones stored; the glyph of the bracket is the other one.
+    assert_eq!(lines[2], ")\u{5d1}(\u{5d0}");
+    assert_eq!(
+        lines[3],
+        "\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2} \u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1} \u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}"
+    );
+    assert_eq!(lines[4], "\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}\u{5d3}");
+    assert_eq!(lines[5], "plain");
+    let page = &printed.pages[0];
+    let (open, close) = (BOTH_WAYS.chars().position(|c| c == '(').unwrap(), BOTH_WAYS.chars().position(|c| c == ')').unwrap());
+    let brackets: Vec<(u16, char)> = page.texts.iter().flat_map(|t| t.glyphs.iter().copied()).filter(|(_, c)| matches!(c, '(' | ')')).collect();
+    let glyph_of = |c: char| brackets.iter().find(|(_, ch)| *ch == c).unwrap().0;
+    assert_eq!(i32::from(glyph_of(')')) - i32::from(glyph_of('(')), open as i32 - close as i32);
+    // A right-to-left line ends at the right margin.
+    let ends: Vec<f32> = page.texts.iter().filter(|t| t.glyphs.iter().any(|(_, c)| *c == '\u{5d3}')).map(|t| t.x + t.width).collect();
+    assert!(ends.iter().all(|end| (end - (SMALL.width - SMALL.margin)).abs() < 0.01), "{ends:?}");
+}
+
+#[test]
+fn arabic_letters_are_printed_joined_where_the_font_has_the_shapes() {
+    let one = |text: &str, font: &str| glyphs_of(&print_in(boxes::font(font), &doc(vec![Block::Para(Para { rtl: true, ..para(text) })]), SMALL));
+    // Beh three times is its shape joined to the letter after, to both and to the one before:
+    // drawn from the right, so the first read stands last.
+    assert_eq!(one("\u{628}\u{628}\u{628}", BOTH_WAYS), one("\u{fe91}\u{fe92}\u{fe90}", BOTH_WAYS));
+    assert_eq!(one("\u{628}\u{628}\u{628}", BOTH_WAYS).len(), 3);
+    // Lam and alef are one glyph.
+    assert_eq!(one("\u{644}\u{627}", BOTH_WAYS), one("\u{fefb}", BOTH_WAYS));
+    // The letters join across a change of look.
+    let bold = Run { style: Style { bold: true, ..Style::default() }, ..run("\u{628}") };
+    let mixed = doc(vec![Block::Para(Para { runs: vec![run("\u{628}"), bold], rtl: true, ..Para::default() })]);
+    assert_eq!(glyphs_of(&print_in(boxes::font(BOTH_WAYS), &mixed, SMALL)), one("\u{fe91}\u{fe90}", BOTH_WAYS));
+    // A font without the shapes prints the letters as they are stored.
+    let bare = "ab \u{627}\u{628}\u{644}";
+    let plain = one("\u{628}\u{644}\u{627}", bare);
+    assert_eq!(plain.len(), 3);
+    assert_eq!(plain.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+}
+
+#[test]
+fn hostile_right_to_left_text_never_panics() {
+    let turns = "\u{202e}".repeat(300) + "ab\u{5d0}" + &"\u{202c}".repeat(400);
+    let body = doc(vec![
+        Block::Para(Para { rtl: true, ..para(&turns) }),
+        Block::Para(Para { rtl: true, ..para("") }),
+        Block::Para(Para { rtl: true, tabs: Vec::new(), ..para("\t\u{5d0}\t\n\n\u{644}") }),
+        Block::Para(Para {
+            rtl: true,
+            kind: ParaKind::Item("1.".into()),
+            indent: 3,
+            quote: 2,
+            ..para("\u{644}\u{644}\u{644}\u{627}\u{627} \u{200f}\u{200e}(((")
+        }),
+        Block::Para(Para {
+            runs: vec![run("\u{644}"), Run { text: "x".into(), picture: Some(Picture::Remote), ..Run::default() }, run("\u{627}")],
+            rtl: true,
+            ..Para::default()
+        }),
+        Block::Para(para(&"\u{5d0}\u{628} ".repeat(3000))),
+    ]);
+    let printed = print_in(boxes::font(BOTH_WAYS), &body, SMALL);
+    within(&printed, SMALL);
+    assert!(!printed.pages.is_empty());
+}
+
+#[test]
+fn text_at_the_right_of_a_narrow_cell_stays_inside_it() {
+    // A cell narrower than the least a text wraps at: its text ends where the cell does, not
+    // where that least would.
+    let right = |text: &str| Cell { blocks: vec![Block::Para(Para { align: Align::Right, ..para(text) })], span: 1, rows: 1, ..Cell::default() };
+    let table = Table { rows: vec![vec![right("on"), right("tw"), cell("three")]], border: true, padding: 1, ..Table::default() };
+    let printed = print(&doc(vec![Block::Table(table)]), Paper::A4);
+    let page = &printed.pages[0];
+    let find = |text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap();
+    let (one, two, three) = (find("on"), find("tw"), find("three"));
+    assert!(one.x + one.width <= two.x && two.x + two.width <= three.x, "{one:?} {two:?} {three:?}");
+}

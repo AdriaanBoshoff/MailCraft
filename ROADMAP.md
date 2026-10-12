@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 45 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) next · revision 46 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 42 of 116 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 197, all passing |
+| Tests | 210, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -80,8 +80,8 @@
 29. Done: Table Style: a folder's list printed as a table.
 30. Done: bitmaps beside a metafile's drawing.
 31. Done: M2 is closed; what it leaves is scheduled under "Do later (from M2)".
-32. Next: right-to-left text and joined Arabic letters (M2.41), then shaping in print (M2.42);
-    then M3 (writing `.pst`).
+32. Done: right-to-left text is drawn and printed in the order it is read, and Arabic letters are joined (M2.41).
+33. Next: shaping from the font's own tables in print (M2.42); then M3 (writing `.pst`).
 
 ## Do later (from M2)
 
@@ -90,9 +90,11 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 
 | Do later | When |
 |---|---|
-| Right-to-left text (Hebrew, Arabic) in the right order, and Arabic letters joined, on screen and in print | **now**: M2.41, before M3 |
-| Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts) | M2.42, before M3 |
-| Complex scripts shaped on screen (needs our own text drawing in the reading pane, not egui's) | with M5, when the item windows get their own text drawing |
+| ~~Right-to-left text (Hebrew, Arabic) in the right order, and Arabic letters joined, on screen and in print~~ | done: M2.41 |
+| Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts; Arabic joined by the font's tables and across a change of look; copying text out of a PDF in the order it is read) | **now**: M2.42, before M3 |
+| Right-to-left text in the message list, the header of the reading pane, folder names and the compose box (drawn there as stored, so Hebrew and Arabic read backwards) | M3b |
+| For a right-to-left paragraph: list markers, indents, quotation bars and tab leaders at the right; text beside a picture at the side; columns of a right-to-left table from the right; `<bdo>` and `unicode-bidi` | M3b |
+| Selecting and copying text in a paragraph with right-to-left writing; Arabic joined across a change of look on screen; other complex scripts checked on screen (egui shapes each piece from the font's tables; only Hebrew and Arabic were looked at) | with M5, when the item windows get their own text drawing |
 | Keeping the page setup between runs | M3, with the first settings that are saved |
 | The selected rows only, the view's own columns and group headings in Table Style | M3b, the batch after M3 |
 | A zoom in the print preview | M3b |
@@ -560,3 +562,24 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   every item a slot (M2.41 and M2.42 before M3, a batch M3b after it, M4, M5), and an item is
   struck from the table when it lands. Right-to-left text and shaping are taken first, before
   M3, because without them whole languages are unreadable.
+- **2026-10-12** - M2.41: right-to-left text. A paragraph now knows which way it is written: HTML `dir`
+  (`rtl`, `ltr`, `auto`) and `direction` in a style, with `text-align: start` and `end` as sides
+  of that way; RTF `\rtlpar` and `\ltrpar`; plain text by its first letter that has a
+  direction, paragraph by paragraph. A right-to-left paragraph starts at the right unless it is
+  told a side. Each line is put in the order it is seen in by the Unicode rules (UAX #9, with
+  the `unicode-bidi` crate for the levels and our own L1, L2 and L4: lines are broken first and
+  turned one by one, brackets are mirrored), in the reading pane and in print, so Hebrew and
+  Arabic read from the right with Latin words and numbers inside them the right way round. In
+  print, Arabic letters take the shapes they have beside their neighbours (the presentation
+  forms, with the lam-alef ligatures) where the font has them; on screen egui's shaper already
+  joins them from the font's own tables, and is handed one piece of a word at a time because
+  it takes everything it is handed at once to run one way. Limits: 200,000 characters to a
+  paragraph in print, 60,000 characters and 8,000 pieces on screen, past which the text is
+  drawn as it is stored. Made better on the way, for every table: text at the right or the
+  middle of a cell narrower than the least a text wraps at was drawn past the cell's edge, on
+  screen and in print, and now stays inside it. Moved to "Do later": selecting text in a
+  paragraph that was turned, the rest of a right-to-left paragraph's furniture, and
+  right-to-left text outside the body (the list, the header, folder names). Checked by tests
+  on text we wrote and by looking at a Hebrew and Arabic message of ours on screen and on a
+  printed page; Outlook's drawing of the same message was not compared, and nothing is claimed
+  about it.

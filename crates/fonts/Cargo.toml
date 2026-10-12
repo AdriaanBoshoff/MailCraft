@@ -13,3 +13,5 @@ workspace = true
 fontdb = { workspace = true }
 # Checks that a font file can be read before it is handed on.
 skrifa = { workspace = true }
+# The order right-to-left text is drawn in.
+unicode-bidi = { workspace = true }

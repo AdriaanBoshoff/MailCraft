@@ -690,3 +690,154 @@ fn the_print_window_shows_the_pages_and_follows_the_setup() {
     assert!(ui.preview.is_none());
     assert!(ui.requests.is_empty());
 }
+
+/// What a paragraph's text is handed to the text shaper as, `wide` wide, and for each line what
+/// stands in it from the left: where, and which of the stored characters.
+fn turned_text(html: &str, wide: f32) -> Option<(String, Vec<Vec<(f32, f32, (usize, usize))>>)> {
+    let doc = openmailclient_formats::html::parse(html);
+    let Some(openmailclient_formats::rich::Block::Para(para)) = doc.blocks.first() else { return None };
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut out = None;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = wide;
+        if para.align == openmailclient_formats::rich::Align::Right {
+            job.halign = egui::Align::RIGHT;
+        }
+        for run in &para.runs {
+            job.append(&run.text, 0.0, egui::TextFormat { font_id: font(16.0), ..egui::TextFormat::default() });
+        }
+        out = body::turned(ui, para, &job).map(|turned| {
+            // As many lines are drawn as were made.
+            let drawn = ui.painter().layout_job(turned.job.clone());
+            assert_eq!(drawn.rows.len(), turned.rows.len());
+            (turned.job.text.clone(), turned.rows)
+        });
+    });
+    output.textures_delta.clear();
+    out
+}
+
+#[test]
+fn right_to_left_text_is_drawn_in_the_order_it_is_seen_in() {
+    // Nothing right-to-left: the text is drawn as it is stored, and can be selected.
+    assert!(turned_text("<p>plain words</p>", 400.0).is_none());
+    // The text shaper turns a word of right-to-left letters round by itself, so such a word is
+    // handed over as it is stored; what is worked out here is where each word stands.
+    let (text, rows) = turned_text("<p>ab \u{5d0}\u{5d1}\u{5d2} cd</p>", 400.0).unwrap();
+    assert_eq!(text, "ab \u{5d0}\u{5d1}\u{5d2} cd");
+    assert_eq!(rows[0].iter().map(|(.., chars)| *chars).collect::<Vec<_>>(), [(0, 2), (2, 3), (3, 6), (6, 7), (7, 9)]);
+    // A right-to-left paragraph: the word read first stands last, at the right; Latin words
+    // are as they are read.
+    let (text, rows) = turned_text("<p dir=rtl>\u{5d0}\u{5d1} ab cd (\u{5d2})</p>", 400.0).unwrap();
+    assert_eq!(text, "(\u{5d2}) ab cd \u{5d0}\u{5d1}");
+    assert_eq!(rows[0].last().unwrap().2, (0, 2));
+    // Each thing in a line starts where the one before it ends.
+    assert!(rows[0].windows(2).all(|pair| (pair[0].1 - pair[1].0).abs() < 0.01 && pair[0].1 > pair[0].0));
+    // What the shaper would not turn is turned here: a full stop, a bracket alone, and Latin
+    // letters that are told to run from the right.
+    let (text, _) = turned_text("<p dir=rtl>ab cd.</p>", 400.0).unwrap();
+    assert_eq!(text, ".ab cd");
+    let (text, _) = turned_text("<p dir=rtl>\u{5d0} ( \u{5d1}</p>", 400.0).unwrap();
+    assert_eq!(text, "\u{5d1} ) \u{5d0}");
+    let (text, _) = turned_text("<p>a \u{202e}bcd\u{202c} e</p>", 400.0).unwrap();
+    assert_eq!(text.replace(['\u{202e}', '\u{202c}'], ""), "a dcb e");
+    // Digits written with Arabic letters run from the left, though the shaper takes them to
+    // run from the right: they are turned here and turned back there.
+    let (text, _) = turned_text("<p dir=rtl>\u{627} \u{661}\u{662}\u{663}</p>", 400.0).unwrap();
+    assert_eq!(text, "\u{663}\u{662}\u{661} \u{627}");
+    // Each line is turned by itself: the words read first stay on the first line.
+    let words = ["\u{5d0}".repeat(8), "\u{5d1}".repeat(8), "\u{5d2}".repeat(8)];
+    let (text, rows) = turned_text(&format!("<p dir=rtl>{}</p>", words.join(" ")), 100.0).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    assert_eq!(lines, words);
+    assert_eq!(rows.len(), 3);
+    // A right-to-left line is counted from its right end.
+    assert!(rows.iter().flatten().all(|(from, to, _)| *from < 0.0 && *to <= 0.01));
+}
+
+#[test]
+fn hostile_right_to_left_bodies_draw_without_panicking() {
+    let bodies = [
+        "<p dir=rtl>".to_string() + &"\u{202e}".repeat(400) + "ab\u{5d0}" + &"\u{202c}".repeat(500) + "</p>",
+        "<p dir=rtl></p><p dir=rtl> </p><p dir=rtl><br><br></p><p dir=auto>\u{644}\u{627}</p><p dir=auto>12</p>".to_string(),
+        "<p dir=rtl>\u{644}<img src=cid:none width=40 height=40>\u{627}<img src=cid:none width=4096 height=4096 align=left>".to_string() + &"\u{5d0}\u{628} ".repeat(2000) + "</p>",
+        "<p dir=rtl>".to_string() + &"\u{5d0} ".repeat(9000) + "</p><p>" + &"\u{5d0}".repeat(70_000) + "</p>",
+        "<pre dir=rtl>\u{5d0}\ta\t\u{644}\u{644}\u{627}\n\n\t</pre><ul dir=rtl><li>\u{5d0}<ol><li>\u{627}\u{644}</ol></ul>".to_string(),
+        "<table dir=rtl border=1 width=10><tr><td>\u{5d0}\u{5d1}<td style=\"direction:ltr;text-align:end\">\u{627}\u{644}\u{644}\u{647}<td dir=\"\u{202e}\">x</table>".to_string(),
+        "<p style=\"direction:rtl;direction:ltr;direction:;text-align:start\"><a href=\"https://x.example/\">\u{5d0}\u{644}\u{627}(</a>\u{200f}\u{200e}\u{200d}\u{640}</p>".to_string(),
+        "<blockquote dir=rtl>".repeat(200) + "\u{5d0}",
+    ];
+    let tokens = theme::Tokens::named(false);
+    for html in &bodies {
+        let doc = openmailclient_formats::html::parse(html);
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        for width in [0.0, 30.0, 800.0] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(width);
+                body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+            });
+            output.textures_delta.clear();
+        }
+    }
+}
+
+/// The letters of a paragraph's lines from the left as the text shaper leaves them on the
+/// screen: what it is handed, with every piece it takes to be right-to-left turned round.
+fn seen_text(html: &str) -> Vec<String> {
+    let doc = openmailclient_formats::html::parse(html);
+    let Some(openmailclient_formats::rich::Block::Para(para)) = doc.blocks.first() else { return Vec::new() };
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut out = Vec::new();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = 2000.0;
+        for run in &para.runs {
+            job.append(&run.text, 0.0, egui::TextFormat { font_id: font(16.0), ..egui::TextFormat::default() });
+        }
+        let Some(turned) = body::turned(ui, para, &job) else { return };
+        let drawn = ui.painter().layout_job(turned.job.clone());
+        // A glyph with no width only keeps count of a letter that was drawn with another.
+        out = drawn.rows.iter().map(|row| row.glyphs.iter().filter(|g| g.advance_width > 0.0).map(|g| g.chr).collect()).collect();
+    });
+    output.textures_delta.clear();
+    out
+}
+
+#[test]
+fn right_to_left_lines_reach_the_screen_with_latin_words_readable() {
+    // Each piece is shaped by itself: a line that begins with a Hebrew word does not take its
+    // Latin words round with it, and a Latin line leaves its Hebrew word turned.
+    assert_eq!(seen_text("<p dir=rtl>\u{5d0}\u{5d1} ab cd (\u{5d2}).</p>"), [".(\u{5d2}) ab cd \u{5d1}\u{5d0}"]);
+    assert_eq!(seen_text("<p>ab \u{5d0}\u{5d1}\u{5d2}, cd</p>"), ["ab \u{5d2}\u{5d1}\u{5d0}, cd"]);
+    // Digits stay as they are read, in either kind of line.
+    assert_eq!(seen_text("<p dir=rtl>\u{5d0}\u{5d1} 123 x</p>"), ["x 123 \u{5d1}\u{5d0}"]);
+}
+
+#[test]
+fn text_at_the_right_of_a_narrow_cell_stays_inside_it() {
+    // A cell narrower than the least a text wraps at: its text ends where the cell does.
+    let doc = openmailclient_formats::html::parse("<table border=1><tr><td align=right>on<td align=right>tw<td>three</table>");
+    let tokens = theme::Tokens::named(false);
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.set_max_width(600.0);
+        body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+    });
+    // Where each text was drawn, from its left to its right.
+    let mut spans: Vec<(String, f32, f32)> = Vec::new();
+    for clipped in &output.shapes {
+        if let egui::Shape::Text(text) = &clipped.shape {
+            let rect = text.galley.rect.translate(text.pos.to_vec2());
+            spans.push((text.galley.job.text.clone(), rect.left(), rect.right()));
+        }
+    }
+    output.textures_delta.clear();
+    let find = |text: &str| spans.iter().find(|(t, ..)| t == text).unwrap();
+    let (one, two, three) = (find("on"), find("tw"), find("three"));
+    assert!(one.2 <= two.1 + 0.01 && two.2 <= three.1 + 0.01, "{spans:?}");
+}

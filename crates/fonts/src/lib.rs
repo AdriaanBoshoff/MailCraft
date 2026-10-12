@@ -12,6 +12,7 @@
 
 pub mod boxes;
 mod letters;
+pub mod script;
 
 pub use letters::{Letter, Lettering, Letters, Ring, Scribe, letters, shapes};
 

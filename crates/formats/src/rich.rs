@@ -53,6 +53,9 @@ pub struct Para {
     pub tabs: Vec<Tab>,
     /// How tall the paragraph's lines are.
     pub leading: Leading,
+    /// The paragraph is written from right to left: its first word stands at the right, and
+    /// left-to-right words inside it keep their own order (UAX #9, the paragraph level).
+    pub rtl: bool,
 }
 
 /// How tall a paragraph's lines are.
@@ -401,13 +404,26 @@ impl Doc {
             let kept: String = line.chars().filter(|c| *c == '\t' || !c.is_control()).take(left).collect();
             left = left.saturating_sub(kept.chars().count().max(1));
             let runs = if kept.is_empty() { Vec::new() } else { vec![Run { text: kept, ..Run::default() }] };
-            doc.blocks.push(Block::Para(Para { runs, ..Para::default() }));
+            doc.blocks.push(Block::Para(Para { runs, ..Para::default() }.by_its_text()));
         }
         doc
     }
 }
 
 impl Para {
+    /// The paragraph with the direction of the first of its letters that has one, and at the
+    /// right if that is right to left: for text that does not say which way it is written.
+    pub fn by_its_text(mut self) -> Para {
+        let first = self.runs.iter().filter(|run| run.picture.is_none()).find_map(|run| openmailclient_fonts::script::first_strong(&run.text));
+        if first == Some(true) {
+            self.rtl = true;
+            if self.align == Align::Left {
+                self.align = Align::Right;
+            }
+        }
+        self
+    }
+
     /// Pixels of room between this paragraph and one above it.
     pub fn lead(&self) -> u16 {
         let margin = match (self.gap, &self.kind) {
