@@ -21,7 +21,7 @@ use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
 use mailcraft_formats::rich::{
-    self, Block, Doc, Edges, Filed, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
+    self, Block, Doc, Edge, Edges, Filed, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
 };
 use std::cell::Cell;
 use std::sync::Arc;
@@ -62,6 +62,8 @@ const MAX_FLOAT_SEARCH: usize = 256;
 /// Widest border line drawn, and most dashes drawn along one side of a border.
 const MAX_EDGE: u8 = 12;
 const MAX_DASHES: usize = 2048;
+/// Tabs of one paragraph whose room is filled with marks.
+const MAX_LEADERS: usize = 64;
 /// A border colour this close to what is behind it is drawn in the reader's own.
 const EDGE_CONTRAST: f32 = 1.3;
 /// The card of an attachment that stands in the text: how tall it is, the room its mark and its
@@ -203,10 +205,21 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
     let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0), top + near.y));
     let mut child = ui.new_child(UiBuilder::new().id_salt(("framed", at)).max_rect(inside));
     child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let between = f32::from(frame.between.width.min(MAX_EDGE));
     for (k, block) in paras.iter().enumerate() {
         if let Block::Para(p) = block {
+            // The line between one paragraph and the next, with the room the border keeps.
+            if k > 0 && between > 0.0 {
+                let pad = f32::from(frame.padding.0.min(MAX_CELL_ROOM));
+                child.add_space(pad);
+                let y = child.cursor().top();
+                let line = Rect::from_min_max(pos2(full.left(), y), pos2(full.right(), y + between));
+                child.add_space(between + pad);
+                let only = [frame.between, Edge::default(), Edge::default(), Edge::default()];
+                edges(ui, line, &only, look, look.text());
+            }
             // A picture at the side stays inside the border.
-            if let (Some(aside), _) = para(&mut child, p, look, k > 0, None) {
+            if let (Some(aside), _) = para(&mut child, p, look, k > 0 && between == 0.0, None) {
                 child.add_space((aside.bottom - child.cursor().top()).max(0.0));
             }
         }
@@ -646,6 +659,24 @@ fn holder(ui: &Ui, size: Vec2) -> Option<(char, TextFormat)> {
 /// Runs laid out as one piece of text no wider than `wrap`; the character offset where each run
 /// ends; and the pictures that stand in the text, in order.
 fn job<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> (LayoutJob, Vec<usize>, Vec<Placed<'a>>) {
+    let (job, ends, placed, _) = job_and_leaders(ui, para, runs, look, wrap);
+    (job, ends, placed)
+}
+
+/// A tab whose room is filled with marks.
+struct Lead {
+    /// Which of the text's tabs it is, counted from the first.
+    nth: usize,
+    with: rich::Leader,
+    /// The room before the tab, and the size of the letters beside it.
+    room: f32,
+    size: f32,
+}
+
+/// As [`job`], and the tabs whose room is filled.
+fn job_and_leaders<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> (LayoutJob, Vec<usize>, Vec<Placed<'a>>, Vec<Lead>) {
+    let mut leaders: Vec<Lead> = Vec::new();
+    let mut tabs = 0usize;
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap;
     // Where the text stands in its line, kept only where a tab will ask.
@@ -725,10 +756,18 @@ fn job<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> 
                     // A tab past the end of the first line stands where nothing here can say.
                     let room = if x < wrap {
                         let (ahead, point) = ahead(ui, runs, look, at, after, &format.font_id);
-                        rich::tab_room(&para.tabs, 1.0, step, x, ahead, point)
+                        let room = rich::tab_room(&para.tabs, 1.0, step, x, ahead, point);
+                        if let Some((_, stop)) = rich::tab_stop(&para.tabs, 1.0, x)
+                            && stop.lead != rich::Leader::None
+                            && leaders.len() < MAX_LEADERS
+                        {
+                            leaders.push(Lead { nth: tabs, with: stop.lead, room: (room - own).max(0.0), size: format.font_id.size });
+                        }
+                        room
                     } else {
                         step
                     };
+                    tabs = tabs.saturating_add(1);
                     job.append("\t", (room - own).max(0.0), tab);
                     x += room.max(own);
                     rest = after;
@@ -736,7 +775,59 @@ fn job<'a>(ui: &Ui, para: &Para, runs: &'a [Run], look: Look<'a>, wrap: f32) -> 
             }
         }
     }
-    (job, ends, placed)
+    (job, ends, placed, leaders)
+}
+
+/// What fills the room of the tabs of a laid out text: marks from the end of what is before
+/// each tab to the tab, on the line of the letters. `pos` is the text's own corner.
+fn draw_leaders(ui: &Ui, galley: &egui::Galley, leaders: &[Lead], pos: egui::Pos2, color: Color32) {
+    if leaders.is_empty() {
+        return;
+    }
+    let painter = ui.painter();
+    let mut nth = 0usize;
+    for row in &galley.rows {
+        for glyph in &row.glyphs {
+            if glyph.chr != '\t' {
+                continue;
+            }
+            let this = nth;
+            nth = nth.saturating_add(1);
+            let Some(lead) = leaders.iter().find(|l| l.nth == this) else { continue };
+            let (room, size) = (lead.room, lead.size.clamp(8.0, 64.0));
+            let end = pos.x + row.pos.x + glyph.pos.x - size * 0.2;
+            let start = end - room + size * 0.4;
+            if !(start.is_finite() && end.is_finite()) || end - start < size * 0.5 {
+                continue;
+            }
+            let base = (pos.y + row.pos.y + row.size.y - size * 0.3).round() - 1.0;
+            let line = |y: f32, thick: f32| {
+                painter.rect_filled(Rect::from_min_max(pos2(start.round(), y), pos2(end.round(), y + thick)), 0.0, color);
+            };
+            let marks = |y: f32, mark: f32, step: f32| {
+                let mut at = start.round();
+                let mut drawn = 0usize;
+                while at + mark <= end && drawn < MAX_DASHES {
+                    painter.rect_filled(Rect::from_min_size(pos2(at, y), vec2(mark, (size / 12.0).round().max(1.0))), 0.0, color);
+                    at += step;
+                    drawn += 1;
+                }
+            };
+            let thin = (size / 14.0).round().max(1.0);
+            match lead.with {
+                rich::Leader::None => {}
+                rich::Leader::Dots => marks(base, thin.max(2.0), (size * 0.3).round().max(4.0)),
+                rich::Leader::MiddleDots => marks(base - (size * 0.25).round(), thin.max(2.0), (size * 0.3).round().max(4.0)),
+                rich::Leader::Hyphens => marks(base - (size * 0.22).round(), (size * 0.25).round().max(2.0), (size * 0.45).round().max(4.0)),
+                rich::Leader::Line => line(base + 1.0, thin),
+                rich::Leader::ThickLine => line(base + 1.0, thin * 2.0),
+                rich::Leader::Equals => {
+                    line(base - (size * 0.18).round(), thin);
+                    line(base - (size * 0.18).round() - thin * 2.0 - 1.0, thin);
+                }
+            }
+        }
+    }
 }
 
 /// How a tab is set: the tab itself in letters too small to take room, so that the room
@@ -813,7 +904,7 @@ struct Spot {
 /// it took.
 fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect {
     let (inset, _) = room(ui, para);
-    let (job, ends, placed) = job(ui, para, runs, look, spot.width);
+    let (job, ends, placed, leaders) = job_and_leaders(ui, para, runs, look, spot.width);
     let galley = ui.painter().layout_job(job);
 
     let height = (galley.size().y + 2.0).max(spot.min_height);
@@ -864,6 +955,7 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             }
         }
     }
+    draw_leaders(ui, &galley, &leaders, pos, look.text());
     LabelSelectionState::label_text_selection(ui, &response, pos, galley, look.text(), Stroke::NONE);
     for (p, at) in placed.iter().zip(&spots) {
         if ui.is_rect_visible(*at) {

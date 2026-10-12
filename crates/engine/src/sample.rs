@@ -71,8 +71,8 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard To use the permit:\\par\r\n\
 {\\listtext\\pard\\plain 1.\\tab}\\pard\\fi-360\\li720\\sl360\\slmult1 Print the card below.\\par\r\n\
 {\\listtext\\pard\\plain 2.\\tab}Leave it where it can be read through the windscreen.\\par\r\n\
-\\pard\\sb120\\tx2100\\tqdec\\tx4800 Next payment\\tab 1 November\\tab 62.00\\par\r\n\
-\\pard\\tx2100\\tqdec\\tx4800 Late fee\\tab after the 5th\\tab 7.50\\par\r\n\
+\\pard\\sb120\\tx2100\\tqdec\\tldot\\tx4800 Next payment\\tab 1 November\\tab 62.00\\par\r\n\
+\\pard\\tx2100\\tqdec\\tldot\\tx4800 Late fee\\tab after the 5th\\tab 7.50\\par\r\n\
 \\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\
 \\pard\\par\\qc \\objattph\\'20\\par\r\n\
 \\pard\\par Bay 14 is the green one, third from the way in:\\par\r\n\

@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use mailcraft_formats::rich::{
-    Align, Block, Cell, Edge, Edges, Frame, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign, tab_room,
+    Align, Block, Cell, Edge, Edges, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Script, TAB_STEP, Tab, Table, TableWidth, VAlign, tab_room,
+    tab_stop,
 };
 
 use crate::fonts::{Fonts, Pick};
@@ -80,6 +81,8 @@ struct Glyph {
     picture: Option<usize>,
     /// A picture's height; nothing for text.
     tall: f32,
+    /// A tab: what fills the room it takes.
+    lead: Leader,
 }
 
 /// How a run's glyphs look.
@@ -141,6 +144,7 @@ fn set_tabs(glyphs: &mut [Glyph], tabs: &[Tab], pre: bool, room: f32) {
             let wide = tab_room(tabs, PX, step, x, after, point.unwrap_or(after));
             if let Some(g) = glyphs.get_mut(i) {
                 g.advance = wide;
+                g.lead = tab_stop(tabs, PX, x).map_or(Leader::None, |(_, stop)| stop.lead);
             }
             x += wide;
             continue;
@@ -390,7 +394,17 @@ impl<'f, 'l> Flow<'f, 'l> {
                         looks.push(plain);
                         looks.len() - 1
                     });
-                    out.push(Glyph { ch: '\u{fffc}', pick, glyph, advance: wide, look: at, kind: Kind::Ink, picture: Some(pictures.len()), tall });
+                    out.push(Glyph {
+                        ch: '\u{fffc}',
+                        pick,
+                        glyph,
+                        advance: wide,
+                        look: at,
+                        kind: Kind::Ink,
+                        picture: Some(pictures.len()),
+                        tall,
+                        lead: Leader::None,
+                    });
                     pictures.push(picture);
                     continue;
                 }
@@ -443,7 +457,17 @@ impl<'f, 'l> Flow<'f, 'l> {
                 };
                 self.glyphs_left -= 1;
                 let advance = self.fonts.face(pick.face).map_or(0.0, |f| f.advance(glyph, look.size)) * times;
-                out.push(Glyph { ch: if kind == Kind::Break { '\n' } else { ch }, pick, glyph, advance, look: at, kind, picture: None, tall: 0.0 });
+                out.push(Glyph {
+                    ch: if kind == Kind::Break { '\n' } else { ch },
+                    pick,
+                    glyph,
+                    advance,
+                    look: at,
+                    kind,
+                    picture: None,
+                    tall: 0.0,
+                    lead: Leader::None,
+                });
             }
         }
         (out, looks, pictures)
@@ -553,6 +577,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     let mut run: Vec<(u16, char)> = Vec::new();
                     let mut run_x = pen;
                     let mut texts: Vec<Text> = Vec::new();
+                    let mut leads: Vec<(f32, f32, Leader)> = Vec::new();
                     let mut close = |run: &mut Vec<(u16, char)>, from: f32, to: f32| {
                         if !run.is_empty() {
                             texts.push(Text {
@@ -571,6 +596,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     for g in piece {
                         if g.ch == '\t' {
                             close(&mut run, run_x, x);
+                            leads.push((x, g.advance, g.lead));
                             run_x = x + g.advance;
                         } else {
                             run.push((g.glyph, if g.ch == '\u{a0}' { ' ' } else { g.ch }));
@@ -580,6 +606,9 @@ impl<'f, 'l> Flow<'f, 'l> {
                     close(&mut run, run_x, x);
                     if let Some(page) = self.page(page) {
                         page.texts.extend(texts);
+                    }
+                    for (from, wide, lead) in leads {
+                        self.leader(page, from, wide, baseline, look, lead);
                     }
                 }
                 pen += piece_wide;
@@ -597,6 +626,30 @@ impl<'f, 'l> Flow<'f, 'l> {
             at.y += tall;
         }
         at
+    }
+
+    /// What fills the room a tab takes: a line of marks from `from`, `wide` long, standing
+    /// clear of the text at both ends.
+    fn leader(&mut self, page: usize, from: f32, wide: f32, baseline: f32, look: Look, lead: Leader) {
+        let clear = look.size * 0.15;
+        let (a, b) = (from + clear, from + wide - clear);
+        if !(a.is_finite() && b.is_finite()) || b - a < look.size * 0.5 {
+            return;
+        }
+        let thin = (look.size / 14.0).max(0.4);
+        let mut draw = |y: f32, width: f32, line: Line| self.rule(page, (a, y), (b, y), width, look.color, line);
+        match lead {
+            Leader::None => {}
+            Leader::Dots => draw(baseline - thin, thin * 1.4, Line::Dotted),
+            Leader::MiddleDots => draw(baseline - look.size * 0.3, thin * 1.4, Line::Dotted),
+            Leader::Hyphens => draw(baseline - look.size * 0.27, thin, Line::Dashed),
+            Leader::Line => draw(baseline + thin, thin, Line::Solid),
+            Leader::ThickLine => draw(baseline + thin, thin * 2.0, Line::Solid),
+            Leader::Equals => {
+                draw(baseline - look.size * 0.22, thin, Line::Solid);
+                draw(baseline - look.size * 0.36, thin, Line::Solid);
+            }
+        }
     }
 
     /// A list item's marker, ending at `right`.
@@ -810,9 +863,18 @@ impl<'f, 'l> Flow<'f, 'l> {
         let mut inner = At { page: start.page, y: start.y + near.1 };
         let left = (x + near.0).min(x + width);
         let room = (width - near.0 - far.0).max(24.0);
+        // The line between one paragraph and the next, with the room the border keeps.
+        let between = f32::from(frame.between.width.min(MAX_EDGE)) * PX;
         for (k, block) in paras.iter().enumerate() {
             if let Block::Para(p) = block {
-                inner = self.para(p, left, room, inner, k == 0);
+                if k > 0 && between > 0.0 && !self.full {
+                    let pad = f32::from(frame.padding.0.min(MAX_CELL_ROOM)) * PX;
+                    inner = self.room(At { page: inner.page, y: inner.y + pad }, between + pad);
+                    let y = inner.y + between / 2.0;
+                    self.edge(inner.page, (x, y), (x + width, y), between, &frame.between, true);
+                    inner.y += between + pad;
+                }
+                inner = self.para(p, left, room, inner, k == 0 || between > 0.0);
             }
         }
         let end = At { page: inner.page, y: inner.y + far.1 };

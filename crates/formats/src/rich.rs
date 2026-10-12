@@ -97,6 +97,22 @@ pub struct Tab {
     /// Pixels from where the paragraph's text starts.
     pub at: u16,
     pub kind: TabKind,
+    /// What fills the room the tab takes.
+    pub lead: Leader,
+}
+
+/// What fills the room a tab takes up to its stop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Leader {
+    #[default]
+    None,
+    Dots,
+    /// Dots at the middle of the letters.
+    MiddleDots,
+    Hyphens,
+    Line,
+    ThickLine,
+    Equals,
 }
 
 /// How the text after a tab stands at its stop.
@@ -126,19 +142,31 @@ pub fn tab_room(tabs: &[Tab], scale: f32, step: f32, x: f32, after: f32, point: 
         return step;
     }
     let ahead = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
-    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
-    let room = match tabs.iter().map(|t| (f32::from(t.at) * scale, t.kind)).find(|(at, _)| *at > x + 0.5) {
+    let room = match tab_stop(tabs, scale, x) {
         None => {
             let on = ((x / step).floor() + 1.0) * step - x;
             if on > 0.0 { on } else { step }
         }
-        Some((at, TabKind::Left)) => at - x,
-        Some((at, TabKind::Center)) => at - x - ahead(after) / 2.0,
-        Some((at, TabKind::Right)) => at - x - ahead(after),
-        Some((at, TabKind::Decimal)) => at - x - ahead(point),
+        Some((at, tab)) => match tab.kind {
+            TabKind::Left => at - x,
+            TabKind::Center => at - x - ahead(after) / 2.0,
+            TabKind::Right => at - x - ahead(after),
+            TabKind::Decimal => at - x - ahead(point),
+        },
     };
     // A place too far along for the arithmetic to hold still takes a step.
     if room.is_finite() { room.max(0.0) } else { step }
+}
+
+/// The stop of its own that a tab standing at `x` goes on to, and where that is in the
+/// measure of `x`; `scale` is that measure to the pixel. None where the paragraph has no
+/// stop ahead.
+pub fn tab_stop(tabs: &[Tab], scale: f32, x: f32) -> Option<(f32, Tab)> {
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    if !x.is_finite() || x < 0.0 {
+        return None;
+    }
+    tabs.iter().map(|t| (f32::from(t.at) * scale, *t)).find(|(at, _)| at.is_finite() && *at > x + 0.5)
 }
 
 /// One side of a border.
@@ -176,6 +204,8 @@ pub struct Frame {
     pub padding: (u16, u16),
     /// How far in the border itself stands, in the levels a paragraph's indent is counted in.
     pub indent: u8,
+    /// The line between one paragraph and the next inside the border.
+    pub between: Edge,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

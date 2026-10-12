@@ -197,7 +197,7 @@ fn a_table_stands_in_columns_inside_its_lines() {
 fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
     let rows: Vec<Vec<Cell>> = (0..60).map(|i| vec![cell(&format!("r{i}")), cell("v")]).collect();
     let edge = Edge { width: 4, color: Some([0, 0, 90]), line: Line::Double };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4), indent: 0 });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4), indent: 0, between: Edge::default() });
     let framed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Table(Table { rows, border: true, frame: [edge; 4], ..Table::default() }), framed("in"), framed("frame")]);
     let printed = print(&body, SMALL);
@@ -243,7 +243,7 @@ fn nested(depth: usize) -> Block {
 #[test]
 fn hostile_bodies_never_panic_and_stay_within_the_limits() {
     let wild = Edge { width: 255, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX), indent: u8::MAX });
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX), indent: u8::MAX, between: wild });
     let odd = |size: f32| Run {
         text: "odd \u{10ffff}\u{0}\n\n\t".repeat(20),
         style: Style { size: Some(size), family: Some(",,,;\"".into()), ..Style::default() },
@@ -375,7 +375,7 @@ fn pictures_stand_in_the_line_at_the_size_asked_for() {
 #[test]
 fn text_after_a_tab_stands_at_its_stop() {
     use mailcraft_formats::rich::{Tab, TabKind};
-    let stop = |at, kind| Tab { at, kind };
+    let stop = |at, kind| Tab { at, kind, lead: Default::default() };
     // Stops are in pixels, four to three points: 30, 90 and 120 points from the start.
     let tabs = vec![stop(40, TabKind::Left), stop(120, TabKind::Right), stop(160, TabKind::Decimal)];
     let body = doc(vec![
@@ -441,4 +441,53 @@ fn lines_are_as_tall_as_their_paragraph_says() {
         let body = doc(vec![Block::Para(Para { leading, ..para(&"word ".repeat(400)) })]);
         within(&print(&body, SMALL), SMALL);
     }
+}
+
+#[test]
+fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
+    use mailcraft_formats::rich::{Leader, Line, Tab, TabKind};
+    let stop = |at, lead| Tab { at, kind: TabKind::Right, lead };
+    let edge = Edge { width: 1, color: None, line: Line::Solid };
+    let between = Edge { width: 2, color: Some([200, 0, 0]), line: Line::Solid };
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: (4, 4), indent: 0, between });
+    let body = doc(vec![
+        Block::Para(Para { tabs: vec![stop(160, Leader::Dots)], ..para("aa\t1") }),
+        Block::Para(Para { tabs: vec![stop(160, Leader::None)], ..para("bb\t2") }),
+        Block::Para(Para { tabs: vec![stop(160, Leader::Equals)], ..para("cc\t3") }),
+        Block::Para(Para { frame: Some(frame.clone()), ..para("dd") }),
+        Block::Para(Para { frame: Some(frame), ..para("ee") }),
+    ]);
+    let printed = print(&body, Paper::A4);
+    let page = &printed.pages[0];
+    let find = |text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap();
+    // On the line of the letters, between the text before the tab and the text after it.
+    let on_line = |before: &str, after: &str| {
+        let (a, b) = (find(before), find(after));
+        page.rules
+            .iter()
+            .filter(|r| r.from.1 == r.to.1 && r.from.0 > a.x + a.width && r.to.0 < b.x && (r.from.1 - a.y).abs() < a.size * 0.5)
+            .collect::<Vec<_>>()
+    };
+    let dots = on_line("aa", "1");
+    assert_eq!(dots.len(), 1);
+    assert_eq!(dots[0].line, Line::Dotted);
+    assert!(dots[0].to.0 - dots[0].from.0 > 80.0);
+    assert!(on_line("bb", "2").is_empty());
+    assert_eq!(on_line("cc", "3").len(), 2);
+
+    // The line between two paragraphs in one border: across the border, between their texts.
+    let (d, e) = (find("dd"), find("ee"));
+    let lines: Vec<_> = page.rules.iter().filter(|r| r.color == [200, 0, 0]).collect();
+    assert_eq!(lines.len(), 1);
+    let line = lines[0];
+    assert!(line.from.1 == line.to.1 && line.from.1 > d.y && line.to.1 < e.y - e.size * 0.5, "{line:?} {} {}", d.y, e.y);
+    assert!(line.from.0 < d.x && line.to.0 > 400.0 && (line.width - 1.5).abs() < 0.01);
+
+    // Hostile: lines of any width between many paragraphs, leaders with no room to stand in.
+    let wild = Edge { width: u8::MAX, color: None, line: Line::Double };
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: (u16::MAX, u16::MAX), indent: u8::MAX, between: wild });
+    let mut blocks: Vec<Block> = (0..300).map(|_| Block::Para(Para { frame: Some(frame.clone()), ..para("a") })).collect();
+    blocks.push(Block::Para(Para { tabs: (1..40).map(|n| stop(n, Leader::ThickLine)).collect(), ..para(&"a\t".repeat(500)) }));
+    blocks.push(Block::Para(Para { tabs: vec![stop(u16::MAX, Leader::Hyphens)], ..para("a\tb\t\t") }));
+    within(&print(&doc(blocks), SMALL), SMALL);
 }

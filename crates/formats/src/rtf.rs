@@ -14,8 +14,8 @@ use mailcraft_model::rtf::{Event, Reader, Scope, Wrapped, encapsulated, is_skipp
 
 use crate::html;
 use crate::rich::{
-    Align, Block, Cell, Doc, Edge, Edges, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, Tab,
-    TabKind, Table, VAlign, any_edge,
+    Align, Block, Cell, Doc, Edge, Edges, Frame, LEADING_PX, LEADING_TIMES, Leader, Leading, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style,
+    Tab, TabKind, Table, VAlign, any_edge,
 };
 
 const MAX_BLOCKS: usize = 50_000;
@@ -45,6 +45,8 @@ const MAX_ABOVE: i32 = 96;
 const MAX_FRAME_ROOM: i32 = 64;
 /// Which sides of a paragraph's border the words that follow describe: all four.
 const ALL_SIDES: u8 = 4;
+/// The line between paragraphs inside one border, as a side border words apply to.
+const BETWEEN: u8 = 5;
 /// Places for attachments one body may keep.
 const MAX_OBJECTS: usize = 256;
 /// Longest side a picture may ask to be shown at, in pixels.
@@ -210,8 +212,11 @@ struct Chars {
     /// Twips from the margin to the paragraph's text (`\li`), and its tab stops, in twips
     /// from the margin, with how the stop being described holds its text.
     left: i32,
-    tabs: Vec<(i32, TabKind)>,
+    tabs: Vec<(i32, TabKind, Leader)>,
     tab_kind: TabKind,
+    tab_lead: Leader,
+    /// The line between this paragraph and the next inside one border (`\brdrbtw`).
+    between: Edge,
     /// The height of the paragraph's lines (`\sl`), and whether it counts in 240ths of
     /// their own height (`\slmult1`) and not in twips.
     sl: i32,
@@ -435,8 +440,9 @@ impl Builder<'_> {
                 cur.itap = 0;
                 cur.edges = Edges::default();
                 (cur.side, cur.pad, cur.before, cur.after) = (None, 0, 0, 0);
-                (cur.left, cur.tab_kind) = (0, TabKind::Left);
+                (cur.left, cur.tab_kind, cur.tab_lead) = (0, TabKind::Left, Leader::None);
                 cur.tabs.clear();
+                cur.between = Edge::default();
                 (cur.sl, cur.sl_times) = (0, false);
             }
             // Line spacing (RTF 1.9.1, "Spacing").
@@ -458,14 +464,21 @@ impl Builder<'_> {
             "tqc" => cur.tab_kind = TabKind::Center,
             "tqr" => cur.tab_kind = TabKind::Right,
             "tqdec" => cur.tab_kind = TabKind::Decimal,
+            // What fills the room up to the next stop.
+            "tldot" => cur.tab_lead = Leader::Dots,
+            "tlmdot" => cur.tab_lead = Leader::MiddleDots,
+            "tlhyph" => cur.tab_lead = Leader::Hyphens,
+            "tlul" => cur.tab_lead = Leader::Line,
+            "tlth" => cur.tab_lead = Leader::ThickLine,
+            "tleq" => cur.tab_lead = Leader::Equals,
             "tx" => {
-                let kind = std::mem::take(&mut cur.tab_kind);
+                let (kind, lead) = (std::mem::take(&mut cur.tab_kind), std::mem::take(&mut cur.tab_lead));
                 if cur.tabs.len() < MAX_TABS {
-                    cur.tabs.push((param.unwrap_or(0), kind));
+                    cur.tabs.push((param.unwrap_or(0), kind, lead));
                 }
             }
             // A bar tab draws a line and moves nothing.
-            "tb" => cur.tab_kind = TabKind::Left,
+            "tb" => (cur.tab_kind, cur.tab_lead) = (TabKind::Left, Leader::None),
             "intbl" => cur.in_table = true,
             "itap" => cur.itap = u8::try_from(param.unwrap_or(1).clamp(0, i32::from(MAX_NEST))).unwrap_or(1),
             "trowd" => *self.def() = RowDef::default(),
@@ -516,14 +529,14 @@ impl Builder<'_> {
             "clbrdrb" => self.sides(cur, Some(2), None),
             "clbrdrl" => self.sides(cur, Some(3), None),
             // The sides of a paragraph's border (RTF 1.9.1, "Paragraph Borders"), in the same order.
+            "brdrbtw" => self.sides(cur, None, Some(BETWEEN)),
             "brdrt" => self.sides(cur, None, Some(0)),
             "brdrr" => self.sides(cur, None, Some(1)),
             "brdrb" => self.sides(cur, None, Some(2)),
             "brdrl" => self.sides(cur, None, Some(3)),
             "box" => self.sides(cur, None, Some(ALL_SIDES)),
-            // Borders of rows, of characters and between paragraphs are neither a cell's nor a
-            // paragraph's.
-            "trbrdrt" | "trbrdrl" | "trbrdrb" | "trbrdrr" | "trbrdrh" | "trbrdrv" | "brdrbtw" | "brdrbar" | "chbrdr" | "cldglu" | "cldgll" => {
+            // Borders of rows and of characters are neither a cell's nor a paragraph's.
+            "trbrdrt" | "trbrdrl" | "trbrdrb" | "trbrdrr" | "trbrdrh" | "trbrdrv" | "brdrbar" | "chbrdr" | "cldglu" | "cldgll" => {
                 self.sides(cur, None, None);
             }
             "brdrs" | "brdrth" | "brdrsh" | "brdrhair" | "brdrinset" | "brdroutset" => self.edge(cur, |e| e.line = Line::Solid),
@@ -609,6 +622,7 @@ impl Builder<'_> {
         }
         match cur.side {
             Some(ALL_SIDES) => cur.edges.iter_mut().for_each(set),
+            Some(BETWEEN) => set(&mut cur.between),
             Some(side) => {
                 if let Some(edge) = cur.edges.get_mut(usize::from(side)) {
                     set(edge);
@@ -625,7 +639,7 @@ impl Builder<'_> {
             return None;
         }
         // Where the body says nothing, a little room so that the text does not touch the lines.
-        let frame = Frame { edges: cur.edges, padding: (cur.pad.max(1), cur.pad.max(4)), indent: cur.indent };
+        let frame = Frame { edges: cur.edges, padding: (cur.pad.max(1), cur.pad.max(4)), indent: cur.indent, between: cur.between };
         match &self.frame {
             Some(last) if **last == frame => Some(Arc::clone(last)),
             _ => {
@@ -847,9 +861,9 @@ fn tabs(cur: &Chars) -> Vec<Tab> {
     let mut out: Vec<Tab> = cur
         .tabs
         .iter()
-        .filter_map(|(twips, kind)| {
+        .filter_map(|(twips, kind, lead)| {
             let at = twips.saturating_sub(cur.left) / 15;
-            (1..=MAX_TAB_AT).contains(&at).then(|| Tab { at: u16::try_from(at).unwrap_or(u16::MAX), kind: *kind })
+            (1..=MAX_TAB_AT).contains(&at).then(|| Tab { at: u16::try_from(at).unwrap_or(u16::MAX), kind: *kind, lead: *lead })
         })
         .collect();
     out.sort_by_key(|t| t.at);

@@ -2074,7 +2074,7 @@ fn rtf_paragraphs_have_tab_stops() {
           \\pard\\tqr\\tx9000{\\tx100 in\\tab side\\par}out\\tab side\\par}",
     );
     let p = paras(&doc);
-    let stop = |at, kind| Tab { at, kind };
+    let stop = |at, kind| Tab { at, kind, lead: Default::default() };
     // From where the text starts, the nearest first; a stop at or before the start is none,
     // and a bar tab is no stop.
     assert_eq!(p[0].tabs, [stop(48, TabKind::Left), stop(152, TabKind::Center), stop(240, TabKind::Right), stop(352, TabKind::Decimal)]);
@@ -2191,4 +2191,46 @@ fn paragraphs_say_how_tall_their_lines_are() {
             }
         }
     }
+}
+
+#[test]
+fn rtf_tabs_have_leaders_and_borders_a_line_between() {
+    use crate::rich::{Leader, Tab, TabKind, tab_stop};
+    // RTF 1.9.1, "Tabs": what fills the room comes before the stop, and is that stop's alone.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi\\pard\\tldot\\tx1440\\tqr\\tlul\\tx2880\\tx4320\\tlhyph\\tb5000\\tlmdot\\tx5760\\tlth\\tx7200\\tleq\\tx8640 \
+          a\\tab b\\tab c\\par \\pard\\tx1440 d\\tab e\\par}",
+    );
+    let p = paras(&doc);
+    let leads: Vec<Leader> = p[0].tabs.iter().map(|t| t.lead).collect();
+    assert_eq!(leads, [Leader::Dots, Leader::Line, Leader::None, Leader::MiddleDots, Leader::ThickLine, Leader::Equals]);
+    assert_eq!(p[0].tabs[1].kind, TabKind::Right);
+    assert_eq!(p[1].tabs, [Tab { at: 96, kind: TabKind::Left, lead: Leader::None }]);
+
+    // The stop a tab goes on to, in the measure it is asked in.
+    let tabs = &p[0].tabs;
+    assert_eq!(tab_stop(tabs, 1.0, 0.0).map(|(at, t)| (at, t.lead)), Some((96.0, Leader::Dots)));
+    assert_eq!(tab_stop(tabs, 1.0, 96.0).map(|(at, t)| (at, t.lead)), Some((192.0, Leader::Line)));
+    assert_eq!(tab_stop(tabs, 0.75, 71.9).map(|(at, _)| at), Some(144.0));
+    assert!(tab_stop(tabs, 1.0, 5000.0).is_none() && tab_stop(&[], 1.0, 0.0).is_none());
+    for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, f32::MAX] {
+        assert!(tab_stop(tabs, 1.0, wild).is_none(), "{wild}");
+        assert!(tab_stop(tabs, wild, 0.0).is_none_or(|(at, _)| at.is_finite()), "{wild}");
+    }
+
+    // RTF 1.9.1, "Paragraph Borders": `\brdrbtw` is the line between paragraphs in one border.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\colortbl;\\red200\\green0\\blue0;}\
+          \\pard\\box\\brdrs\\brdrw15\\brdrbtw\\brdrdot\\brdrw30\\brdrcf1 a\\par b\\par \
+          \\pard\\box\\brdrs\\brdrw15 c\\par \\pard\\brdrbtw\\brdrs\\brdrw2147483647 d\\par}",
+    );
+    let p = paras(&doc);
+    let frame = p[0].frame.as_ref().unwrap();
+    assert!(Arc::ptr_eq(frame, p[1].frame.as_ref().unwrap()));
+    assert_eq!((frame.between.width, frame.between.line, frame.between.color), (2, Line::Dotted, Some([200, 0, 0])));
+    assert!(frame.edges.iter().all(|e| e.width == 1 && e.line == Line::Solid && e.color.is_none()));
+    // A border without one has none, and a line between is no border of its own.
+    assert_eq!(p[2].frame.as_ref().unwrap().between.width, 0);
+    assert!(!Arc::ptr_eq(frame, p[2].frame.as_ref().unwrap()));
+    assert!(p[3].frame.is_none());
 }
