@@ -44,6 +44,7 @@ pub enum Icon {
     ChevronRight,
     Back,
     Open,
+    Page,
 }
 
 struct Pen<'a> {
@@ -277,6 +278,12 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Open => {
             pen.line(&[(14.0, 7.0), (14.0, 5.5), (7.5, 5.5), (6.0, 3.5), (1.5, 3.5), (1.5, 13.0)]);
             pen.closed(&[(4.0, 7.5), (15.0, 7.5), (12.5, 13.0), (1.5, 13.0)]);
+        }
+        Icon::Page => {
+            pen.closed(&[(3.5, 1.5), (9.5, 1.5), (12.5, 4.5), (12.5, 14.5), (3.5, 14.5)]);
+            pen.line(&[(9.5, 1.5), (9.5, 4.5), (12.5, 4.5)]);
+            pen.line(&[(5.5, 8.0), (10.5, 8.0)]);
+            pen.line(&[(5.5, 11.0), (10.5, 11.0)]);
         }
     }
 }

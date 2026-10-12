@@ -1061,7 +1061,7 @@ fn an_attached_object_is_shown_by_the_best_picture_it_has() {
 
 #[test]
 fn attachments_stand_in_their_places_in_an_rtf_body() {
-    use mailcraft_formats::rich::{Block, Picture};
+    use mailcraft_formats::rich::{Block, Filed, Picture};
     use mailcraft_model::{Attachment, Item, PropValue, pid, rtf};
     // A bitmap of two by two pixels, the lower left one blue, drawn by a metafile (META_STRETCHDIB).
     let mut dib = Vec::new();
@@ -1110,7 +1110,9 @@ fn attachments_stand_in_their_places_in_an_rtf_body() {
     let Some(Block::Para(para)) = doc.blocks.first() else { panic!("{doc:?}") };
     let stands: Vec<(Option<Picture>, &str)> =
         para.runs.iter().map(|r| (r.picture.clone(), r.text.as_str())).filter(|(p, t)| p.is_some() || t.contains('[')).collect();
-    assert_eq!(stands, [(Some(Picture::Inline(Some(0))), "chart"), (None, "[Attachment: notes.txt]")]);
+    // A file of its own stands as a file: what it is saved as, its number in the message and its size.
+    let notes = Filed { number: Some(0), name: "notes.txt".into(), kind: None, bytes: 5, caution: None };
+    assert_eq!(stands, [(Some(Picture::Inline(Some(0))), "chart"), (Some(Picture::File(notes)), "[Attachment: notes.txt]")]);
     // The object's own picture is a picture file the reading pane and print can decode.
     let pixels = crate::pictures::decode(&doc.written[0]).unwrap();
     assert_eq!((pixels.width, pixels.height), (2, 2));
@@ -1126,7 +1128,21 @@ fn attachments_stand_in_their_places_in_an_rtf_body() {
     }
     // A rendering that is not a metafile of one bitmap: the object is named.
     item.attachments[1].props.set(pid::ATTACH_RENDERING, PropValue::Binary(vec![0xFF; 64]));
-    assert!(read(2, &item).text().contains("[Attachment: chart]"));
+    let doc = read(2, &item);
+    assert!(doc.text().contains("[Attachment: chart]"));
+    // It is no file to save: it is named and no more.
+    let Some(Block::Para(para)) = doc.blocks.first() else { panic!("{doc:?}") };
+    let files: Vec<&Filed> = para.runs.iter().filter_map(|r| if let Some(Picture::File(f)) = &r.picture { Some(f) } else { None }).collect();
+    assert_eq!(files.first().map(|f| (f.number, f.name.as_str())), Some((None, "chart")));
+
+    // A file to think twice about says so where it stands, under the name it really has.
+    item.attachments[0] = at(Attachment::file("invoice\u{202e}fdp.exe", "application/pdf", b"MZ".to_vec()), 500);
+    let doc = read(2, &item);
+    let Some(Block::Para(para)) = doc.blocks.first() else { panic!("{doc:?}") };
+    let risky = para.runs.iter().find_map(|r| if let Some(Picture::File(f)) = &r.picture { f.number.map(|_| f) } else { None }).unwrap();
+    assert_eq!(risky.name, "invoicefdp.exe");
+    assert!(risky.caution.is_some(), "{risky:?}");
+    assert!(doc.text().contains("[Attachment: invoicefdp.exe]"));
 }
 
 #[test]

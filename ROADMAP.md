@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 27 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 28 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 159, all passing |
+| Tests | 160, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -62,7 +62,8 @@
     follows (M2.13 to M2.21).
 14. Done: Windows metafiles and enhanced metafiles that are drawings of lines, curves,
     filled shapes and text are drawn.
-15. Next: an icon beside an attachment named in the text; then `\bin` picture data.
+15. Done: an attachment that stands in the text is a card there, with its name and size.
+16. Next: `\bin` picture data.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -308,4 +309,17 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   and on paper; and what a drawing says becomes the picture's own text, so it is there for a
   screen reader, for the tooltip and for anything that reads the message as words. Not yet: a bitmap beside a drawing, patterned
   brushes.
+- **2026-10-12** - M2.25: an attachment that stands in the text of an RTF body ([MS-OXRTFEX]
+  2.2.3.4, [MS-OXCMSG] 2.2.2.16) is shown where it stands as a small card: our own drawing of
+  a sheet of paper, the attachment's name and its size. Before, it was a line of words in
+  brackets. The name is the one the file would be saved under, so nothing in it is hidden or
+  reversed. A click on the card asks where to save the attachment, as a click in the list
+  above the message does; nothing is opened or run from the text. An object of another
+  program that has no picture to show is a card too, with what it calls itself, and cannot be
+  clicked. Read as words (print, plain text, anything that reads the message for an agent)
+  the place still says `[Attachment: name]`. Beyond Outlook: the card says how large the file
+  is, and a file to think twice about (a program, a name with two endings or with hidden
+  characters, a document that carries macros) is marked in the text itself, with the reason
+  when the pointer rests on it - not only once it has been opened. A long name is cut in its
+  middle, so the ending stays in sight.
 

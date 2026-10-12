@@ -4,22 +4,26 @@
 //! drawn only when the message carries it, as an attachment or written into the body, and it
 //! could be decoded ([`Pictures`]); any other picture is an empty frame of the size it asks for,
 //! or a labelled placeholder when it asks for none. A picture stands in the line of text it is
-//! written in, or at one side when it asks to, with what follows beside it until it ends. A
+//! written in, or at one side when it asks to, with what follows beside it until it ends. An
+//! attachment that stands in the text is a small card there with our own mark, its name and its
+//! size; a click on it asks where to save it, and nothing is opened or run. A
 //! border a style asks for is drawn round its paragraphs, its table or its cell. Text is drawn in the font it
 //! names when that font, or an open one of the same measures, is installed ([`Faces`]). Colours
 //! a message asks for are kept only where they stay readable on what is behind them. Sizes follow what Outlook Classic
 //! was seen to do with the same message (`docs/ui-parity.md`, "Message bodies").
 
 use crate::faces::Faces;
+use crate::icons::{self, Icon};
 use crate::pictures::{Pictures, Shown};
 use crate::theme::Tokens;
-use crate::{bold, font};
+use crate::{bold, clip_text, font, text_width};
 use egui::text::{LayoutJob, TextFormat};
 use egui::text_selection::LabelSelectionState;
 use egui::{Align, Color32, FontFamily, FontId, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
 use mailcraft_formats::rich::{
-    self, Block, Doc, Edges, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
+    self, Block, Doc, Edges, Filed, Float, Frame, Line, Para, ParaKind, Picture, Run, Script, Table, TableWidth, VAlign, any_edge,
 };
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// Size of text the message gives no size for: 12 points.
@@ -60,6 +64,11 @@ const MAX_EDGE: u8 = 12;
 const MAX_DASHES: usize = 2048;
 /// A border colour this close to what is behind it is drawn in the reader's own.
 const EDGE_CONTRAST: f32 = 1.3;
+/// The card of an attachment that stands in the text: how tall it is, the room its mark and its
+/// edges take beside the words, and the narrowest it is drawn.
+const CARD_TALL: f32 = 22.0;
+const CARD_ROOM: f32 = 32.0;
+const MIN_CARD: f32 = 56.0;
 
 /// What drawing needs besides the document: the theme, the decoded pictures, and the colour
 /// behind the text being drawn (the pane, or a filled table cell).
@@ -69,6 +78,8 @@ struct Look<'a> {
     pictures: &'a Pictures,
     faces: &'a Faces,
     on: Color32,
+    /// The attachment a click in the text asked for, by its number in the message.
+    picked: &'a Cell<Option<usize>>,
 }
 
 impl Look<'_> {
@@ -78,9 +89,13 @@ impl Look<'_> {
     }
 }
 
-pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, faces: &Faces) {
+/// Draw the body. Returns the number of an attachment standing in the text that was clicked:
+/// the reader asks for it to be saved. Nothing is opened from here.
+pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, faces: &Faces) -> Option<usize> {
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-    blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface }, 0);
+    let picked = Cell::new(None);
+    blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface, picked: &picked }, 0);
+    picked.get()
 }
 
 /// A picture standing at one side, with room beside it still to fill.
@@ -275,6 +290,8 @@ enum Stand<'a> {
     Drawn(&'a Shown),
     /// The picture is not here to draw, but the body says how large it is.
     Frame,
+    /// An attachment that stands in the text as a file.
+    File(&'a Filed),
 }
 
 impl Stand<'_> {
@@ -283,17 +300,19 @@ impl Stand<'_> {
         match self {
             Stand::Drawn(picture) => picture.size,
             Stand::Frame => vec2(f32::from(run.extent.0), f32::from(run.extent.1)),
+            Stand::File(_) => vec2(MIN_CARD, CARD_TALL),
         }
     }
 }
 
 /// The picture a run stands for, or the frame that takes its place; `None` for text, and for a
 /// picture that is shown as a line of text.
-fn shown<'a>(run: &Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
+fn shown<'a>(run: &'a Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
     let drawn = match run.picture.as_ref()? {
         Picture::Attached(id) => pictures.get(id),
         Picture::Inline(Some(index)) => pictures.written(*index),
         Picture::Inline(None) | Picture::Remote | Picture::Object(_) => None,
+        Picture::File(filed) => return Some(Stand::File(filed)),
     };
     if let Some(drawn) = drawn {
         return Some(Stand::Drawn(drawn));
@@ -306,7 +325,7 @@ fn missing(picture: &Picture) -> &'static str {
     match picture {
         Picture::Remote => "Picture not downloaded",
         Picture::Attached(_) | Picture::Inline(_) => "Picture",
-        Picture::Object(_) => "Attachment",
+        Picture::Object(_) | Picture::File(_) => "Attachment",
     }
 }
 
@@ -335,6 +354,72 @@ fn frame(ui: &Ui, run: &Run, at: Rect, look: Look) {
     let label = if alt.is_empty() { what.to_string() } else { format!("{what}\n{alt}") };
     let galley = painter.layout(label, font(11.5), color, (at.width() - 36.0).max(8.0));
     painter.galley(at.min + vec2(28.0, 5.0), galley, color);
+}
+
+/// What the card of an attachment says: its name, what kind of object it is, and its size.
+fn card_words(filed: &Filed) -> String {
+    let mut words: String = filed.name.chars().filter(|c| !c.is_control()).take(120).collect();
+    if let Some(kind) = &filed.kind {
+        let kind: String = kind.chars().filter(|c| !c.is_control()).take(60).collect();
+        words = format!("{words} ({kind})");
+    }
+    if filed.bytes > 0 {
+        words = format!("{words}  ({})", mailcraft_engine::attachments::size_words(filed.bytes));
+    }
+    words
+}
+
+/// The size of an attachment's card in a line no wider than `wrap`.
+fn card_size(ui: &Ui, filed: &Filed, wrap: f32) -> Vec2 {
+    let wide = text_width(ui.painter(), &card_words(filed), font(12.0)) + CARD_ROOM;
+    let most = if wrap.is_finite() { wrap.max(MIN_CARD) } else { MAX_PICTURE_WIDTH };
+    vec2(wide.clamp(MIN_CARD, most).ceil(), CARD_TALL)
+}
+
+/// What is said about an attachment in the text when the pointer rests on it.
+fn card_tip(filed: &Filed) -> String {
+    let mut lines = vec![card_words(filed)];
+    lines.extend(filed.caution.iter().map(|words| words.chars().take(300).collect::<String>()));
+    lines.push(match filed.number {
+        Some(_) => "Click to save this attachment to a file. Nothing is opened or run from here.".to_string(),
+        None => "An object of another program that cannot be shown here.".to_string(),
+    });
+    lines.join("\n")
+}
+
+/// An attachment where it stands in the text: our own mark for a file, or for one to think
+/// twice about, then its name and size. A click asks for it to be saved.
+fn card(ui: &Ui, filed: &Filed, at: Rect, look: Look) {
+    let plain = look.on == look.t.surface;
+    let response = filed.number.map(|number| ui.interact(at, ui.id().with(("file in text", number)), Sense::click()));
+    let hovered = response.as_ref().is_some_and(|r| r.hovered());
+    let painter = ui.painter().with_clip_rect(at.intersect(ui.clip_rect()));
+    let ink = look.text();
+    let fill = match (plain, hovered) {
+        (true, true) => look.t.hover,
+        (true, false) => look.t.pane,
+        (false, true) => ink.gamma_multiply(0.15),
+        (false, false) => Color32::TRANSPARENT,
+    };
+    painter.rect_filled(at, 3.0, fill);
+    // One a reader should think twice about says so before it is pointed at.
+    let (line, icon, tint) = match filed.caution {
+        Some(_) => ((1.5, look.t.danger), Icon::Importance, look.t.danger),
+        None => ((1.0, if plain { look.t.line } else { faint(look) }), Icon::Page, faint(look)),
+    };
+    painter.rect_stroke(at, 3.0, line, egui::StrokeKind::Inside);
+    icons::paint(&painter, Rect::from_center_size(pos2(at.left() + 12.0, at.center().y), vec2(13.0, 13.0)), icon, tint);
+    // A long name is cut in its middle: the ending is what tells the kind of file.
+    let room = at.width() - CARD_ROOM + 4.0;
+    let words = card_words(filed);
+    let words = if text_width(&painter, &words, font(12.0)) > room { crate::middle_cut(&painter, &words, room, font(12.0)) } else { words };
+    clip_text(&painter, pos2(at.left() + 23.0, at.center().y - 8.0), room, &words, font(12.0), ink);
+    if let Some(response) = response {
+        if response.clicked() {
+            look.picked.set(filed.number);
+        }
+        response.on_hover_text(card_tip(filed));
+    }
 }
 
 /// Draw a paragraph. `until` is where a picture already standing at the side ends: lines that
@@ -499,11 +584,17 @@ fn picture(ui: &Ui, run: &Run, stand: Stand, at: Rect, look: Look) {
             ui.painter().image(drawn.texture.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         Stand::Frame => frame(ui, run, at, look),
+        // A card is set as low as the tails of the letters beside it, so that its words stand on
+        // their line.
+        Stand::File(filed) => card(ui, filed, at.translate(vec2(0.0, BASELINE)), look),
     }
 }
 
 /// What is said about a picture when the pointer rests on it.
 fn tip(run: &Run, stand: Stand) -> String {
+    if let Stand::File(filed) = stand {
+        return card_tip(filed);
+    }
     let mut lines: Vec<String> = Vec::new();
     if let (Stand::Frame, Some(picture)) = (stand, &run.picture) {
         lines.push(missing(picture).to_string());
@@ -566,7 +657,10 @@ fn job<'a>(ui: &Ui, runs: &'a [Run], look: Look<'a>, wrap: f32, align: rich::Ali
     let mut chars = 0usize;
     for (at, run) in runs.iter().enumerate() {
         let held = shown(run, look.pictures).and_then(|stand| {
-            let size = picture_size(run.extent, stand.natural(run), wrap);
+            let size = match stand {
+                Stand::File(filed) => card_size(ui, filed, wrap),
+                _ => picture_size(run.extent, stand.natural(run), wrap),
+            };
             holder(ui, size).map(|(space, format)| (stand, size, space, format))
         });
         let (text, format) = match held {
@@ -710,6 +804,12 @@ fn section(run: &Run, look: Look) -> (String, TextFormat) {
     let (color, background) = colors(s.color, s.background, look);
     format.color = color;
     format.background = background;
+    if let Some(Picture::File(_)) = &run.picture {
+        // Where there is no room for its card, an attachment is named in words.
+        format.color = faint(look);
+        format.background = Color32::TRANSPARENT;
+        return (alt(run), format);
+    }
     if let Some(picture) = &run.picture {
         let what = missing(picture);
         let alt = alt(run);

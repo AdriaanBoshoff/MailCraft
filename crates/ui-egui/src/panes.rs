@@ -577,7 +577,8 @@ impl MailUi {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad as i8, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match &doc {
-                        Some(doc) => body::draw(ui, doc, &t, &self.pictures, &self.faces),
+                        // An attachment that stands in the text is saved like one in the list above.
+                        Some(doc) => save = body::draw(ui, doc, &t, &self.pictures, &self.faces).or(save),
                         None => {
                             ui.add(egui::Label::new(egui::RichText::new(plain).font(font(13.5)).color(t.text)).wrap().selectable(true));
                         }

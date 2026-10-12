@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use mailcraft_formats::rich::{Block, Doc, Picture};
+use mailcraft_formats::rich::{Block, Doc, Filed, Picture};
 use mailcraft_model::{Attachment, Item, pid};
 
 /// Largest picture file that is decoded.
@@ -80,15 +80,39 @@ const MAX_DEPTH: usize = 64;
 /// 2.2.3.4): those that are not hidden and whose rendering position is not 0xFFFFFFFF, by that
 /// position ([MS-OXCMSG] 2.2.2.16).
 pub fn standing(item: &Item) -> Vec<&Attachment> {
-    let mut list: Vec<(u32, &Attachment)> = item
+    numbered(item).into_iter().map(|(_, a)| a).collect()
+}
+
+/// [`standing`], each with its number among the message's attachments.
+fn numbered(item: &Item) -> Vec<(usize, &Attachment)> {
+    let mut list: Vec<(u32, usize, &Attachment)> = item
         .attachments
         .iter()
-        .filter(|a| a.props.bool(pid::ATTACHMENT_HIDDEN) != Some(true))
-        .filter_map(|a| Some((u32::from_ne_bytes(a.props.i32(pid::RENDERING_POSITION)?.to_ne_bytes()), a)))
-        .filter(|(at, _)| *at != u32::MAX)
+        .enumerate()
+        .filter(|(_, a)| a.props.bool(pid::ATTACHMENT_HIDDEN) != Some(true))
+        .filter_map(|(i, a)| Some((u32::from_ne_bytes(a.props.i32(pid::RENDERING_POSITION)?.to_ne_bytes()), i, a)))
+        .filter(|(at, ..)| *at != u32::MAX)
         .collect();
-    list.sort_by_key(|(at, _)| *at);
-    list.into_iter().map(|(_, a)| a).collect()
+    list.sort_by_key(|(at, ..)| *at);
+    list.into_iter().map(|(_, i, a)| (i, a)).collect()
+}
+
+/// What the text shows of an attachment that stands in it as a file: the name it would be
+/// saved under, its size, and what a reader should know before saving it. One that is not a
+/// file of its own (an object of another program that has no picture) is named and no more.
+fn filed(number: usize, attachment: &Attachment, kind: Option<String>) -> Filed {
+    use crate::attachments;
+    if attachments::is_file(attachment) {
+        Filed {
+            number: Some(number),
+            name: attachments::file_name(attachment),
+            kind,
+            bytes: attachment.size(),
+            caution: attachments::caution_of(attachment).map(|caution| caution.words()),
+        }
+    } else {
+        Filed { number: None, name: attachments::safe_name(&attachment.name()), kind, bytes: attachment.size(), caution: None }
+    }
 }
 
 /// Put `item`'s attachments into the places `doc` keeps for them. An attached object that has a
@@ -100,7 +124,7 @@ pub fn settle(doc: &mut Doc, item: &Item) {
     if doc.objects == 0 {
         return;
     }
-    let list = standing(item);
+    let list = numbered(item);
     let list = if list.len() == doc.objects { list } else { Vec::new() };
     let Doc { blocks, written, .. } = doc;
     settle_blocks(blocks, written, &list, 0);
@@ -131,14 +155,14 @@ fn object_picture(attachment: &Attachment, object: Option<&mailcraft_msg::ole::O
     })
 }
 
-fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&Attachment], depth: usize) {
+fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[(usize, &Attachment)], depth: usize) {
     for block in blocks {
         match block {
             Block::Para(para) => {
                 for run in &mut para.runs {
                     let Some(Picture::Object(place)) = run.picture else { continue };
                     run.picture = None;
-                    let Some(attachment) = list.get(place) else { continue };
+                    let Some(&(number, attachment)) = list.get(place) else { continue };
                     // Attach method 6: an object of another program, with its own picture.
                     let object =
                         (attachment.props.i32(pid::ATTACH_METHOD) == Some(6)).then(|| mailcraft_msg::ole::object(&attachment.data)).flatten();
@@ -152,12 +176,13 @@ fn settle_blocks(blocks: &mut [Block], written: &mut Vec<Arc<[u8]>>, list: &[&At
                             run.text = attachment.name().chars().filter(|c| !c.is_control()).take(120).collect();
                         }
                         None => {
-                            let name: String = attachment.name().chars().filter(|c| !c.is_control()).take(120).collect();
                             // An object that cannot be shown is at least said to be what it is.
-                            run.text = match object.and_then(|o| o.kind) {
-                                Some(kind) => format!("[Attachment: {name} ({kind})]"),
-                                None => format!("[Attachment: {name}]"),
+                            let filed = filed(number, attachment, object.and_then(|o| o.kind));
+                            run.text = match &filed.kind {
+                                Some(kind) => format!("[Attachment: {} ({kind})]", filed.name),
+                                None => format!("[Attachment: {}]", filed.name),
                             };
+                            run.picture = Some(Picture::File(filed));
                         }
                     }
                 }

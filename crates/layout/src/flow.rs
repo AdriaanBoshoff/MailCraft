@@ -361,6 +361,8 @@ impl<'f, 'l> Flow<'f, 'l> {
             // One that cannot is named in words, as the reading pane names one it cannot show.
             let named;
             let text: &str = match &run.picture {
+                // An attachment that stands in the text is named there, in the text's own look.
+                Some(Picture::File(_)) => &run.text,
                 Some(picture) => {
                     let what = match picture {
                         Picture::Remote => "picture not downloaded",

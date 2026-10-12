@@ -163,6 +163,24 @@ pub enum Picture {
     /// The place an RTF body keeps for an attachment (`\objattph`), by its number among such
     /// places. Which attachment stands there is for whoever has the message to say.
     Object(usize),
+    /// An attachment that stands in the text as a file of its own. The run's text names it in
+    /// words, for whatever reads the body as text.
+    File(Filed),
+}
+
+/// What is known of an attachment that stands in the text, for showing it there.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filed {
+    /// Its number among the message's attachments, when it can be saved as a file.
+    pub number: Option<usize>,
+    /// Its name, as it would be saved: nothing in it is hidden or reversed.
+    pub name: String,
+    /// What an object of another program calls itself.
+    pub kind: Option<String>,
+    /// Its size in bytes.
+    pub bytes: usize,
+    /// What a reader should know before saving it, in a sentence.
+    pub caution: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

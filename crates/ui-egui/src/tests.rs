@@ -164,7 +164,7 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-        body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default(), &faces::Faces::default())
+        body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default(), &faces::Faces::default());
     });
     output.textures_delta.clear();
     ui.execute("ui.bodyFormat", &json!({ "format": "plain" })).unwrap();
@@ -218,8 +218,9 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
     assert!(shown.get("logo@example").is_some());
     assert!(["notes", "drawing", "missing", "https://x.example/r.png"].iter().all(|id| shown.get(id).is_none()));
     for dark in [false, true] {
-        let mut output =
-            ctx.run_ui(egui::RawInput::default(), |ui| body::draw(ui, &doc, &theme::Tokens::named(dark), &shown, &faces::Faces::default()));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            body::draw(ui, &doc, &theme::Tokens::named(dark), &shown, &faces::Faces::default());
+        });
         output.textures_delta.clear();
     }
     // Another message: nothing of the last one is kept.
@@ -461,6 +462,69 @@ fn hostile_rtf_bodies_draw_without_panicking() {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ui.set_max_width(width);
                 body::draw(ui, &doc, &tokens, &shown, &faces::Faces::default());
+            });
+            output.textures_delta.clear();
+        }
+    }
+}
+
+#[test]
+fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
+    use mailcraft_formats::rich::{Block, Doc, Filed, Para, Picture, Run};
+    let file = |filed: Filed| Run { text: format!("[Attachment: {}]", filed.name), picture: Some(Picture::File(filed)), ..Run::default() };
+    let doc_of = |runs: Vec<Run>| Doc { blocks: vec![Block::Para(Para { runs, ..Para::default() })], ..Doc::default() };
+    let notes = Filed { number: Some(3), name: "notes.txt".into(), kind: None, bytes: 2048, caution: None };
+    let doc = doc_of(vec![file(notes)]);
+    let draw = |ctx: &egui::Context, doc: &Doc, events: Vec<egui::Event>| {
+        let mut picked = None;
+        let input = egui::RawInput { events, ..egui::RawInput::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            picked = body::draw(ui, doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &faces::Faces::default());
+        });
+        output.textures_delta.clear();
+        picked
+    };
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    // Only looked at: nothing is asked for.
+    assert_eq!(draw(&ctx, &doc, Vec::new()), None);
+    // The card stands at the start of the first line. A click on it asks for that attachment.
+    let at = egui::pos2(30.0, 14.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    assert_eq!(draw(&ctx, &doc, vec![egui::Event::PointerMoved(at)]), None);
+    assert_eq!(draw(&ctx, &doc, vec![button(true)]), None);
+    assert_eq!(draw(&ctx, &doc, vec![button(false)]), Some(3));
+
+    // One that is no file of its own is shown and cannot be asked for.
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let object = doc_of(vec![file(Filed { number: None, name: "Card".into(), kind: Some("Permit card".into()), bytes: 0, caution: None })]);
+    for events in [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)]] {
+        assert_eq!(draw(&ctx, &object, events), None);
+    }
+
+    // Whatever a message makes of its attachments, in any room and on any colour: no panic.
+    let long = Filed {
+        number: Some(usize::MAX),
+        name: "\u{202e}x".repeat(5000),
+        kind: Some("k\n".repeat(5000)),
+        bytes: usize::MAX,
+        caution: Some("c".repeat(100_000)),
+    };
+    let mut hostile = doc_of((0..40).map(|_| file(long.clone())).collect());
+    let filled = mailcraft_formats::html::parse("<table><tr><td bgcolor=#203040>x</td></tr></table>");
+    if let Some(Block::Table(table)) = filled.blocks.first() {
+        let mut table = table.clone();
+        table.rows[0][0].blocks = hostile.blocks.clone();
+        hostile.blocks.push(Block::Table(table));
+    }
+    for dark in [false, true] {
+        for width in [0.0, 30.0, 800.0] {
+            let ctx = egui::Context::default();
+            install_fonts(&ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(width);
+                body::draw(ui, &hostile, &theme::Tokens::named(dark), &pictures::Pictures::default(), &faces::Faces::default());
             });
             output.textures_delta.clear();
         }
