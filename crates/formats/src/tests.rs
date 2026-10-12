@@ -2007,3 +2007,57 @@ fn hostile_rtf_paragraph_borders_and_spacing_never_panic() {
         }
     }
 }
+
+#[test]
+fn rtf_list_paragraphs_have_their_numbers_and_bullets() {
+    // As Word writes a list (RTF 1.9.1, "List Text"): the number worked out, then the text.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\fonttbl{\\f0 Arial;}{\\f3\\fnil\\fcharset2 Symbol;}}\
+          \\pard before\\par\
+          \\pard{\\listtext\\pard\\plain\\f0 1.\\tab}\\ls1\\fi-360\\li720 first\\par\
+          {\\listtext\\pard\\plain\\f0 2.\\tab}\\ls1\\fi-360\\li720 second {\\b bold}\\par\
+          {\\listtext\\pard\\plain\\f3 \\'b7\\tab}\\ls2\\fi-360\\li1440 round\\par\
+          {\\listtext\\pard\\plain o\\tab}\\ls2\\ilvl1\\fi-360\\li1440 hollow\\par\
+          \\pard{\\pntext\\pard\\plain iv)\\tab}{\\*\\pn\\pnlvlbody\\pnlcrm{\\pntxta )}}\\fi-360 old\\par\
+          {\\listtext 3.\\tab}\\par\
+          {\\listtext \\tab}\\pard after\\par}",
+    );
+    let p = paras(&doc);
+    let kinds: Vec<(Option<&str>, u8)> =
+        p.iter().map(|p| (if let ParaKind::Item(m) = &p.kind { Some(m.as_str()) } else { None }, p.indent)).collect();
+    assert_eq!(
+        kinds,
+        [
+            (None, 0),
+            (Some("1."), 1),
+            (Some("2."), 1),
+            (Some("\u{2022}"), 2),
+            (Some("\u{25e6}"), 2),
+            // A number with no indent still has room to stand in.
+            (Some("iv)"), 1),
+            // A number with nothing after it is still a paragraph of the list.
+            (Some("3."), 1),
+            // A marker that is only room is none.
+            (None, 0)
+        ]
+    );
+    // The number is not written twice, and the words of the paragraph keep their looks.
+    assert_eq!(p[2].text(), "second bold");
+    assert!(p[2].runs.last().is_some_and(|r| r.style.bold));
+    assert_eq!(doc.text(), "before\n1. first\n2. second bold\n\u{2022} round\n\u{25e6} hollow\niv) old\n3. \u{a0}\nafter");
+    // A reader that only wants the words still has the numbers the writer left.
+    assert!(mailcraft_model::rtf::to_text(b"{\\rtf1{\\listtext 1.\\tab}first\\par}").starts_with("1.\tfirst"));
+
+    // Hostile: a number without end, markers inside markers, one never closed, one in a cell.
+    let mut body = String::from("{\\rtf1{\\listtext ");
+    body.push_str(&"9".repeat(5000));
+    body.push_str(
+        "}x\\par{\\listtext{\\listtext{\\pntext a}b}c}y\\par\\trowd\\cellx900\\cellx1800\\intbl{\\listtext 1.}in\\cell two\\cell\\row{\\listtext z",
+    );
+    let doc = crate::rtf::parse(body.as_bytes());
+    let p = paras(&doc);
+    assert!(matches!(&p[0].kind, ParaKind::Item(m) if m.chars().count() == 12));
+    assert!(matches!(&p[1].kind, ParaKind::Item(m) if m == "abc"), "{:?}", p[1].kind);
+    let Some(Block::Para(cell)) = tables(&doc)[0].rows[0][0].blocks.first() else { panic!() };
+    assert_eq!(cell.kind, ParaKind::Item("1.".into()));
+}

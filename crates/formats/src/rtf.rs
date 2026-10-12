@@ -32,6 +32,8 @@ const MAX_ROW_SPAN: u16 = 1000;
 /// The most columns one cell merged across covers, and how deep tables stand in tables.
 const MAX_SPAN: u16 = 64;
 const MAX_NEST: u8 = 8;
+/// Characters of a list paragraph's number or bullet.
+const MAX_MARKER: usize = 12;
 /// Pixels of room a paragraph may ask for above it, and between its border and its text.
 const MAX_ABOVE: i32 = 96;
 const MAX_FRAME_ROOM: i32 = 64;
@@ -85,6 +87,9 @@ enum Dest {
     Instruction,
     /// A picture's settings and data (`\pict`).
     Picture,
+    /// The number or bullet a list paragraph starts with, as the writer worked it out
+    /// (`\listtext`, `\pntext`).
+    Marker,
 }
 
 /// A picture being read.
@@ -221,6 +226,8 @@ struct Builder<'a> {
     written_bytes: usize,
     objects: usize,
     runs: Vec<Run>,
+    /// The number or bullet of the paragraph being read, when it is one of a list.
+    marker: String,
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
     mono_fonts: HashSet<i32>,
@@ -285,7 +292,7 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                         }
                     }
                     Dest::Picture => b.picture_word(&mut scope.cur, word, param, star),
-                    Dest::Skip | Dest::Instruction => {}
+                    Dest::Skip | Dest::Instruction | Dest::Marker => {}
                 }
             }
             Event::Bin(data, whole) => {
@@ -323,6 +330,10 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                     }
                     Dest::Instruction if b.instruction.len() < MAX_LINK * 2 => b.instruction.push_str(&text),
                     Dest::Picture => b.picture_data(&text),
+                    Dest::Marker => {
+                        let room = (MAX_MARKER * 4).saturating_sub(b.marker.chars().count());
+                        b.marker.extend(text.chars().take(room));
+                    }
                     _ => {}
                 }
             }
@@ -358,6 +369,12 @@ impl Builder<'_> {
             "nesttableprops" => cur.nest_props = true,
             // What a reader that knows no tables inside cells is given in their place.
             "nonesttables" => cur.dest = Dest::Skip,
+            // The number or bullet of a list paragraph, worked out by the writer (RTF 1.9.1,
+            // "List Text" and "Bullets and Numbering").
+            "listtext" | "pntext" => {
+                cur.dest = Dest::Marker;
+                self.marker.clear();
+            }
             "pict" if cur.hidden => cur.dest = Dest::Skip,
             "pict" => {
                 self.end_picture();
@@ -715,7 +732,9 @@ impl Builder<'_> {
         self.settle(depth);
         let mut runs = std::mem::take(&mut self.runs);
         if runs.is_empty() {
-            if !blank {
+            // A list paragraph with nothing after its number is still one.
+            if !blank && marker(&self.marker).is_none() {
+                self.marker.clear();
                 return;
             }
             runs.push(text_run("\u{a0}", Style::default()));
@@ -723,8 +742,16 @@ impl Builder<'_> {
         let frame = self.frame_of(cur);
         let above = cur.before.saturating_add(std::mem::replace(&mut self.below, cur.after)).min(u8::try_from(MAX_ABOVE).unwrap_or(u8::MAX));
         // A border stands at the paragraph's indent, and the text just inside it.
-        let indent = if frame.is_some() { 0 } else { cur.indent };
-        let para = Block::Para(Para { runs, kind: ParaKind::Body, align: cur.align, indent, frame, above, ..Para::default() });
+        let mut indent = if frame.is_some() { 0 } else { cur.indent };
+        let kind = match marker(&std::mem::take(&mut self.marker)) {
+            // The number or bullet stands in the room the indent leaves.
+            Some(marker) => {
+                indent = indent.max(1);
+                ParaKind::Item(marker)
+            }
+            None => ParaKind::Body,
+        };
+        let para = Block::Para(Para { runs, kind, align: cur.align, indent, frame, above, ..Para::default() });
         if depth > 0 {
             self.open_cell().push(para);
         } else {
@@ -742,6 +769,22 @@ impl Builder<'_> {
         let table = std::mem::take(&mut self.table);
         self.blocks.extend(table.finish());
     }
+}
+
+/// The number or bullet of a list paragraph, from the text the writer left for it. A bullet
+/// written as a character of a symbol font is the bullet it stands for there.
+fn marker(written: &str) -> Option<String> {
+    let text: String = written.chars().filter(|c| !c.is_control()).collect();
+    let text = text.trim();
+    let marker = match text {
+        "" => return None,
+        // The round and the square bullet of the symbol fonts, by their codes in those fonts
+        // and as those codes read in the Windows code page; "o" is the hollow one.
+        "\u{b7}" | "\u{f0b7}" | "\u{a7}" | "\u{f0a7}" | "\u{f0a8}" => "\u{2022}".to_string(),
+        "o" => "\u{25e6}".to_string(),
+        _ => text.chars().take(MAX_MARKER).collect(),
+    };
+    Some(marker)
 }
 
 /// Twips as pixels, 15 to the pixel, and never more than `most`.

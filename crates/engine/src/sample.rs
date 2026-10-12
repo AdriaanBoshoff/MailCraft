@@ -68,6 +68,9 @@ const PERMIT_RTF: &str = "{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswi
 \\pard\\intbl\\itap2 On\\nestcell 3 October\\nestcell{\\*\\nesttableprops\\trowd\\cellx900\\cellx3600\\nestrow}{\\nonesttables\\par}\r\n\
 \\pard\\intbl\\cell\\pard\\intbl\\cell\\row\r\n\
 \\pard\\sb240\\sa120\\li720\\brdrl\\brdrs\\brdrw45\\brdrcf1\\brsp120 Keep this receipt: the barrier reads the permit number, not the number plate.\\par\r\n\
+\\pard To use the permit:\\par\r\n\
+{\\listtext\\pard\\plain 1.\\tab}\\pard\\fi-360\\li720 Print the card below.\\par\r\n\
+{\\listtext\\pard\\plain 2.\\tab}Leave it where it can be read through the windscreen.\\par\r\n\
 \\pard\\par Your permit card, to print and keep in the car: \\objattph\\'20\\par\r\n\
 \\pard\\par\\qc \\objattph\\'20\\par\r\n\
 \\pard\\par Bay 14 is the green one, third from the way in:\\par\r\n\

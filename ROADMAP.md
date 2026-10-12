@@ -1,13 +1,13 @@
 # MailCraft roadmap
 
-**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 31 · 2026-10-12
+**Status:** M1 (data files first) and M2 (formatted reading) in progress · revision 32 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 41 of 115 (36%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 166, all passing |
+| Tests | 167, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -66,7 +66,8 @@
 16. Done: pictures written as bytes (`\bin`) are read.
 17. Done: tables inside the cells of tables, and cells merged across, in RTF bodies.
 18. Done: paragraph borders and the room paragraphs ask for above and below, in RTF bodies.
-19. Next: tab stops and list numbering in RTF bodies.
+19. Done: list paragraphs of RTF bodies have their numbers and bullets as markers.
+20. Next: tab stops in RTF bodies.
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -358,4 +359,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   (`hostile_rtf_paragraph_borders_and_spacing_never_panic`). The sample receipt's note has a
   border at its left and room around it. Not read yet: the line between paragraphs
   (`\brdrbtw`), line spacing (`\sl`). Nothing here goes beyond Outlook.
+- **2026-10-12** - M2.29: a list paragraph of an RTF body is a list item: the number or bullet
+  the writer worked out for it (`\listtext`, and `\pntext` of older writers; RTF 1.9.1, "List
+  Text" and "Bullets and Numbering") stands in the room its indent leaves, with the text beside
+  it, on screen and in print. Before, it was text followed by a tab at the start of the line.
+  A bullet written as a character of a symbol font is the bullet it stands for; a number is at
+  most 12 characters; a list paragraph with nothing after its number is still one. Numbers are
+  not worked out from the list tables: a writer that leaves no list text gets no number. On
+  screen a list marker (of HTML bodies too) is now drawn in the letters of the text it stands
+  before, where it used to be in the window's own at one size. The sample receipt has a short
+  numbered list. Nothing here goes beyond Outlook.
 

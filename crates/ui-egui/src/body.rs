@@ -737,7 +737,9 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
         && let ParaKind::Item(marker) = &para.kind
     {
         let marker: String = marker.chars().take(12).collect();
-        ui.painter().text(pos2(rect.left() + inset - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, font(BODY_PX), look.text());
+        // In the letters of the text it stands before, so that it sits on the same line.
+        let like = runs.iter().find(|r| r.picture.is_none()).map_or_else(|| font(BODY_PX), |r| section(r, look).1.font_id);
+        ui.painter().text(pos2(rect.left() + inset - 7.0, rect.top()), egui::Align2::RIGHT_TOP, marker, like, look.text());
     }
 
     let spots: Vec<Rect> = spots(&galley, &placed).into_iter().map(|at| at.translate(pos.to_vec2())).collect();
