@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 66 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 67 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 282, all passing |
+| Tests | 283, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -101,7 +101,8 @@
 50. Done: a save asked for in the window is done on a thread of its own, with a bar that fills in the status bar and a way to stop it (M3b.12).
 51. Done: the structure check looks inside the nodes: every heap, index, property list and table is held against the specification (M3b.13).
 52. Done: an export of a data file runs on a thread of its own, with progress and a way to stop it (M3b.14).
-53. Next: M3b.15: the ids on the root and the Inbox that say which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`.
+53. Done: an exported file names the Calendar, Contacts, Tasks, Notes, Journal and Drafts folders by id on its root and its Inbox (M3b.15).
+54. Next: M3b.16: the small things left in the writer: the node-id counters of the header, 32-bit floats, currency and error values keeping their type, and a choice not to keep the file as it was beside a data file on its first save.
 
 ## Do later (from M2)
 
@@ -145,7 +146,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Changes to an ANSI `.pst` and a 4K-page file kept; an `.ost` stays read-only for good (it is a server's copy) | M3b, with writing those kinds |
 | The node-id counters of a file's header carried into the rewritten file | M3b |
 | A choice not to keep the file as it was beside a data file on its first save | M3b |
-| The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export` (a saved file and a copied `.pst` keep the ones they had) | M3b |
+| ~~The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`~~ | done: M3b.15 |
 | ~~Export off the UI thread, with progress and a way to stop~~ | done: M3b.14, for a Unicode `.pst` copied as stored |
 | Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file); the structure check hearing Stop | M3b |
 | Table cells whose type differs from the column's kept in a saved `.pst`'s tables (the item keeps them; the list does not show them) | M3b |
@@ -1029,3 +1030,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   between threads as it is); the bar was not looked at in a screenshot for an export, the
   drawing being the one a save uses with other words; the structure check at the end does
   not hear Stop, so a stop asked for in the last moments takes until the check is done.
+- **2026-10-13** - M3b.15: the folders other programs find by id. A file made by `file.export` from
+  a mailbox read through the model named only the Outbox, Sent Items and Deleted Items on
+  its store. Now the first folder of each kind among Calendar, Contacts, Journal, Notes,
+  Tasks and Drafts is named by an entry id on the root folder and on the Inbox
+  ([MS-OXOSFLD] 2.2.3: 0x36D0 to 0x36D4 and 0x36D7), so a program that looks for the
+  calendar by id and not by name finds it. Made better on the way: the reader takes the
+  same ids from the root of any file it opens, so a Drafts folder is known as Drafts
+  whatever it is called in the file's language (it was known by its English name alone;
+  the other five were known by their class already). An id that names no folder in the
+  file is passed over. 1 test. Not done: nothing names the Inbox in a data file (a server
+  says which folder mail is delivered to), so an Inbox with another name is a mail folder
+  like any other; written from the specification alone, as the rest of an exported file is
+  until one is opened in Outlook.

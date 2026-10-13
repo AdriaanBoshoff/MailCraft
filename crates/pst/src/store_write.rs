@@ -333,6 +333,19 @@ impl Folder {
     }
 }
 
+/// The ids under which the root and the Inbox name the folders of the other modules and
+/// the drafts ([MS-OXOSFLD] 2.2.3: PidTagIpmAppointmentEntryId, PidTagIpmContactEntryId,
+/// PidTagIpmJournalEntryId, PidTagIpmNoteEntryId, PidTagIpmTaskEntryId,
+/// PidTagIpmDraftsEntryId).
+pub(crate) const SPECIAL: &[(u16, FolderKind)] = &[
+    (0x36D0, FolderKind::Calendar),
+    (0x36D1, FolderKind::Contacts),
+    (0x36D2, FolderKind::Journal),
+    (0x36D3, FolderKind::Notes),
+    (0x36D4, FolderKind::Tasks),
+    (0x36D7, FolderKind::Drafts),
+];
+
 pub(crate) struct Out<W: Read + Write + Seek> {
     pub(crate) w: NdbWriter<W>,
     pub(crate) names: Names,
@@ -365,9 +378,11 @@ impl<W: Read + Write + Seek> Out<W> {
     }
 
     /// A folder's node and its three tables ([MS-PST] 2.4.4). `rows` are its contents table.
-    fn folder(&mut self, folders: &[Folder], f: &Folder, contents: Option<&[Row]>) -> Result<(), PstError> {
+    fn folder(&mut self, folders: &[Folder], f: &Folder, contents: Option<&[Row]>, more: &[Raw]) -> Result<(), PstError> {
         let kids: Vec<&Folder> = f.children.iter().filter_map(|i| folders.get(*i)).collect();
-        self.pc_node(f.nid, f.parent, &f.props(!kids.is_empty()))?;
+        let mut props = f.props(!kids.is_empty());
+        props.extend(more.iter().map(|r| Raw { id: r.id, ty: r.ty, data: r.data.clone() }));
+        self.pc_node(f.nid, f.parent, &props)?;
         let rows: Vec<Row> = kids.iter().map(|k| Row { id: k.nid, cells: k.props(!k.children.is_empty()) }).collect();
         self.tc_node(f.nid & !0x1F | TYPE_HIERARCHY, HIERARCHY, &rows)?;
         if let Some(rows) = contents {
@@ -566,6 +581,10 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
     let mut place: HashMap<u64, usize> = HashMap::new();
     let mut ids: Vec<FolderId> = Vec::with_capacity(listed.len());
     let mut special: Vec<(u16, u32)> = Vec::new();
+    // The folders other programs find by an id and not by a name, and the Inbox, which
+    // carries those ids as the root does ([MS-OXOSFLD] 2.2.3).
+    let mut found: Vec<(u16, u32)> = Vec::new();
+    let mut inbox: Option<u32> = None;
     let mut next = FIRST_FOLDER;
     // The deleted items folder has a node of its own; the first folder of that kind takes it.
     let deleted = listed.iter().position(|f| f.kind == FolderKind::Deleted && f.parent.is_none());
@@ -592,6 +611,14 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
             if f.kind == kind && special.iter().all(|(seen, _)| *seen != id) {
                 special.push((id, nid));
             }
+        }
+        for (id, kind) in SPECIAL {
+            if f.kind == *kind && found.iter().all(|(seen, _)| seen != id) {
+                found.push((*id, nid));
+            }
+        }
+        if f.kind == FolderKind::Inbox && inbox.is_none() {
+            inbox = Some(nid);
         }
         folders.push(Folder { nid, parent, name: f.name.clone(), class: f.container_class.clone(), children: Vec::new(), total: 0, unread: 0 });
     }
@@ -646,10 +673,12 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
 
     // The folders, with the tables of their subfolders and of their associated items.
     let none: &[Row] = &[];
+    let found: Vec<Raw> = found.into_iter().map(|(id, nid)| o.entry_id(id, nid)).collect();
     for (i, f) in folders.iter().enumerate() {
         // The top and a deleted items folder made here have no contents table yet.
         let made = i == 0 || i > ids.len();
-        o.folder(&folders, f, made.then_some(none))?;
+        let more: &[Raw] = if Some(f.nid) == inbox { &found } else { &[] };
+        o.folder(&folders, f, made.then_some(none), more)?;
     }
 
     // The root, which is its own parent, over the visible tree and the search root
@@ -664,11 +693,13 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
         unread: 0,
     };
     let search = plain(NID_SEARCH_ROOT, "Search Root", Vec::new());
-    o.folder(&folders, &search, Some(none))?;
+    o.folder(&folders, &search, Some(none), &[])?;
     let top = folders.first().map(|f| Row { id: f.nid, cells: f.props(!f.children.is_empty()) });
     let rows: Vec<Row> = top.into_iter().chain([Row { id: search.nid, cells: search.props(false) }]).collect();
     let root = plain(NID_ROOT_FOLDER, "", Vec::new());
-    o.pc_node(NID_ROOT_FOLDER, NID_ROOT_FOLDER, &root.props(true))?;
+    let mut props = root.props(true);
+    props.extend(found);
+    o.pc_node(NID_ROOT_FOLDER, NID_ROOT_FOLDER, &props)?;
     o.tc_node(NID_ROOT_FOLDER & !0x1F | TYPE_HIERARCHY, HIERARCHY, &rows)?;
     o.contents(NID_ROOT_FOLDER, &[])?;
     o.tc_node(NID_ROOT_FOLDER & !0x1F | TYPE_ASSOC, ASSOC, &[])?;

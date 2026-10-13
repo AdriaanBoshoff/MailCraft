@@ -332,6 +332,71 @@ impl Store for Flaky {
     }
 }
 
+/// A mailbox in another language: the folders keep their kinds and not their English names.
+struct Renamed(MemStore);
+
+impl Store for Renamed {
+    fn display_name(&self) -> String {
+        self.0.display_name()
+    }
+    fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
+        let mut folders = self.0.folders()?;
+        for f in &mut folders {
+            f.name = match f.name.as_str() {
+                "Drafts" => "Concepten",
+                "Calendar" => "Agenda",
+                "Tasks" => "Taken",
+                other => other,
+            }
+            .to_string();
+        }
+        Ok(folders)
+    }
+    fn list(&mut self, folder: FolderId) -> Result<Vec<Summary>, StoreError> {
+        self.0.list(folder)
+    }
+    fn load(&mut self, folder: FolderId, id: ItemId) -> Result<Item, StoreError> {
+        self.0.load(folder, id)
+    }
+}
+
+#[test]
+fn the_folders_of_the_other_modules_are_named_by_id_on_the_root_and_the_inbox() {
+    let mut s = MemStore::new("Kinds");
+    s.push_folder(None, "Inbox", "IPF.Note");
+    s.push_folder(None, "Drafts", "IPF.Note");
+    s.push_folder(None, "Calendar", "IPF.Appointment");
+    // The first of a kind is the one named; a second calendar is a folder like any other.
+    s.push_folder(None, "Holidays", "IPF.Appointment");
+    s.push_folder(None, "Contacts", "IPF.Contact");
+    s.push_folder(None, "Tasks", "IPF.Task");
+    s.push_folder(None, "Notes", "IPF.StickyNote");
+    s.push_folder(None, "Journal", "IPF.Journal");
+    let (bytes, _) = save(&mut Renamed(s));
+    let mut back = PstStore::from_bytes(bytes).unwrap();
+    let folders = back.folders().unwrap();
+    let nid = |name: &str| folders.iter().find(|f| f.name == name).map(|f| f.id.0 as u32).unwrap();
+    // A folder with no English name is known for what it is by the id that names it.
+    assert_eq!(folders.iter().find(|f| f.name == "Concepten").map(|f| f.kind), Some(FolderKind::Drafts));
+    let want = [(0x36D0u16, "Agenda"), (0x36D1, "Contacts"), (0x36D2, "Journal"), (0x36D3, "Notes"), (0x36D4, "Taken"), (0x36D7, "Concepten")];
+    for holder in [crate::NID_ROOT_FOLDER, nid("Inbox")] {
+        let (bag, _) = back.node_props(holder).unwrap();
+        for (id, name) in want {
+            // An EntryID: four bytes of flags, the store's id, the folder's node.
+            let entry = bag.bin(id).unwrap_or_else(|| panic!("{holder:#x} has no {id:#x}"));
+            assert_eq!(entry.len(), 24);
+            assert_eq!((&entry[..4], &entry[4..20], &entry[20..]), (&[0u8; 4][..], &UID[..], &nid(name).to_le_bytes()[..]), "{id:#x}");
+        }
+    }
+    // No other folder carries them, and a mailbox without those folders has none.
+    assert!(back.node_props(nid("Holidays")).unwrap().0.bin(0x36D0).is_none());
+    let mut plain = MemStore::new("Plain");
+    plain.push_folder(None, "Inbox", "IPF.Note");
+    let mut back = PstStore::from_bytes(save(&mut plain).0).unwrap();
+    let (bag, _) = back.node_props(crate::NID_ROOT_FOLDER).unwrap();
+    assert!(want.iter().all(|(id, _)| bag.bin(*id).is_none()));
+}
+
 #[test]
 fn what_the_source_cannot_give_is_counted_not_fatal() {
     let mut s = MemStore::new("Flaky");

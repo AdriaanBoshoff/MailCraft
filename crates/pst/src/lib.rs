@@ -150,6 +150,16 @@ impl PstStore {
                 }
             }
         }
+        // The folders of the other modules and the drafts are named by ids on the root
+        // ([MS-OXOSFLD] 2.2.3), whatever they are called in the file's language.
+        if let Ok((bag, _)) = store.node_props(NID_ROOT_FOLDER) {
+            for (id, kind) in store_write::SPECIAL {
+                let nid = bag.bin(*id).and_then(|b| u32_at(b, 20)).filter(|n| n & 0x1F == 0x02 && store.ndb.nbt.contains_key(n));
+                if let Some(nid) = nid {
+                    store.special.entry(nid).or_insert(*kind);
+                }
+            }
+        }
         // The named property map ([MS-PST] 2.4.7): the same three streams a `.msg` has.
         if let Ok((bag, _)) = store.node_props(NID_NAME_TO_ID_MAP) {
             let stream = |id: u16| bag.bin(id).unwrap_or(&[]);
