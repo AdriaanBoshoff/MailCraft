@@ -463,6 +463,7 @@ impl MailUi {
         let doc = self.body_doc();
         if let (Some(doc), Some((key, _)), Some(item)) = (&doc, &self.body_doc, self.session.open.as_ref()) {
             self.pictures.load(ui.ctx(), *key, doc, item);
+            self.pictures.moving = self.session.animate;
             self.faces.load(ui.ctx(), *key, doc);
         }
         let p = ui.painter_at(rect);

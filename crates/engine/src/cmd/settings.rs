@@ -68,6 +68,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
             ReadingPane::Off => "off",
         },
         "folderPane": s.folder_pane,
+        "animations": s.animate,
         "keepOriginal": s.keep_original,
         "dataFiles": files,
     });
@@ -161,6 +162,12 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(v.is_boolean());
         if let Some(show) = v.as_bool() {
             s.folder_pane = show;
+        }
+    }
+    if let Some(v) = all.get("animations") {
+        took(v.is_boolean());
+        if let Some(on) = v.as_bool() {
+            s.animate = on;
         }
     }
     if let Some(v) = all.get("keepOriginal") {

@@ -38,6 +38,9 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Installed fonts by family name; no font is bundled through it.
 fontdb = "0.24"
+# SVG pictures in message bodies, drawn to pixels (Apache-2.0 OR MIT). No bitmaps inside them
+# are decoded and nothing is read from disk or fetched for them.
+resvg = { version = "0.48", default-features = false, features = ["text"] }
 # The font reader egui itself uses; here it only checks a font file before egui is given it.
 skrifa = "0.44"
 # Shapes text from a font's own tables (a port of HarfBuzz to Rust; MIT).

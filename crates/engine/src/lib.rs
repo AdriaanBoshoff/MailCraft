@@ -15,8 +15,11 @@ pub mod pictures;
 pub mod print;
 pub mod sample;
 pub mod search;
+mod svg;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pictures;
 pub mod undo;
 
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
@@ -223,6 +226,9 @@ pub struct Session {
     pub unread_only: bool,
     pub reading_pane: ReadingPane,
     pub folder_pane: bool,
+    /// Whether pictures that move in a message are played (`view.animations`); else each
+    /// stands still on its first frame.
+    pub animate: bool,
     /// Whether the file as it was stays beside a data file the first time it is saved
     /// (`file.keepOriginal`). It does until the owner says otherwise.
     pub keep_original: bool,
@@ -275,6 +281,7 @@ impl Session {
             unread_only: false,
             reading_pane: ReadingPane::Right,
             folder_pane: true,
+            animate: true,
             keep_original: true,
             compose: None,
             status: String::new(),

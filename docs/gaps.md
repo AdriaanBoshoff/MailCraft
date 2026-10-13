@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 64 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 65 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -17,14 +17,13 @@
 3. **Formatted bodies are partly drawn.** Every "not yet" below has a slot in
    [ROADMAP.md](../ROADMAP.md#do-later-from-m2). HTML bodies show text styles, colours, headings, lists,
    quotations, rules and tables, and pictures the message carries as attachments (`cid:`) or
-   writes into itself (`data:`; PNG, JPEG, GIF first frame, BMP) at the size the body asks for, in
+   writes into itself (`data:`; PNG, JPEG, GIF, BMP, WebP, TIFF and SVG; one that moves is played, M3b.23) at the size the body asks for, in
    the line of text or at its side (`align`) with what follows beside them until they end or a
    break clears them. Text is drawn in the fonts the message names when they are installed, in
    their own bold and italic faces, with open fonts of the same measures standing in; no font is
    bundled. Borders set in styles are drawn round paragraphs, tables and cells, and cells span
-   rows as well as columns. Not yet: other picture kinds (SVG, WebP, TIFF, EMF/WMF), which show a
-   labelled placeholder; several pictures at the sides of one paragraph, or a second one while the
-   first still stands; animation; a backing for see-through pictures on the dark pane; boxes
+   rows as well as columns. Not yet: several pictures at the sides of one paragraph, or a second one while the
+   first still stands; a backing for see-through pictures on the dark pane; boxes
    inside one another, a fill behind a table in a block and behind the whole body; borders on
    text within a line and rounded corners. Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
@@ -79,6 +78,7 @@
 
 ## Revision history
 
+- 65 · 2026-10-13 — M3b.23: SVG, WebP and TIFF pictures are shown; animated GIF, PNG and WebP are played (`view.animations`).
 - 64 · 2026-10-13 — M3b.22: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom.
 - 63 · 2026-10-13 — M3b.21: ANSI data files are written (`file.export` with `"kind": "ansi"`), take changes and stay ANSI when saved; 4K-page files stay read-only.
 - 62 · 2026-10-13 — M3b.20: the structure check covers ANSI files (from the specification) and 4K-page files (from measurement); three local Outlook-written 4K-page files pass it.

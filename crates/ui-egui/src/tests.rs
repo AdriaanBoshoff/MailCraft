@@ -1336,3 +1336,84 @@ fn tabs_in_a_line_read_from_the_right_are_met_from_the_left_in_another_order() {
     assert_eq!(tabs, [2, 1, 0]);
     let _ = seen(true, &many);
 }
+
+#[test]
+fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    // Three frames of a tenth, a twentieth and a fifth of a second, played twice.
+    let mut file = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut file);
+        encoder.set_repeat(Repeat::Finite(2)).unwrap();
+        for (red, millis) in [(255, 100), (120, 50), (0, 200)] {
+            let whole = image::RgbaImage::from_pixel(6, 4, image::Rgba([red, 0, 0, 255]));
+            encoder.encode_frame(image::Frame::from_parts(whole, 0, 0, image::Delay::from_numer_denom_ms(millis, 1))).unwrap();
+        }
+    }
+    let mut item = openmailclient_model::Item::new_mail();
+    for (name, id, data) in [("moves.gif", "moves", file.clone()), ("still.png", "still", sample_picture())] {
+        let mut a = openmailclient_model::Attachment::file(name, "image/gif", data);
+        a.props.set_str(pid::ATTACH_CONTENT_ID, id);
+        item.attachments.push(a);
+    }
+    let doc = openmailclient_formats::html::parse("<p><img src=cid:moves> <img src=cid:still></p>");
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut shown = pictures::Pictures::default();
+    shown.load(&ctx, 1, &doc, &item);
+    assert!(shown.get("still").unwrap().film.is_none());
+    let moves = shown.get("moves").unwrap();
+    assert_eq!(moves.size, egui::vec2(6.0, 4.0));
+    let reel = moves.film.as_ref().expect("its frames");
+    assert_eq!(reel.frames(), 3);
+    // Which frame, and how long until the next: through the film twice, then its last frame
+    // for good.
+    let near = |got: (usize, Option<f64>), frame: usize, left: f64| {
+        assert_eq!(got.0, frame, "{got:?}");
+        assert!((got.1.unwrap() - left).abs() < 1e-6, "{got:?} for {left}");
+    };
+    near(reel.at(0.0), 0, 0.1);
+    near(reel.at(0.06), 0, 0.04);
+    near(reel.at(0.12), 1, 0.03);
+    near(reel.at(0.2), 2, 0.15);
+    near(reel.at(0.35 + 0.01), 0, 0.09);
+    near(reel.at(0.7 - 0.05), 2, 0.05);
+    for after in [0.7, 0.71, 5.0, 1e300, f64::INFINITY] {
+        assert_eq!(reel.at(after), (2, None), "{after}");
+    }
+    assert_eq!((reel.at(f64::NAN), reel.at(-4.0).0), ((0, None), 0));
+    // Played, the window is asked to draw again when the next frame is due; standing still it
+    // is the first frame and nothing is asked.
+    assert_eq!(moves.frame(&ctx, false), moves.texture.id());
+    for moving in [true, false] {
+        shown.moving = moving;
+        for width in [0.0, 300.0] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(width);
+                body::draw(ui, &doc, &theme::Tokens::named(false), &shown, &faces::Faces::default());
+            });
+            output.textures_delta.clear();
+        }
+    }
+    // In the window it follows the command.
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.session.animate);
+    ui.execute("view.animations", &json!({"on": false})).unwrap();
+    assert!(!ui.session.animate);
+    // A film cut short or bent is played as far as it reads, or stands still, or is no picture.
+    for cut in (0..file.len()).step_by(3) {
+        let mut bent = file.clone();
+        bent[cut] ^= 0x41;
+        for data in [file[..cut].to_vec(), bent] {
+            let mut item = openmailclient_model::Item::new_mail();
+            let mut a = openmailclient_model::Attachment::file("m.gif", "image/gif", data);
+            a.props.set_str(pid::ATTACH_CONTENT_ID, "moves");
+            item.attachments.push(a);
+            let mut shown = pictures::Pictures::default();
+            shown.load(&ctx, 2, &doc, &item);
+            if let Some(reel) = shown.get("moves").and_then(|s| s.film.as_ref()) {
+                assert!(reel.frames() >= 2 && reel.at(0.0).0 == 0);
+            }
+        }
+    }
+}

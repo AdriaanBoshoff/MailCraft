@@ -32,22 +32,37 @@ pub struct Pixels {
     pub natural: (u16, u16),
 }
 
+/// The limits one decoder is held to.
+fn limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(MAX_ALLOC);
+    limits
+}
+
 /// A picture file → pixels. `None` for anything that is not a picture this build reads (PNG,
-/// JPEG, GIF, BMP), is over the limits, or is damaged.
+/// JPEG, GIF, BMP, WebP, TIFF, SVG), is over the limits, or is damaged. Of a picture that
+/// moves this is the first frame; [`film`] reads them all.
 pub fn decode(data: &[u8]) -> Option<Pixels> {
     if data.len() > MAX_FILE {
         return None;
+    }
+    if crate::svg::looks_like(data) {
+        return crate::svg::decode(data);
     }
     // The decoders are not ours. Should one panic on a damaged file, the picture is dropped and
     // the program goes on.
     std::panic::catch_unwind(|| {
         let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(MAX_SIDE);
-        limits.max_image_height = Some(MAX_SIDE);
-        limits.max_alloc = Some(MAX_ALLOC);
-        reader.limits(limits);
-        let image = reader.decode().ok()?;
+        reader.limits(limits());
+        // A photograph says which way up it was taken (Exif, tag 0x0112): it is shown that way.
+        let mut decoder = reader.into_decoder().ok()?;
+        let turned = image::ImageDecoder::orientation(&mut decoder).ok();
+        let mut image = image::DynamicImage::from_decoder(decoder).ok()?;
+        if let Some(turned) = turned {
+            image.apply_orientation(turned);
+        }
         let (w, h) = (image.width(), image.height());
         if w == 0 || h == 0 {
             return None;
@@ -59,6 +74,124 @@ pub fn decode(data: &[u8]) -> Option<Pixels> {
     })
     .ok()
     .flatten()
+}
+
+/// A picture that moves: its frames, each the whole picture, and how long each is shown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Film {
+    /// Size of each frame as kept, in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Size as the file has it.
+    pub natural: (u16, u16),
+    pub frames: Vec<Frame>,
+    /// How many times it is played through; `None` is without end.
+    pub loops: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame {
+    pub rgba: Vec<u8>,
+    /// How long it is shown, in thousandths of a second.
+    pub millis: u32,
+}
+
+/// Frames and kept bytes of one film, the pixels of its canvas, and the longest side kept.
+const MAX_FRAMES: usize = 400;
+const MAX_FILM_BYTES: usize = 64 << 20;
+const MAX_FILM_PIXELS: u64 = 4 << 20;
+const MAX_FILM_SIDE: u32 = 1024;
+/// A frame that asks for less time than this is given `SLOW_FRAME`, as browsers do: files
+/// are written with no time at all and are not meant to be a blur. None is shown longer than
+/// `MAX_FRAME`.
+const MIN_FRAME: u32 = 20;
+const SLOW_FRAME: u32 = 100;
+const MAX_FRAME: u32 = 60_000;
+
+/// The frames of a picture that moves: an animated GIF, PNG or WebP. `None` for a picture
+/// that stands still, one that is not read, and one whose frames are too many or too large to
+/// keep, which is then shown still ([`decode`]). A file damaged part of the way through plays
+/// as far as it can be read.
+pub fn film(data: &[u8]) -> Option<Film> {
+    use image::codecs::{gif::GifDecoder, png::PngDecoder, webp::WebPDecoder};
+    use image::{ImageDecoder, ImageFormat};
+    if data.len() > MAX_FILE {
+        return None;
+    }
+    std::panic::catch_unwind(|| {
+        let file = std::io::Cursor::new(data);
+        match image::guess_format(data).ok()? {
+            ImageFormat::Gif => {
+                let mut decoder = GifDecoder::new(file).ok()?;
+                decoder.set_limits(limits()).ok()?;
+                reel(decoder)
+            }
+            ImageFormat::Png => {
+                let decoder = PngDecoder::with_limits(file, limits()).ok()?;
+                if !decoder.is_apng().ok()? {
+                    return None;
+                }
+                reel(decoder.apng().ok()?)
+            }
+            ImageFormat::WebP => {
+                let mut decoder = WebPDecoder::new(file).ok()?;
+                if !decoder.has_animation() {
+                    return None;
+                }
+                decoder.set_limits(limits()).ok()?;
+                reel(decoder)
+            }
+            _ => None,
+        }
+    })
+    .ok()
+    .flatten()
+}
+
+fn reel<'a>(decoder: impl image::AnimationDecoder<'a>) -> Option<Film> {
+    let loops = match decoder.loop_count() {
+        image::metadata::LoopCount::Infinite => None,
+        image::metadata::LoopCount::Finite(times) => Some(times.get()),
+    };
+    let mut film: Option<Film> = None;
+    for frame in decoder.into_frames().take(MAX_FRAMES + 1) {
+        // What cannot be read ends the film where it is.
+        let Ok(frame) = frame else { break };
+        let (numer, denom) = frame.delay().numer_denom_ms();
+        let asked = numer.checked_div(denom).unwrap_or(0);
+        let millis = if asked < MIN_FRAME { SLOW_FRAME } else { asked.min(MAX_FRAME) };
+        let whole = frame.into_buffer();
+        let (w, h) = (whole.width(), whole.height());
+        if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_FILM_PIXELS {
+            return None;
+        }
+        let kept = if w.max(h) > MAX_FILM_SIDE {
+            let by = f64::from(MAX_FILM_SIDE) / f64::from(w.max(h));
+            let side = |n: u32| ((f64::from(n) * by).round() as u32).clamp(1, MAX_FILM_SIDE);
+            image::imageops::thumbnail(&whole, side(w), side(h))
+        } else {
+            whole
+        };
+        let film = match &mut film {
+            Some(film) => film,
+            empty => empty.insert(Film {
+                width: kept.width(),
+                height: kept.height(),
+                natural: (u16::try_from(w).ok()?, u16::try_from(h).ok()?),
+                frames: Vec::new(),
+                loops,
+            }),
+        };
+        if (kept.width(), kept.height()) != (film.width, film.height) {
+            break;
+        }
+        let rgba = kept.into_raw();
+        if film.frames.len() >= MAX_FRAMES || film.frames.len().saturating_add(1).saturating_mul(rgba.len()) > MAX_FILM_BYTES {
+            return None;
+        }
+        film.frames.push(Frame { rgba, millis });
+    }
+    film.filter(|film| film.frames.len() > 1)
 }
 
 /// A content id as the attachment has it against one as the body writes it.

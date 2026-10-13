@@ -17,6 +17,7 @@ pub mod script;
 pub use letters::{Letter, Lettering, Letters, Ring, Scribe, letters, shapes};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use fontdb::{Database, Family, Query, Stretch, Style, Weight};
 use skrifa::raw::TableProvider;
@@ -100,7 +101,7 @@ pub struct Face {
 /// The fonts installed on this machine, by family name.
 #[derive(Default)]
 pub struct Library {
-    fonts: Database,
+    fonts: Arc<Database>,
     /// Family names as the fonts spell them, by their lower-case form: a message may write a
     /// name in any case.
     spelled: HashMap<String, String>,
@@ -120,7 +121,13 @@ impl Library {
         for (name, _) in fonts.faces().flat_map(|face| face.families.iter()) {
             spelled.entry(name.to_lowercase()).or_insert_with(|| name.clone());
         }
-        Self { fonts, spelled }
+        Self { fonts: Arc::new(fonts), spelled }
+    }
+
+    /// The same list for another reader of fonts in this program: it is shared, and no font
+    /// is listed twice.
+    pub fn shared(&self) -> Arc<Database> {
+        Arc::clone(&self.fonts)
     }
 
     /// How many faces are known.

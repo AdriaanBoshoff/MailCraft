@@ -19,7 +19,8 @@ openmailclient-layout = { workspace = true }
 openmailclient-render = { workspace = true }
 openmailclient-pdf = { workspace = true }
 # Decodes the pictures a message body shows.
-image = { workspace = true, features = ["jpeg", "gif", "bmp"] }
+image = { workspace = true, features = ["jpeg", "gif", "bmp", "webp", "tiff"] }
+resvg = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

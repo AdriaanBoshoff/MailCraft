@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-302%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-309%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -74,8 +74,9 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - **Formatted bodies.** HTML and RTF mail is laid out and drawn: fonts the message names (installed
   ones only), colours, lists, links, tables (cell borders, fills, merged cells, tables inside cells),
   paragraph borders and spacing, line spacing, tab stops. Nothing in a message is run and nothing is fetched.
-- **Pictures.** Attached and written-in pictures (PNG, JPEG, bitmaps, Windows and enhanced metafiles
-  that are drawings, with the bitmaps in them) are decoded in-process and drawn in the text; an attachment that stands in the
+- **Pictures.** Attached and written-in pictures (PNG, JPEG, GIF, WebP, TIFF, SVG, bitmaps, Windows and enhanced metafiles
+  that are drawings, with the bitmaps in them) are decoded in-process and drawn in the text; animated GIF, PNG and WebP
+  pictures are played, or stand still when asked (`view.animations`); an attachment that stands in the
   text is a card that a click saves.
 - **Printing.** A message (Memo Style) or a folder's list (Table Style) prints to a PDF file, with
   tables, borders and pictures; a print window shows the pages beside the page setup (paper,
@@ -88,8 +89,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. 4K-page
   data files cannot be changed.
 - **Parts of formatted bodies.** Right-to-left text while it is typed; complex scripts
-  on screen beyond what egui shapes; SVG, WebP and
-  TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a
+  on screen beyond what egui shapes; metafiles that draw a part of a bitmap, a run-packed bitmap or a
   patterned brush; printing to a printer. Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
 - Calendar, People and Tasks.

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 74 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 75 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 302, all passing |
+| Tests | 309, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -109,7 +109,8 @@
 58. Done: the structure check covers ANSI data files and files with 4K pages (M3b.20).
 59. Done: ANSI data files are written, and a re-saved one keeps its kind (M3b.21).
 60. Done: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom (M3b.22).
-61. Next: M3b.23: SVG, WebP and TIFF pictures; GIF animation.
+61. Done: SVG, WebP and TIFF pictures are shown, and pictures that move are played (M3b.23).
+62. Next: M3b.24: a backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph.
 
 ## Do later (from M2)
 
@@ -175,7 +176,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Several messages selected at once (Table Style's selected rows then follow the selection) | M5, with interaction parity |
 | Columns of the message list chosen in the window (Table Style then follows them) | M5, with interaction parity |
 | ~~A zoom in the print preview~~ | done: M3b.22 |
-| SVG, WebP and TIFF pictures; GIF animation | M3b |
+| ~~SVG, WebP and TIFF pictures; GIF animation~~ | done: M3b.23 |
+| SVG drawings in the web build (one thread, a small stack); bitmaps inside a drawing, under the limits of other pictures; `.svgz` | M6, with the web app |
+| Pictures decoded off the thread that draws the window | M4, with pictures loaded from a server on command |
 | A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph | M3b |
 | Boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners | M3b |
 | Outlook's highlight colours; list numbers an override changes (`\lfolevel`) | M3b |
@@ -1222,3 +1225,32 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   is selected at a time, so "selected" is one row until there is a selection of several;
   the window's list has no columns of its own to follow, so the columns are the print's;
   a narrow column may break a word in two; Outlook's Table Style was not observed.
+- **2026-10-13** - M3b.23: more kinds of picture, and pictures that move. WebP and TIFF files are read by
+  the decoders the other kinds are (the `image` crate, under the same limits). An SVG drawing
+  is drawn to pixels by `resvg` (Apache-2.0 OR MIT), in `crates/engine/src/svg.rs`: nothing
+  in a drawing is run, since there is no script engine; no picture a drawing refers to is
+  read, from a file, an address or its own text; its words are set in the fonts installed
+  here, from the one list the program keeps (`Library::shared`). The reader is not ours, so a
+  drawing is drawn on a thread of its own with room for the deepest nesting the reader takes,
+  is given up after three seconds, and no other is begun while two that were given up still
+  run. An animated GIF, PNG or WebP is played in the reading pane (`pictures::film`): every
+  frame is the whole picture, shown as long as the file says and as many times; on paper and
+  in a PDF it is its first frame. Made better on the way: a drawing has no pixels of its
+  own, so it is kept at twice its size and is sharp on a dense screen and on paper; a
+  photograph that says which way up it was taken (Exif orientation) is shown that way, in
+  every kind that says so; a frame that asks for no time is given a tenth of a second
+  and is not a blur; `view.animations` stops pictures moving and starts them, and is kept
+  with the settings, for a reader who wants a still page. 7 tests: WebP and TIFF to the
+  last pixel, cut short and bent at every byte, a TIFF that claims 60000 pixels a side;
+  the photograph turned, and Exif that is not Exif; a drawing with its text, a box and no
+  size, one a million wide, and pictures it refers to four ways, none read; hostile
+  drawings (ten thousand million shapes by `use`, the same by XML entities, 6000 groups
+  inside one another, a chain of 3000 uses, shapes that use themselves, numbers that are no
+  sizes, a blur of 100000), cut short and bent; the frames and their times, a film cut at
+  every byte, too many frames and too large a canvas shown still; the reel in the window
+  through two playings to its last frame; the command and its setting. Not done: the web
+  build does not draw SVG (it has one thread and a small stack; with the web app, M6); a
+  bitmap inside a drawing is left out; a compressed drawing (`.svgz`) and one in UTF-16 are
+  not read; an animated PNG or WebP was not tried, there being no writer for one here;
+  a picture is decoded on the thread that draws the window, as before, so a drawing given up
+  holds it for three seconds; what Outlook shows of any of these was not observed.

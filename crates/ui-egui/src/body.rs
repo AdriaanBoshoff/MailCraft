@@ -627,7 +627,7 @@ pub(crate) fn picture_size(asked: (u16, u16), natural: Vec2, room: f32) -> Vec2 
 fn picture(ui: &Ui, run: &Run, stand: Stand, at: Rect, look: Look) {
     match stand {
         Stand::Drawn(drawn) => {
-            ui.painter().image(drawn.texture.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            ui.painter().image(drawn.frame(ui.ctx(), look.pictures.moving), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         Stand::Frame => frame(ui, run, at, look),
         // A card is set as low as the tails of the letters beside it, so that its words stand on

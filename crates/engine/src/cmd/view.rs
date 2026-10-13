@@ -59,6 +59,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: folder_pane,
         },
         CommandSpec {
+            id: "view.animations",
+            label: "Animated Pictures",
+            tab: "View",
+            group: "Layout",
+            shortcut: "",
+            params: r#"{"on": true | false}; default toggles. Pictures that move in a message are played, or each stands still on its first frame"#,
+            enabled: always,
+            run: animations,
+        },
+        CommandSpec {
             id: "view.filterUnread",
             label: "Unread",
             tab: "Home",
@@ -130,6 +140,11 @@ fn reading_pane(s: &mut Session, p: &Value) -> CmdResult {
 fn folder_pane(s: &mut Session, p: &Value) -> CmdResult {
     s.folder_pane = p_bool(p, "show").unwrap_or(!s.folder_pane);
     ok()
+}
+
+fn animations(s: &mut Session, p: &Value) -> CmdResult {
+    s.animate = p_bool(p, "on").unwrap_or(!s.animate);
+    Ok(serde_json::json!({ "on": s.animate }))
 }
 
 fn filter_unread(s: &mut Session, p: &Value) -> CmdResult {
