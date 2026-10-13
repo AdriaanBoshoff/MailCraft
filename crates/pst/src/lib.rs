@@ -76,6 +76,23 @@ const LTP_INTERNAL: std::ops::RangeInclusive<u16> = 0x67F1..=0x67F3;
 
 const MAX_FOLDERS: usize = 100_000;
 const MAX_CHILDREN: usize = 20_000;
+
+#[cfg(test)]
+fn blind(at: usize) -> bool {
+    BLIND.with(|b| b.get()) == Some(at)
+}
+
+#[cfg(not(test))]
+fn blind(_at: usize) -> bool {
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The attachment, by its place in a message's table, that cannot be read while this
+    /// is set: a test's stand-in for a damaged one.
+    pub(crate) static BLIND: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
 const MAX_FALLBACK_ITEMS: usize = 200_000;
 /// Messages attached to messages are followed this deep.
 const MAX_DEPTH: usize = 8;
@@ -261,7 +278,10 @@ impl PstStore {
             let table_subs = self.ndb.subnodes(sub).unwrap_or_default();
             let rows = self.table(data, &table_subs, cp).unwrap_or_default();
             // Each row's id names the subnode that holds the attachment object ([MS-PST] 2.4.6.2).
-            for (nid, _) in rows.into_iter().take(MAX_CHILDREN) {
+            for (at, (nid, _)) in rows.into_iter().take(MAX_CHILDREN).enumerate() {
+                if blind(at) {
+                    continue;
+                }
                 if let Some(&(data, sub)) = subs.get(&nid)
                     && let Ok(att) = self.attachment(data, sub, subs, cp, depth)
                 {

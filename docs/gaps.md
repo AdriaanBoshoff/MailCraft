@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 58 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 59 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 59 · 2026-10-13 — M3b.17: a file attached again with other contents keeps its stored properties; attachments that cannot be read are carried through a save.
 - 58 · 2026-10-13 — M3b.16: 32-bit floats, currency, times as days and error codes keep their kind; a saved file goes on from the header's counters; `file.keepOriginal`.
 - 57 · 2026-10-13 — M3b.15: an exported file names the folders of the other modules and the drafts by id; the reader knows a Drafts folder by that id.
 - 56 · 2026-10-13 — M3b.14: `file.export` of a Unicode `.pst` runs on a thread of its own, with progress and Stop; the mailbox stays in use meanwhile.

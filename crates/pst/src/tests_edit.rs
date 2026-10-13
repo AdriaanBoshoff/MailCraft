@@ -321,6 +321,83 @@ fn what_is_not_understood_on_an_attachment_is_kept_when_the_list_changes() {
 }
 
 #[test]
+fn a_file_put_in_again_keeps_what_is_stored_on_it_and_what_cannot_be_read_stays() {
+    use crate::store_write::PLANTED;
+    let plant = |n: Option<u8>| {
+        PLANTED.with(|p| *p.borrow_mut() = n.map(|n| Raw { id: 0x9F01, ty: ptype::INT32, data: vec![n, 0, 0, 0] }).into_iter().collect());
+    };
+    let mut store = open();
+    let inbox = folder(&mut store, "Inbox");
+    let mut item = mail("Worked on", false);
+    item.attachments.push(Attachment::file("report.txt", "text/plain", b"first draft".to_vec()));
+    item.attachments.push(Attachment::file("figures.bin", "", (0..30_000u32).map(|i| (i % 249) as u8).collect()));
+    let mut sheet = Attachment::file("Sheet", "", vec![0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]);
+    sheet.props.set(pid::ATTACH_METHOD, PropValue::Int32(6));
+    item.attachments.push(sheet);
+    let id = store.add(inbox.id, item).unwrap();
+    plant(Some(7));
+    let mut store = saved(&mut store);
+    plant(Some(9));
+    let seven = Some(vec![7, 0, 0, 0]);
+
+    // Each file is put in again with other contents: one as it was otherwise, one with
+    // another kind of contents said of it too, and the object of another program.
+    let mut item = store.load(inbox.id, id).unwrap();
+    item.attachments[0].data = b"second draft, longer".to_vec();
+    let grown: Vec<u8> = (0..50_000u32).map(|i| (i % 241) as u8).collect();
+    item.attachments[1].data = grown.clone();
+    item.attachments[1].props.set_str(pid::ATTACH_MIME_TAG, "application/octet-stream");
+    item.attachments[2].data = vec![0xD0, 0xCF, 0x11, 0xE0, 9, 9, 9, 9, 9];
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    assert_eq!(
+        stored_attachments(&mut store, id),
+        [("report.txt".to_string(), seven.clone(), 0), ("figures.bin".to_string(), seven.clone(), 1), ("Sheet".to_string(), seven.clone(), 2)]
+    );
+    let got = store.load(inbox.id, id).unwrap();
+    assert_eq!(got.attachments[0].data, b"second draft, longer");
+    assert_eq!(got.attachments[0].props.i32(pid::ATTACH_SIZE), Some(20));
+    assert_eq!((got.attachments[1].data == grown, got.attachments[1].props.str(pid::ATTACH_MIME_TAG)), (true, Some("application/octet-stream")));
+    assert_eq!((got.attachments[2].data.len(), got.attachments[2].props.i32(pid::ATTACH_METHOD)), (9, Some(6)));
+    // Another name and other contents: nothing says it is the file that was there.
+    let mut item = got.clone();
+    item.attachments[0].data = b"another file".to_vec();
+    item.attachments[0].props.set_str(pid::ATTACH_LONG_FILENAME, "other.txt");
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    assert_eq!(stored_attachments(&mut store, id)[0], ("other.txt".to_string(), Some(vec![9, 0, 0, 0]), 0));
+    // An object carried through a save of the list has its bytes still.
+    assert_eq!(store.load(inbox.id, id).unwrap().attachments[2].data, [0xD0, 0xCF, 0x11, 0xE0, 9, 9, 9, 9, 9]);
+
+    // The second attachment cannot be read: the message shows two. One of those is taken
+    // away and the message is saved; the one nobody saw is still there afterwards.
+    crate::BLIND.with(|b| b.set(Some(1)));
+    let mut item = store.load(inbox.id, id).unwrap();
+    assert_eq!(item.attachments.iter().map(Attachment::name).collect::<Vec<_>>(), ["other.txt", "Sheet"]);
+    item.attachments.remove(0);
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    crate::BLIND.with(|b| b.set(None));
+    let names: Vec<(String, Option<Vec<u8>>)> = stored_attachments(&mut store, id).into_iter().map(|(name, kept, _)| (name, kept)).collect();
+    assert_eq!(names, [("Sheet".to_string(), seven.clone()), ("figures.bin".to_string(), seven.clone())]);
+    assert!(store.load(inbox.id, id).unwrap().attachments[1].data == grown);
+    // With every attachment that was shown taken away, the message still has the other.
+    crate::BLIND.with(|b| b.set(Some(1)));
+    let mut item = store.load(inbox.id, id).unwrap();
+    item.attachments.clear();
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    crate::BLIND.with(|b| b.set(None));
+    plant(None);
+    let got = store.load(inbox.id, id).unwrap();
+    assert!(got.attachments[0].data == grown);
+    assert_eq!(
+        (got.attachments.len(), got.attachments[0].name(), got.flags() & openmailclient_model::MSGFLAG_HASATTACH != 0),
+        (1, "figures.bin".to_string(), true)
+    );
+}
+
+#[test]
 fn a_search_folder_shows_a_changed_message_as_it_is_now() {
     // A search folder's table, as another program keeps one, with a row for each of two
     // messages of the Inbox and a column the messages have nothing for.

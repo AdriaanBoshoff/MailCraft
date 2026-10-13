@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 68 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 69 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 285, all passing |
+| Tests | 286, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -103,7 +103,8 @@
 52. Done: an export of a data file runs on a thread of its own, with progress and a way to stop it (M3b.14).
 53. Done: an exported file names the Calendar, Contacts, Tasks, Notes, Journal and Drafts folders by id on its root and its Inbox (M3b.15).
 54. Done: the small things left in the writer: values keep their kind, a rewritten file goes on from the header's counters, and the file as it was need not be kept (M3b.16).
-55. Next: M3b.17: an attachment whose contents were changed keeps what is stored on it, and a stored attachment that cannot be read is carried as it is; table cells whose type differs from the column's.
+55. Done: a file attached again with other contents keeps what is stored on it, and an attachment that cannot be read stays where it is (M3b.17).
+56. Next: M3b.18: table cells whose type differs from the column's kept in a saved file's tables; the structure check hearing Stop and comparing a heap's fill levels with its free space.
 
 ## Do later (from M2)
 
@@ -141,7 +142,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Saving off the UI thread, with progress~~ | done: M3b.12 |
 | A save that does not rewrite the whole data file (needs writes into the data file that are journalled themselves) | M3b |
 | ~~Unknown properties of an attachment kept when a message's attachments change~~ | done: M3b.11 |
-| Unknown properties of an attachment whose contents were changed too (nothing tells it from a new one), and stored attachments that cannot be read (left out when the list changes) | M3b |
+| ~~Unknown properties of an attachment whose contents were changed too, and stored attachments that cannot be read~~ | done: M3b.17 |
 | ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
 | Working out again which search folders a changed message belongs to (its rows are brought up to date; a row is not added or taken away) | M5 |
 | Changes to an ANSI `.pst` and a 4K-page file kept; an `.ost` stays read-only for good (it is a server's copy) | M3b, with writing those kinds |
@@ -1062,3 +1063,23 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   tests, and more in three that were there. Not done: `file.keepOriginal` has no place on
   a settings page (there is none yet; M5); a file kept before is not removed when the
   choice is turned off.
+- **2026-10-13** - M3b.17: attachments, the two cases left. (1) A file put in again with other
+  contents. When a message's attachments changed, a stored attachment was known again by
+  its contents alone, so a file that was worked on and attached again was written as a new
+  one and lost every property this program has no place for. Now two more ways of knowing
+  it follow the two there were: a file with other contents and the same properties, then a
+  file with other contents under the same name and kind. Its new contents take the place
+  of the old in the node it had (a plain file's bytes, or the object of another program in
+  a subnode of its own, the old one let go), and what else is stored on it stays. A file
+  with another name and other contents is a new file, as it should be; a message inside a
+  message is known by what it holds alone. (2) Attachments that cannot be read. A message
+  showed only those of its attachments this program could read, and saving a change to the
+  list wrote only those: a damaged attachment, or the ones past the twenty thousand we
+  read, were gone from the file though nobody had taken them away. They now stay as they
+  are stored, after the others, with their rows; a message left with only such attachments
+  still says it has attachments. Made better on the way: the property list of a changed
+  node is written after the subnodes that stay with it are known, so a value that names
+  one is checked against what is really there. 1 test (three files put in again, a file
+  under another name, an attachment that cannot be read through two saves). Not done: an
+  attachment that cannot be read is carried, not mended; its row keeps the place it is
+  given after the readable ones and not the one it had among them.

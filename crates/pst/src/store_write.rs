@@ -148,7 +148,7 @@ const RECIPIENTS: &[(u16, u16)] = &[
     (0x3A40, B),
 ];
 /// The columns every attachment table has ([MS-PST] 2.4.6.1.1).
-const ATTACHMENTS: &[(u16, u16)] = &[(0x0E20, I), (0x3704, S), (0x3705, I), (0x370B, I)];
+pub(crate) const ATTACHMENTS: &[(u16, u16)] = &[(0x0E20, I), (0x3704, S), (0x3705, I), (0x370B, I)];
 
 /// Bookkeeping columns of a table (PidTagLtpRowId and neighbours): the table writer's own.
 const LTP_INTERNAL: std::ops::RangeInclusive<u16> = 0x67F1..=0x67F3;

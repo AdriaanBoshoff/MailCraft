@@ -10,14 +10,16 @@
 use crate::journal::{self, Diff, Found, Journal, Op};
 use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Subs, encode, write_pc};
-use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver};
+use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver, u32_at};
 use crate::store_write::{
-    ASSOC, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, copy, count, flag, int, text,
+    ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, copy, count, flag,
+    int, text,
 };
-use crate::write::{NdbWriter, Sub};
-use crate::{LTP_INTERNAL, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore, code_page};
+use crate::write::{MAX_DATA, NdbWriter, Sub};
+use crate::{LTP_INTERNAL, MAX_CHILDREN, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore, code_page};
 use openmailclient_model::{
     Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropBag, PropValue, Recovery, StoreError, Summary, pid,
+    ptype,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -912,17 +914,43 @@ impl PstStore {
         let subs = self.ndb.subnodes(e.sub)?;
         let cp = code_page(&ltp::read_pc(&mut self.ndb, e.data, &subs)?);
         let mut stored: Vec<Option<(u32, Attachment)>> = self.attachments(&subs, cp, 0).into_iter().map(Some).collect();
+        // Attachments the table lists and this program could not read: nobody was shown
+        // them, so nobody took them away. They stay, as they are stored, after the others.
+        let mut seen: HashSet<u32> = stored.iter().flatten().map(|(nid, _)| *nid).collect();
+        let listed = match subs.get(&NID_ATTACHMENT_TABLE) {
+            Some(&(data, sub)) => {
+                let inside = self.ndb.subnodes(sub).unwrap_or_default();
+                ltp::read_tc(&mut self.ndb, data, &inside).unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        let unread: Vec<Row> = listed
+            .into_iter()
+            .filter(|r| r.id & 0x1F == TYPE_ATTACHMENT && subs.contains_key(&r.id) && seen.insert(r.id))
+            .take(MAX_CHILDREN)
+            .collect();
         kept.remove(&NID_ATTACHMENT_TABLE);
         kept.retain(|nid, _| nid & 0x1F != TYPE_ATTACHMENT);
         // Which stored attachment each one is: first those that are the same but for their
         // place in the list, then those with the same contents and other properties (a new
-        // name, say). Contents are what tells attachments apart; without any, none is matched.
+        // name, say), then files with other contents and the same properties (a file put in
+        // again after it was worked on), and last files with other contents under the same
+        // name. A message inside a message is matched by what it holds alone.
         let holds = |a: &Attachment, b: &Attachment| a.data == b.data && a.embedded == b.embedded;
         let same = |a: &Attachment, b: &Attachment| holds(a, b) && settled(&a.props) == settled(&b.props);
+        let files = |a: &Attachment, b: &Attachment| a.embedded.is_none() && b.embedded.is_none();
+        let named = |a: &Attachment, b: &Attachment| {
+            !a.name().is_empty() && a.name() == b.name() && a.props.i32(pid::ATTACH_METHOD) == b.props.i32(pid::ATTACH_METHOD)
+        };
         let mut was: Vec<Option<(u32, Attachment)>> = new.attachments.iter().map(|_| None).collect();
-        for exact in [true, false] {
+        for pass in 0..4 {
             for (a, slot) in new.attachments.iter().zip(was.iter_mut()).filter(|(_, slot)| slot.is_none()) {
-                let fits = |b: &Attachment| if exact { same(a, b) } else { holds(a, b) && (!a.data.is_empty() || a.embedded.is_some()) };
+                let fits = |b: &Attachment| match pass {
+                    0 => same(a, b),
+                    1 => holds(a, b) && (!a.data.is_empty() || a.embedded.is_some()),
+                    2 => files(a, b) && settled(&a.props) == settled(&b.props),
+                    _ => files(a, b) && named(a, b),
+                };
                 *slot = stored.iter_mut().find(|s| s.as_ref().is_some_and(|(_, b)| fits(b))).and_then(Option::take);
             }
         }
@@ -946,6 +974,13 @@ impl PstStore {
             list.push(Sub { nid, data, sub });
             rows.push(Row { id: nid, cells });
         }
+        for row in unread {
+            let Some(&(data, sub)) = subs.get(&row.id) else { continue };
+            list.push(Sub { nid: row.id, data: self.copy_data(&mut o.w, data, budget)?, sub: self.copy_subs(&mut o.w, sub, 1, budget)? });
+            // Its row as the table had it, less what the table of a new file has no column for.
+            let cells = row.cells.into_iter().filter(|c| ATTACHMENTS.iter().any(|(id, ty)| *id == c.id && *ty == c.ty)).collect();
+            rows.push(Row { id: row.id, cells });
+        }
         if !rows.is_empty() {
             list.push(o.attachment_table(&rows)?);
         }
@@ -953,7 +988,8 @@ impl PstStore {
     }
 
     /// A stored attachment with what the model now says of it: its data and subnodes, and the
-    /// cells of its row. Its contents are the same, so they stay as they are stored.
+    /// cells of its row. Contents that are the same stay as they are stored; a file's new
+    /// contents take the place of the old, and what else is stored on it stays.
     #[allow(clippy::too_many_arguments)]
     fn merged_attachment<W: Read + Write + Seek>(
         &mut self,
@@ -965,7 +1001,7 @@ impl PstStore {
         index: usize,
         budget: &mut usize,
     ) -> Result<(u64, u64, Vec<Raw>), PstError> {
-        let (mut props, kept) = self.open_pc(NbtEntry { data, sub, parent: 0 })?;
+        let (mut props, mut kept) = self.open_pc(NbtEntry { data, sub, parent: 0 })?;
         let ids: HashSet<u16> = old
             .props
             .iter()
@@ -985,8 +1021,28 @@ impl PstStore {
             }
         }
         props.insert(pid::ATTACH_NUM, int(pid::ATTACH_NUM, i32::try_from(index).unwrap_or(i32::MAX)));
+        let mut more = Vec::new();
+        if old.embedded.is_none() && new.embedded.is_none() && old.data != new.data {
+            // An object's bytes were in a subnode of their own: that goes with them.
+            if let Some(nid) = props.remove(&pid::ATTACH_DATA).filter(|r| r.ty == ptype::OBJECT).and_then(|r| u32_at(&r.data, 0)) {
+                kept.remove(&nid);
+            }
+            let size = u32::try_from(new.data.len()).unwrap_or(u32::MAX);
+            let contents = if new.props.i32(pid::ATTACH_METHOD) == Some(6) && !new.data.is_empty() {
+                // PtypObject: the subnode that holds the object, then its size ([MS-PST] 2.3.3.5).
+                let used = kept.keys().filter(|n| *n & 0x1F == TYPE_LTP).map(|n| n >> 5).max().unwrap_or(0);
+                let mut subs = Subs::new(used.saturating_add(1));
+                let nid = subs.value(&mut o.w, new.data.chunks(MAX_DATA))?;
+                more = subs.list;
+                Raw { id: pid::ATTACH_DATA, ty: ptype::OBJECT, data: [nid.to_le_bytes(), size.to_le_bytes()].concat() }
+            } else {
+                Raw { id: pid::ATTACH_DATA, ty: ptype::BINARY, data: new.data.clone() }
+            };
+            props.insert(pid::ATTACH_DATA, contents);
+            props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, i32::try_from(new.data.len()).unwrap_or(i32::MAX)));
+        }
         let cells = attachment_cells(&props);
-        let (data, sub) = self.close_pc(o, props, &kept, Vec::new(), budget)?;
+        let (data, sub) = self.close_pc(o, props, &kept, more, budget)?;
         Ok((data, sub, cells))
     }
 
@@ -1004,13 +1060,15 @@ impl PstStore {
         let used = kept.keys().copied().chain(more.iter().map(|s| s.nid)).filter(|n| n & 0x1F == TYPE_LTP).map(|n| n >> 5).max().unwrap_or(0);
         let mut subs = Subs::new(used.saturating_add(1));
         let props: Vec<Raw> = props.into_values().collect();
-        let data = write_pc(&mut o.w, &props, &mut subs)?;
+        // The subnodes that stay come first: a value that is an object names one of them, and
+        // the property list is written knowing which are there.
         let mut kept: Vec<(u32, (u64, u64))> = kept.iter().map(|(n, e)| (*n, *e)).collect();
         kept.sort_unstable();
         for (nid, (data, sub)) in kept {
             subs.list.push(Sub { nid, data: self.copy_data(&mut o.w, data, budget)?, sub: self.copy_subs(&mut o.w, sub, 1, budget)? });
         }
         subs.list.extend(more);
+        let data = write_pc(&mut o.w, &props, &mut subs)?;
         Ok((data, o.w.subnodes(subs.list)?))
     }
 
@@ -1068,8 +1126,10 @@ impl PstStore {
             more.push(o.recipients(new)?);
         }
         if old.attachments != new.attachments {
-            more.extend(self.changed_attachments(o, e, new, &mut kept, budget)?);
-            let has = !new.attachments.is_empty();
+            let list = self.changed_attachments(o, e, new, &mut kept, budget)?;
+            // Those that could not be read are still there, and the message still has them.
+            let has = !list.is_empty();
+            more.extend(list);
             let flags = if has { new.flags() | MSGFLAG_HASATTACH } else { new.flags() & !MSGFLAG_HASATTACH };
             props.insert(pid::MESSAGE_FLAGS, int(pid::MESSAGE_FLAGS, flags));
             props.insert(pid::HASATTACH, flag(pid::HASATTACH, has));
