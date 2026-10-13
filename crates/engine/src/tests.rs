@@ -2267,6 +2267,8 @@ fn the_file_as_it_was_is_kept_beside_a_first_save_unless_asked_not_to() {
         run(&mut s, "file.save", Value::Null);
         let beside = openmailclient_pst::original_beside(&path);
         assert_eq!(beside.exists(), keep);
+        // Nothing else is left beside the file, however it was saved.
+        assert!(!openmailclient_pst::undo_beside(&path).exists() && !openmailclient_pst::journal_beside(&path).exists());
         if keep {
             assert_eq!(std::fs::read(&beside).unwrap(), first);
         }
@@ -2274,6 +2276,46 @@ fn the_file_as_it_was_is_kept_beside_a_first_save_unless_asked_not_to() {
     }
     // Two data files, and the one file kept.
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_save_goes_into_the_data_file_unless_asked_not_to() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-onto-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.pst");
+    run(&mut session(), "file.export", json!({"path": path}));
+    let mut s = Session::new();
+    s.now = now();
+    assert!(s.save_in_place);
+    run(&mut s, "file.open", json!({"path": path}));
+    let change = |s: &mut Session| {
+        run(s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+        run(s, "mail.delete", Value::Null);
+        run(s, "file.save", Value::Null)
+    };
+    // The first save keeps the file as it was, and so writes a new one; the next goes into it.
+    let done = change(&mut s);
+    assert_eq!((done["saved"].clone(), done["inPlace"].clone()), (json!(1), json!(0)));
+    let done = change(&mut s);
+    assert_eq!((done["saved"].clone(), done["inPlace"].clone()), (json!(1), json!(1)));
+    assert_eq!(run(&mut s, "file.saveInPlace", Value::Null)["on"], false);
+    assert_eq!(s.settings(None)["saveInPlace"], false);
+    let done = change(&mut s);
+    assert_eq!((done["saved"].clone(), done["inPlace"].clone()), (json!(1), json!(0)));
+    assert_eq!(run(&mut s, "file.saveInPlace", json!({"on": true}))["on"], true);
+    // One that is not waited for goes into the file as well.
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut s, "mail.delete", Value::Null);
+    assert_eq!(run(&mut s, "file.save", json!({"wait": false}))["started"], 1);
+    s.finish_saves();
+    assert!(s.saves.is_empty() && s.inspect()["stores"][0]["unsaved"] == false, "{}", s.status);
+    // The data file, the file as it first was, and nothing else.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    let mut again = Session::new();
+    run(&mut again, "file.open", json!({"path": path}));
+    assert_eq!(folder(&again, "Inbox").0, folder(&s, "Inbox").0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

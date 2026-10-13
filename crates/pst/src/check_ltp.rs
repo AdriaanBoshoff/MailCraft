@@ -434,10 +434,16 @@ impl Inside<'_, '_> {
     }
 }
 
-/// Look inside every node of a file. Gives the problems found, at most `limit` of them spelled
+/// Look inside every node of a file, or inside those of `only`. Gives the problems found, at most `limit` of them spelled
 /// out, and how many more there were.
-pub(crate) fn inside(ndb: &mut Ndb, limit: usize, stopped: &dyn Fn() -> bool) -> Result<(Vec<String>, u64), crate::PstError> {
-    let mut nodes: Vec<(u32, u64, u64)> = ndb.nbt.iter().map(|(nid, e)| (*nid, e.data, e.sub)).collect();
+pub(crate) fn inside(
+    ndb: &mut Ndb,
+    limit: usize,
+    stopped: &dyn Fn() -> bool,
+    only: Option<&std::collections::HashSet<u32>>,
+) -> Result<(Vec<String>, u64), crate::PstError> {
+    let mut nodes: Vec<(u32, u64, u64)> =
+        ndb.nbt.iter().filter(|(nid, _)| only.is_none_or(|o| o.contains(nid))).map(|(nid, e)| (*nid, e.data, e.sub)).collect();
     nodes.sort_unstable();
     let mut c = Inside { ndb, seen: 0, problems: Vec::new(), limit, more: 0 };
     for (nid, data, sub) in nodes {

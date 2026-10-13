@@ -49,7 +49,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Save",
             shortcut: "Ctrl+S",
-            params: r#"{"store": index, "wait": false to come back at once and do the writing on a thread of its own}; default: every data file with unsaved changes, and waiting. The data file is written anew beside itself, checked, read back and only then put in the old one's place. A save that is not waited for takes the mailbox as it stands when asked; until it ends the data file is read as before and takes no changes, and file.stopSave stops it; returns {"saved": how many, "started": how many are being saved, "kept": where each file as it first was is kept}"#,
+            params: r#"{"store": index, "wait": false to come back at once and do the writing on a thread of its own}; default: every data file with unsaved changes, and waiting. What changed is written into the data file where it is, with what is written over kept beside it until the save is checked and read back, and put back if anything goes wrong; the first save that keeps the file as it was, a file that cannot be written into and one with much unused space are written anew beside themselves, checked, read back and only then put in the old one's place. A save that is not waited for takes the mailbox as it stands when asked; until it ends the data file is read as before and takes no changes, and file.stopSave stops it; returns {"saved": how many, "inPlace": how many of them went into the file where it is, "started": how many are being saved, "kept": where each file as it first was is kept}"#,
             enabled: can_save,
             run: save,
         },
@@ -62,6 +62,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"on": bool}; default: the other way. On (as it is at first), the first save of a data file leaves the file as it was beside it, under a name ending in .before-openmailclient.pst; off, it does not. A file kept before stays. Kept with the settings; returns {"on"}"#,
             enabled: always,
             run: keep_original,
+        },
+        CommandSpec {
+            id: "file.saveInPlace",
+            label: "Save Changes into the Data File",
+            tab: "File",
+            group: "Save",
+            shortcut: "",
+            params: r#"{"on": bool}; default: the other way. On (as it is at first), a save writes what changed into the data file where it is, which takes as long as the changes are large and not as long as the mailbox is; off, every save writes the whole file anew and puts it in the old one's place. Either way a save that fails leaves the file as it was. Kept with the settings; returns {"on"}"#,
+            enabled: always,
+            run: save_in_place,
         },
         CommandSpec {
             id: "file.stopSave",
@@ -183,6 +193,16 @@ fn keep_original(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "on": s.keep_original }))
 }
 
+fn save_in_place(s: &mut Session, p: &Value) -> CmdResult {
+    s.save_in_place = p_bool(p, "on").unwrap_or(!s.save_in_place);
+    s.status = if s.save_in_place {
+        "A save writes what changed into the data file where it is".to_string()
+    } else {
+        "Every save writes the whole data file anew".to_string()
+    };
+    Ok(json!({ "on": s.save_in_place }))
+}
+
 /// Start the long part of a save on a thread of its own. False when this store has no such
 /// part, or no thread can be had: it is saved the plain way then.
 fn save_elsewhere(s: &mut Session, idx: usize, id: [u8; 16]) -> Result<bool, EngineError> {
@@ -224,7 +244,7 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
     };
     let wait = p_bool(p, "wait") != Some(false);
     let (mut saved, mut kept) = (Vec::new(), Vec::new());
-    let mut started = 0;
+    let (mut started, mut in_place) = (0, 0);
     for idx in which {
         let id = io::new_store_id(s.now);
         match s.stores.get(idx) {
@@ -234,16 +254,19 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
             Some(st) if st.unsaved() && !st.saving() => {}
             _ => continue,
         }
-        let keep = s.keep_original;
+        let (keep, onto) = (s.keep_original, s.save_in_place);
         if let Some(store) = s.stores.get_mut(idx) {
             store.keep_original(keep);
+            store.save_in_place(onto);
         }
         if !wait && save_elsewhere(s, idx, id)? {
             started += 1;
             continue;
         }
         let Some(store) = s.stores.get_mut(idx) else { continue };
+        let before = store.saved_in_place();
         store.save(id)?;
+        in_place += u32::from(store.saved_in_place() > before);
         saved.push(store.display_name());
         if let Some(original) = store.path().map(openmailclient_pst::original_beside).filter(|o| o.exists()) {
             kept.push(original.display().to_string());
@@ -258,7 +281,7 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
         [one] => format!("Saved {one}"),
         many => format!("Saved {} data files", many.len()),
     };
-    Ok(json!({ "saved": saved.len(), "started": started, "kept": kept }))
+    Ok(json!({ "saved": saved.len(), "inPlace": in_place, "started": started, "kept": kept }))
 }
 
 /// Open a data file as `file.open` does.

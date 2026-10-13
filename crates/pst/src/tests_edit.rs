@@ -567,7 +567,9 @@ fn a_save_done_elsewhere_replaces_the_file_whole_or_not_at_all() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
     store.create_folder(inbox.id, "Yes").unwrap();
 
-    // Another program writes the file while the work runs: nothing is replaced.
+    // Another program writes the file while the work runs: nothing is replaced. (The work
+    // is a whole new file here; one that goes into the file is in `tests_onto.rs`.)
+    store.save_in_place(false);
     let work = store.save_begin(UID).unwrap().unwrap();
     let done = work(Arc::new(Progress::default()));
     assert!(done.is_ok());

@@ -232,6 +232,9 @@ pub struct Session {
     /// Whether the file as it was stays beside a data file the first time it is saved
     /// (`file.keepOriginal`). It does until the owner says otherwise.
     pub keep_original: bool,
+    /// Whether a save writes what changed into the data file where it is when that can be
+    /// done (`file.saveInPlace`), and not the whole file anew.
+    pub save_in_place: bool,
     pub compose: Option<Draft>,
     pub status: String,
     /// Minutes east of UTC for dates shown and written into reply headers. Set by the host.
@@ -283,6 +286,7 @@ impl Session {
             folder_pane: true,
             animate: true,
             keep_original: true,
+            save_in_place: true,
             compose: None,
             status: String::new(),
             tz_offset_min: 0,

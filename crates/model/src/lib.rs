@@ -653,6 +653,13 @@ pub trait Store {
     /// Whether the file as it was stays beside a data file the first time a save replaces
     /// it. It does unless this says otherwise; a store that is in no file has nothing to keep.
     fn keep_original(&mut self, _keep: bool) {}
+    /// Whether a save writes what changed into the data file where it is when that can be
+    /// done, or always writes a whole new file. It does unless this says otherwise.
+    fn save_in_place(&mut self, _on: bool) {}
+    /// How many saves of this store went into its data file where it is.
+    fn saved_in_place(&self) -> u64 {
+        0
+    }
     /// The mailbox as it stands when this is asked, for a thread of its own: a data file is
     /// read there through a handle of its own, with the changes as they are now, so this
     /// store goes on being read and changed meanwhile. `None` when this store cannot.

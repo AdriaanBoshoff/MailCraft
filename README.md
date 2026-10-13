@@ -1,8 +1,8 @@
 # OpenMailClient
 
-![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
+![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3b%20closed%20%C2%B7%20M4%20next-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-328%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-339%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -31,7 +31,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3 | **Writing `.pst`**: a mailbox saved as a `.pst`, changes to an open one kept, settings kept | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
-| M3b | **The do-later batch**: journalled changes (done) and what M2 and M3 left | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M3b | **The do-later batch**: journalled changes, a save into the data file where it is, and what M2 and M3 left | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
@@ -62,8 +62,10 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 - Opens Outlook data files (`.pst`, `.ost`) and single messages (`.msg`, `.oft`, `.eml`). Nothing is
   written to a data file until Save Changes (Ctrl+S): changes to a Unicode or ANSI `.pst` are then written
-  to a new file that is checked, read back and swapped in, with the file as it was kept beside
-  it on the first save. Until then each change is journalled beside the file (or in a folder of our own when that
+  into the file where it is, so a flag on one message is a few pages and not the mailbox again. What a save
+  writes over is kept beside the file until the save is checked and read back, and is put back if anything
+  goes wrong, a power cut included; the first save keeps the file as it was beside it and writes a whole
+  new file that is checked, read back and swapped in. Until then each change is journalled beside the file (or in a folder of our own when that
   one cannot be written), so a crash or a
   closed window does not lose it: it comes back, still unsaved, when the file is opened again.
   `.ost` and 4K-page files are read-only. A save or an export runs beside the window, with
@@ -139,7 +141,7 @@ cargo run --release -p openmailclient-ui-egui --example ui_shot
 ## Safety rules the code follows
 
 - **Never crash, never lose mail.** No panics in non-test code; every reader has a hostile-input test;
-  a data file is not written to until a save is asked for, and a save writes a temporary file, checks it and swaps it in.
+  a data file is not written to until a save is asked for; a save writes a temporary file, checks it and swaps it in, or writes into the file with an undo file beside it that puts it back byte for byte if the save does not end.
 - **Mail is hostile and private.** Message content is data: nothing in a message is run, and remote
   content is never fetched. Attachments are only ever saved to a file you choose.
 - **Clean room.** Formats come from public specifications ([MS-PST], [MS-OXMSG], RFC 5322, …). No

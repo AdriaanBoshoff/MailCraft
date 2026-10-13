@@ -1,6 +1,6 @@
 # Never crash, never lose mail
 
-**Status:** revision 1 · 2026-10-13 · written for this repository; it replaces a link to a
+**Status:** revision 2 · 2026-10-13 · says what a journalled write into a data file is (M3b.29); written for this repository; it replaces a link to a
 standard kept elsewhere that readers of this repository could not open.
 
 People trust a mail client with years of mail. A crash loses what was being done; a bad write
@@ -43,6 +43,13 @@ that can panic, and a crash is fixed before anything is built on top of it.
    - A write to `.pst`, `.ost` or `.msg` goes to a temporary file that is swapped in
      atomically, or is journalled. A write that fails or is interrupted leaves the original
      byte for byte as it was.
+   - A journalled write into a data file (`crates/pst/src/save_onto.rs`) writes only into
+     space the file calls free and past its end, and the header last. What it writes over
+     is first put in an undo file of our own beside the data file and forced to disk
+     (`crates/pst/src/undo.rs`); taking that file away, after the result was checked and
+     read back, is what ends the write. Until then the data file is read as it was, through
+     the undo file, and is put back from it before it is written again. Opening still
+     writes nothing.
    - A store that Outlook has open is never written.
 5. **The last-resort guard is not a licence.** `Session::run` turns a panic that escaped into
    an error and puts the session's state back. It exists so that a mistake costs one command

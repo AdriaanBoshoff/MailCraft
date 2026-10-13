@@ -1,8 +1,9 @@
 //! Writing the Node Database layer ([MS-PST] 2.2): a whole data file from its blocks and nodes,
 //! front to back, Unicode or ANSI (ids and offsets of four bytes, and what follows from that).
 //!
-//! A file is always written whole, to a place of the caller's choosing (a temporary file that is
-//! swapped in when it is complete); nothing here changes a file in place. Space is handed out in
+//! A file is written whole, to a place of the caller's choosing (a temporary file that is
+//! swapped in when it is complete), or into the free end of one that is there (`write_onto.rs`).
+//! Space is handed out in
 //! file order, so the allocation maps are simply "everything up to here": each 253,952-byte
 //! section ([MS-PST] 2.2.2.7.2) is built in memory and written once, with its map in front.
 //!
@@ -206,7 +207,13 @@ pub(crate) struct NdbWriter<W: Read + Write + Seek> {
     last: [u32; 32],
     /// dwUnique of the file this one takes the place of.
     unique: u32,
+    /// The file this writes into, when it is not a new one.
+    onto: Option<Box<onto::Onto>>,
 }
+
+#[path = "write_onto.rs"]
+mod onto;
+pub(crate) use onto::Onto;
 
 impl<W: Read + Write + Seek> NdbWriter<W> {
     /// `crypt` is how data blocks are encoded: 0 not at all, 1 permuted, 2 cyclic
@@ -241,6 +248,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             next_page: 1,
             last: [0; 32],
             unique: 0,
+            onto: None,
         };
         w.open_section();
         Ok(w)
@@ -401,6 +409,9 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
                 return Ok((b.bid, true));
             }
         }
+        if let Some(bid) = self.known(key, data, internal)? {
+            return Ok((bid, true));
+        }
         // Block ids go up by four; bit 1 marks an internal block ([MS-PST] 2.2.2.2).
         let bid = self.next_block << 2 | if internal { 2 } else { 0 };
         let most: u64 = if self.ansi { 1 << 30 } else { 1 << 61 };
@@ -444,11 +455,18 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         if bid == 0 {
             return;
         }
-        if let Ok(i) = self.blocks.binary_search_by_key(&bid, |b| b.bid)
-            && let Some(b) = self.blocks.get_mut(i)
-            && b.refs > 2
-        {
-            b.refs -= 1;
+        // Into a file that is there, the block may be one that only its finder asked for: it
+        // is then named by nothing and gets no entry.
+        let least = if self.onto.is_some() { 1 } else { 2 };
+        match self.blocks.binary_search_by_key(&bid, |b| b.bid) {
+            Ok(i) => {
+                if let Some(b) = self.blocks.get_mut(i)
+                    && b.refs > least
+                {
+                    b.refs -= 1;
+                }
+            }
+            Err(_) => self.release_old(bid),
         }
     }
 
@@ -720,82 +738,43 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         }
 
         let mut head = vec![0u8; FIRST_AMAP as usize];
-        if ansi {
-            return self.finish_ansi(head, eof, last_amap, (nbt_bid, nbt_ib), (bbt_bid, bbt_ib));
-        }
-        // Density list ([MS-PST] 2.2.2.7.4.2): the allocation maps with room, the emptiest first.
-        // An entry is the map's number in 20 bits and its free slots in 12.
-        let mut roomy: Vec<(usize, u16)> = self.free.iter().copied().enumerate().filter(|(i, f)| *f > 0 && *i < 1 << 20).collect();
-        roomy.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        roomy.truncate(476 / 4);
-        let mut dlist = vec![0u8; PAGE_BODY];
-        // DFL_BACKFILL_COMPLETE, the count, padding, then the map the next allocation tries.
-        put(&mut dlist, 0, &[1, roomy.len() as u8]);
-        put(&mut dlist, 4, &(roomy.first().map_or(0, |r| r.0) as u32).to_le_bytes());
-        for (i, (index, free)) in roomy.iter().enumerate() {
-            let entry = (*index as u32 & 0xF_FFFF) | u32::from(*free & 0xFFF) << 20;
-            put(&mut dlist, 8 + i * 4, &entry.to_le_bytes());
-        }
-        let dlist_bid = self.next_page;
-        self.next_page += 1;
-        put(&mut head, DLIST as usize, &page(&dlist, PT_DLIST, sig(DLIST, dlist_bid), dlist_bid));
-
-        // HEADER, Unicode ([MS-PST] 2.2.2.6), with ROOT at 180 ([MS-PST] 2.2.2.5).
-        put(&mut head, 0, b"!BDN");
-        put(&mut head, 8, b"SM");
-        put(&mut head, 10, &23u16.to_le_bytes());
-        put(&mut head, 12, &19u16.to_le_bytes());
-        put(&mut head, 14, &[1, 1]);
-        put(&mut head, 32, &self.next_page.to_le_bytes());
-        put(&mut head, 40, &self.unique.wrapping_add(1).to_le_bytes());
-        // rgnid: for each kind of node id, where the next one starts.
-        for kind in 0..32usize {
-            let start: u32 = match kind {
-                0x03 => 0x4000,
-                0x04 => 0x1_0000,
-                0x08 => 0x8000,
-                _ => 0x400,
-            };
-            let next = self.last.get(kind).copied().unwrap_or(0).saturating_add(1).max(start);
-            put(&mut head, 44 + kind * 4, &next.to_le_bytes());
-        }
         let free_bytes: u64 = self.free.iter().map(|f| u64::from(*f) * SLOT as u64).sum();
-        put(&mut head, 184, &eof.to_le_bytes());
-        put(&mut head, 192, &last_amap.to_le_bytes());
-        put(&mut head, 200, &free_bytes.to_le_bytes());
-        put(&mut head, 216, &nbt_bid.to_le_bytes());
-        put(&mut head, 224, &nbt_ib.to_le_bytes());
-        put(&mut head, 232, &bbt_bid.to_le_bytes());
-        put(&mut head, 240, &bbt_ib.to_le_bytes());
-        // fAMapValid: VALID_AMAP2.
-        put(&mut head, 248, &[2]);
-        // The two maps kept in the header are no longer used and are all ones.
-        put(&mut head, 256, &[0xFF; 256]);
-        put(&mut head, 512, &[0x80, self.crypt]);
-        put(&mut head, 516, &(self.next_block << 2).to_le_bytes());
-        // dwCRCPartial: 471 bytes from offset 8; dwCRCFull: 516 bytes from offset 8.
-        let partial = crc(head.get(8..479).unwrap_or_default());
-        put(&mut head, 4, &partial.to_le_bytes());
-        let full = crc(head.get(8..524).unwrap_or_default());
-        put(&mut head, 524, &full.to_le_bytes());
+        if ansi {
+            self.head_ansi(&mut head, true, eof, last_amap, free_bytes, (nbt_bid, nbt_ib), (bbt_bid, bbt_ib))?;
+        } else {
+            let roomy = self.free.iter().copied().enumerate().filter_map(|(i, f)| Some((u32::try_from(i).ok()?, f))).collect();
+            let dlist = self.dlist_page(1, roomy);
+            put(&mut head, DLIST as usize, &dlist);
+            self.head_unicode(&mut head, true, eof, last_amap, free_bytes, (nbt_bid, nbt_ib), (bbt_bid, bbt_ib));
+        }
         self.out.seek(SeekFrom::Start(0))?;
         self.out.write_all(&head)?;
         self.out.flush()?;
         Ok(self.out)
     }
 
-    /// HEADER, ANSI ([MS-PST] 2.2.2.6): the ids and offsets are four bytes, ROOT is at 164,
-    /// there is one checksum and no density list.
-    fn finish_ansi(mut self, mut head: Vec<u8>, eof: u64, last_amap: u64, nbt: (u64, u64), bbt: (u64, u64)) -> Result<W, PstError> {
-        let small = |v: u64| u32::try_from(v).map_err(|_| cannot("the mailbox is too large for an ANSI data file (2 GB)"));
-        put(&mut head, 0, b"!BDN");
-        put(&mut head, 8, b"SM");
-        put(&mut head, 10, &14u16.to_le_bytes());
-        put(&mut head, 12, &19u16.to_le_bytes());
-        put(&mut head, 14, &[1, 1]);
-        put(&mut head, 24, &small(self.next_block << 2)?.to_le_bytes());
-        put(&mut head, 28, &small(self.next_page)?.to_le_bytes());
-        put(&mut head, 32, &self.unique.wrapping_add(1).to_le_bytes());
+    /// Density list ([MS-PST] 2.2.2.7.4.2): the allocation maps with room (a map's number and
+    /// its free slots), the emptiest first. An entry is the number in 20 bits and the slots in 12.
+    fn dlist_page(&mut self, flags: u8, mut roomy: Vec<(u32, u16)>) -> Vec<u8> {
+        roomy.retain(|(index, free)| *free > 0 && *index < 1 << 20);
+        roomy.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        roomy.truncate(476 / 4);
+        let mut dlist = vec![0u8; PAGE_BODY];
+        // DFL_BACKFILL_COMPLETE, the count, padding, then the map the next allocation tries.
+        put(&mut dlist, 0, &[flags, roomy.len() as u8]);
+        put(&mut dlist, 4, &roomy.first().map_or(0, |r| r.0).to_le_bytes());
+        for (i, (index, free)) in roomy.iter().enumerate() {
+            let entry = (*index & 0xF_FFFF) | u32::from(*free & 0xFFF) << 20;
+            put(&mut dlist, 8 + i * 4, &entry.to_le_bytes());
+        }
+        let bid = self.next_page;
+        self.next_page += 1;
+        page(&dlist, PT_DLIST, sig(DLIST, bid), bid)
+    }
+
+    /// rgnid: for each kind of node id, where the next one starts; never before where the
+    /// header in `head` had it.
+    fn head_nids(&self, head: &mut [u8], at: usize) {
         for kind in 0..32usize {
             let start: u32 = match kind {
                 0x03 => 0x4000,
@@ -803,28 +782,92 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
                 0x08 => 0x8000,
                 _ => 0x400,
             };
-            let next = self.last.get(kind).copied().unwrap_or(0).saturating_add(1).max(start);
-            put(&mut head, 36 + kind * 4, &next.to_le_bytes());
+            let had = crate::ndb::u32_at(head, at + kind * 4).unwrap_or(0);
+            let next = self.last.get(kind).copied().unwrap_or(0).saturating_add(1).max(start).max(had);
+            put(head, at + kind * 4, &next.to_le_bytes());
         }
-        let free_bytes: u64 = self.free.iter().map(|f| u64::from(*f) * SLOT as u64).sum();
-        put(&mut head, 168, &small(eof)?.to_le_bytes());
-        put(&mut head, 172, &small(last_amap)?.to_le_bytes());
-        put(&mut head, 176, &small(free_bytes)?.to_le_bytes());
-        put(&mut head, 184, &small(nbt.0)?.to_le_bytes());
-        put(&mut head, 188, &small(nbt.1)?.to_le_bytes());
-        put(&mut head, 192, &small(bbt.0)?.to_le_bytes());
-        put(&mut head, 196, &small(bbt.1)?.to_le_bytes());
+    }
+
+    /// HEADER, Unicode ([MS-PST] 2.2.2.6), with ROOT at 180 ([MS-PST] 2.2.2.5), into `head`:
+    /// all of it for a `fresh` file, and what a writing changes for one that is there.
+    #[allow(clippy::too_many_arguments)]
+    fn head_unicode(&self, head: &mut [u8], fresh: bool, eof: u64, last_amap: u64, free_bytes: u64, nbt: (u64, u64), bbt: (u64, u64)) {
+        let mut unique = self.unique;
+        if fresh {
+            put(head, 0, b"!BDN");
+            put(head, 8, b"SM");
+            put(head, 10, &23u16.to_le_bytes());
+            put(head, 12, &19u16.to_le_bytes());
+            put(head, 14, &[1, 1]);
+            // The two maps kept in the header are no longer used and are all ones.
+            put(head, 256, &[0xFF; 256]);
+            put(head, 512, &[0x80, self.crypt]);
+        } else {
+            unique = crate::ndb::u32_at(head, 40).unwrap_or(unique);
+        }
+        put(head, 32, &self.next_page.to_le_bytes());
+        put(head, 40, &unique.wrapping_add(1).to_le_bytes());
+        self.head_nids(head, 44);
+        put(head, 184, &eof.to_le_bytes());
+        put(head, 192, &last_amap.to_le_bytes());
+        put(head, 200, &free_bytes.to_le_bytes());
+        put(head, 216, &nbt.0.to_le_bytes());
+        put(head, 224, &nbt.1.to_le_bytes());
+        put(head, 232, &bbt.0.to_le_bytes());
+        put(head, 240, &bbt.1.to_le_bytes());
         // fAMapValid: VALID_AMAP2.
-        put(&mut head, 200, &[2]);
-        // The two maps kept in the header are no longer used and are all ones.
-        put(&mut head, 204, &[0xFF; 256]);
-        put(&mut head, 460, &[0x80, self.crypt]);
+        put(head, 248, &[2]);
+        put(head, 516, &(self.next_block << 2).to_le_bytes());
+        // dwCRCPartial: 471 bytes from offset 8; dwCRCFull: 516 bytes from offset 8.
+        let partial = crc(head.get(8..479).unwrap_or_default());
+        put(head, 4, &partial.to_le_bytes());
+        let full = crc(head.get(8..524).unwrap_or_default());
+        put(head, 524, &full.to_le_bytes());
+    }
+
+    /// HEADER, ANSI ([MS-PST] 2.2.2.6): the ids and offsets are four bytes, ROOT is at 164,
+    /// there is one checksum and no density list.
+    #[allow(clippy::too_many_arguments)]
+    fn head_ansi(
+        &self,
+        head: &mut [u8],
+        fresh: bool,
+        eof: u64,
+        last_amap: u64,
+        free_bytes: u64,
+        nbt: (u64, u64),
+        bbt: (u64, u64),
+    ) -> Result<(), PstError> {
+        let small = |v: u64| u32::try_from(v).map_err(|_| cannot("the mailbox is too large for an ANSI data file (2 GB)"));
+        let mut unique = self.unique;
+        if fresh {
+            put(head, 0, b"!BDN");
+            put(head, 8, b"SM");
+            put(head, 10, &14u16.to_le_bytes());
+            put(head, 12, &19u16.to_le_bytes());
+            put(head, 14, &[1, 1]);
+            // The two maps kept in the header are no longer used and are all ones.
+            put(head, 204, &[0xFF; 256]);
+            put(head, 460, &[0x80, self.crypt]);
+        } else {
+            unique = crate::ndb::u32_at(head, 32).unwrap_or(unique);
+        }
+        put(head, 24, &small(self.next_block << 2)?.to_le_bytes());
+        put(head, 28, &small(self.next_page)?.to_le_bytes());
+        put(head, 32, &unique.wrapping_add(1).to_le_bytes());
+        self.head_nids(head, 36);
+        put(head, 168, &small(eof)?.to_le_bytes());
+        put(head, 172, &small(last_amap)?.to_le_bytes());
+        put(head, 176, &small(free_bytes)?.to_le_bytes());
+        put(head, 184, &small(nbt.0)?.to_le_bytes());
+        put(head, 188, &small(nbt.1)?.to_le_bytes());
+        put(head, 192, &small(bbt.0)?.to_le_bytes());
+        put(head, 196, &small(bbt.1)?.to_le_bytes());
+        // fAMapValid: VALID_AMAP2.
+        put(head, 200, &[2]);
         // dwCRCPartial: 471 bytes from offset 8.
         let partial = crc(head.get(8..479).unwrap_or_default());
-        put(&mut head, 4, &partial.to_le_bytes());
-        self.out.seek(SeekFrom::Start(0))?;
-        self.out.write_all(&head)?;
-        self.out.flush()?;
-        Ok(self.out)
+        put(head, 4, &partial.to_le_bytes());
+        Ok(())
     }
 }

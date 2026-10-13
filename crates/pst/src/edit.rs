@@ -1,7 +1,7 @@
 //! Changes to an open data file.
 //!
 //! Nothing is written while changes are made: they are kept beside the open file, which stays
-//! as it was. Saving writes a whole new file. Every node the changes do not touch is copied as
+//! as it was. Saving writes a whole new file, or into the file where it is (`save_onto.rs`). Every node the changes do not touch is copied as
 //! it is stored, block for block, so what this program does not understand (hidden items,
 //! views, search folders, values of types the model has no place for) goes across untouched.
 //! A changed message keeps every stored property that was not changed. The new file is checked,
@@ -63,6 +63,18 @@ impl Drop for Beside {
             let _ = std::fs::remove_file(&self.0);
         }
     }
+}
+
+#[path = "save_onto.rs"]
+pub(crate) mod onto;
+
+/// What the work of a save that is done elsewhere gives back.
+struct Saved {
+    done: Written,
+    /// The changes went into the data file where it is: there is no new file to put in its place.
+    in_place: bool,
+    /// The data file's length and time of writing when the work was done with it.
+    stamp: Option<(u64, std::time::SystemTime)>,
 }
 
 const BEING_SAVED: &str = "the data file is being saved; changes are taken again when that is done";
@@ -199,7 +211,11 @@ impl PstStore {
 
     pub(crate) fn note_stamp(&mut self) {
         self.stamp = self.path.as_deref().and_then(stamp);
-        self.ident = self.path.as_deref().and_then(journal::ident);
+        // A file a save was cut short in is known as the file it was.
+        self.ident = match &self.torn {
+            Some(undo) => undo.ident(),
+            None => self.path.as_deref().and_then(journal::ident),
+        };
     }
 
     /// Write a request that was done into the journal.
@@ -589,6 +605,18 @@ impl PstStore {
         // of that kind's size.
         let mut o = Out { w: NdbWriter::of(out, 1, self.ndb.ver)?, names: Names::seeded(&self.names), uid: seed, serial: 0 };
         o.w.carry(self.ndb.counters);
+        let (o, done) = self.write_into(o, edits, put)?;
+        Ok((o.w.finish()?, done))
+    }
+
+    /// Give the writer every node of the mailbox as it stands: those the changes do not
+    /// touch as they are stored, the others anew.
+    fn write_into<W: Read + Write + Seek>(
+        &mut self,
+        mut o: Out<W>,
+        edits: Option<&Edits>,
+        put: Vec<(u32, u32, Vec<Raw>)>,
+    ) -> Result<(Out<W>, Written), PstError> {
         let mut budget = self.ndb.block_count().saturating_mul(16).saturating_add(4096);
         let root = self.root;
         let none: &[EFolder] = &[];
@@ -667,6 +695,7 @@ impl PstStore {
             if let Some((folder, entry)) = place.get(&nid) {
                 match &entry.item {
                     Some(item) => {
+                        o.w.near(e.data, e.sub);
                         let (data, sub, cells, removed) = self.merged(&mut o, e, item, &mut budget)?;
                         o.w.node(nid, *folder, data, sub);
                         shown.insert(nid, (cells, removed));
@@ -693,6 +722,7 @@ impl PstStore {
                 if ty == TYPE_FOLDER
                     && let Some(f) = view.get(&nid).filter(|f| changed(f))
                 {
+                    o.w.near(e.data, e.sub);
                     let (mut props, kept) = self.open_pc(e)?;
                     for raw in folder_cells(f) {
                         props.insert(raw.id, raw);
@@ -754,6 +784,7 @@ impl PstStore {
                 };
                 rows.push(Row { id: entry.nid, cells });
             }
+            self.near(&mut o, table);
             o.tc_node(table, &columns, &rows)?;
         }
         // The tables of subfolders that changed ([MS-PST] 2.4.4.4).
@@ -778,6 +809,7 @@ impl PstStore {
             // A folder this program does not list (it is hidden, or its row is damaged) stays.
             rows.extend(by.into_iter().filter(|(nid, _)| !dead.contains(nid) && !view.contains_key(nid)).map(|(id, cells)| Row { id, cells }));
             rows.sort_by_key(|r| folders.iter().position(|f| f.nid == r.id).unwrap_or(usize::MAX));
+            self.near(&mut o, table);
             o.tc_node(table, &columns, &rows)?;
         }
         // The names of named properties, with those that are new ([MS-PST] 2.4.7).
@@ -786,6 +818,7 @@ impl PstStore {
             && let Some(e) = self.ndb.nbt.get(&NID_NAME_TO_ID_MAP).copied()
         {
             if o.names.grew() {
+                o.w.near(e.data, e.sub);
                 let (props, kept) = self.open_pc(e)?;
                 let mut props: Vec<Raw> = props.into_values().collect();
                 o.names.add_to(&mut props);
@@ -800,7 +833,7 @@ impl PstStore {
             Some(_) => Written { folders: folders.len() as u64, items: folders.iter().map(|f| u64::from(f.info.total)).sum(), unreadable: 0 },
             None => Written::default(),
         };
-        Ok((o.w.finish()?, done))
+        Ok((o, done))
     }
 }
 
@@ -863,6 +896,7 @@ impl PstStore {
             show(&mut cells, &columns, now);
             row.cells = cells.into_values().collect();
         }
+        o.w.near(e.data, e.sub);
         let mut subs = Subs::new(1);
         let data = crate::ltp_write::write_tc(&mut o.w, &columns, &rows, &mut subs)?;
         let sub = o.w.subnodes(subs.list)?;
@@ -870,10 +904,22 @@ impl PstStore {
         Ok(true)
     }
 
+    /// Tell a writer that goes into the file where it is that the node `nid` is about to be
+    /// written again: what of it comes out as it was is not written a second time.
+    fn near<W: Read + Write + Seek>(&self, o: &mut Out<W>, nid: u32) {
+        if let Some(e) = self.ndb.nbt.get(&nid) {
+            o.w.near(e.data, e.sub);
+        }
+    }
+
     /// Copy a node's data as it is stored, block for block.
     fn copy_data<W: Read + Write + Seek>(&mut self, w: &mut NdbWriter<W>, bid: u64, budget: &mut usize) -> Result<u64, PstError> {
         if bid == 0 {
             return Ok(0);
+        }
+        // In the file itself, the blocks are there: they are named once more.
+        if w.in_place() {
+            return w.keep(bid);
         }
         let blocks = self.ndb.data_blocks(bid)?;
         *budget = budget
@@ -886,6 +932,9 @@ impl PstStore {
     fn copy_subs<W: Read + Write + Seek>(&mut self, w: &mut NdbWriter<W>, bid: u64, depth: usize, budget: &mut usize) -> Result<u64, PstError> {
         if bid == 0 {
             return Ok(0);
+        }
+        if w.in_place() {
+            return w.keep(bid);
         }
         if depth > MAX_COPY_DEPTH {
             return Err(PstError::Damaged("items are nested deeper than this version follows".to_string()));
@@ -1161,18 +1210,25 @@ impl PstStore {
         Ok((data, sub, cells, removed))
     }
 
-    /// Put the changes made so far into the data file. The new file is written beside it,
-    /// held against the structure check, read back and compared with what was meant, and only
-    /// then put in the old one's place in one step. Whatever goes wrong, the data file stays
-    /// as it was and the changes stay to be saved again.
+    /// Put the changes made so far into the data file. Where it can be done they are
+    /// written into the file where it is, with what is written over kept beside it until
+    /// the save is checked and done (`save_onto.rs`). Otherwise a new file is written beside
+    /// it, held against the structure check, read back and compared with what was meant, and
+    /// only then put in the old one's place in one step. Whatever goes wrong, the data file
+    /// stays as it was and the changes stay to be saved again.
     pub fn save(&mut self, seed: [u8; 16]) -> Result<Written, PstError> {
         if self.saving.is_some() {
             return Err(PstError::Write(BEING_SAVED.to_string()));
         }
+        self.restore_torn()?;
         if !self.e_unsaved() {
             return Ok(Written::default());
         }
         let (path, tmp) = self.places()?;
+        if let Some(done) = self.in_place(&path, seed)? {
+            self.journal.finish();
+            return Ok(done);
+        }
         let done = self.prepare(&tmp, seed).and_then(|(fresh, done)| self.replace(&path, &tmp, fresh, done));
         match done {
             // The changes are in the file: the journal of them has done its work.
@@ -1207,19 +1263,28 @@ impl PstStore {
         if self.saving.is_some() {
             return Err(StoreError::Format(BEING_SAVED.to_string()));
         }
+        // A file a save was cut short in is put back here: it is quick, and what the work
+        // then opens is the file as it is shown.
+        self.restore_torn()?;
         let Some(edits) = self.edits.as_ref().filter(|e| e.dirty).cloned() else { return Ok(None) };
         let (path, tmp) = self.places()?;
         let was = self.stamp;
+        let (keep, in_place) = (self.keep_before, self.in_place);
         self.saving = Some(Beside(tmp.clone()));
         Ok(Some(Box::new(move |progress: std::sync::Arc<openmailclient_model::Progress>| {
-            let work = || -> Result<Written, PstError> {
+            let work = || -> Result<Saved, PstError> {
                 let mut store = Self::open(&path)?;
                 if store.stamp != was {
                     return Err(PstError::Write("another program changed the data file since it was opened; nothing was saved".to_string()));
                 }
                 store.edits = Some(edits);
                 store.progress = Some(progress.clone());
-                store.prepare(&tmp, seed).map(|(_, done)| done)
+                (store.keep_before, store.in_place) = (keep, in_place);
+                if let Some(done) = store.in_place(&path, seed)? {
+                    return Ok(Saved { done, in_place: true, stamp: store.stamp });
+                }
+                let done = store.prepare(&tmp, seed).map(|(_, done)| done)?;
+                Ok(Saved { done, in_place: false, stamp: store.stamp })
             };
             let done = work();
             if done.is_err() {
@@ -1236,10 +1301,26 @@ impl PstStore {
         let Some(mut tmp) = self.saving.take() else { return Ok(()) };
         let tmp = std::mem::take(&mut tmp.0);
         let ended = (|| -> Result<(), StoreError> {
-            let done = *done?.downcast::<Written>().map_err(|_| StoreError::Format("the save gave nothing to end it with".to_string()))?;
+            let saved = *done?.downcast::<Saved>().map_err(|_| StoreError::Format("the save gave nothing to end it with".to_string()))?;
+            if saved.in_place {
+                // The changes are in the data file: it is opened as it is now.
+                let path = self.path.clone().ok_or_else(|| PstError::Write("this data file is not kept in a file".to_string()))?;
+                if stamp(&path) != saved.stamp {
+                    return Err(PstError::Write("another program changed the data file while it was saved".to_string()).into());
+                }
+                let fresh = Self::open(&path)?;
+                self.ndb = fresh.ndb;
+                self.finish_swap(fresh.name, fresh.names, fresh.root, fresh.special);
+                self.onto_done += 1;
+                return Ok(());
+            }
+            // A save that was tried in the file and undone left the file as it was, written anew.
+            if saved.stamp.is_some() && saved.stamp == self.path.as_deref().and_then(stamp) {
+                self.stamp = saved.stamp;
+            }
             let (path, _) = self.places()?;
             let fresh = Self::open(&tmp)?;
-            self.replace(&path, &tmp, fresh, done)?;
+            self.replace(&path, &tmp, fresh, saved.done)?;
             Ok(())
         })();
         match ended {
@@ -1283,9 +1364,23 @@ impl PstStore {
         if let Some(p) = &self.progress {
             p.part(4);
         }
-        // Read it back: the folders and their counts are what was meant, and each folder that
-        // was looked into lists as many messages as it should.
         let mut fresh = Self::open(tmp)?;
+        if !self.reads_back(&mut fresh)? {
+            return Err(PstError::Write("the new file does not read back as the mailbox that was saved; nothing was replaced".to_string()));
+        }
+        if let Some(p) = &self.progress {
+            p.part(4);
+        }
+        if self.progress.as_ref().is_some_and(|p| p.stopped()) {
+            return Err(PstError::Write(STOPPED.to_string()));
+        }
+        Ok((fresh, done))
+    }
+
+    /// Whether the file `fresh` reads back as the mailbox as it stands here: the folders
+    /// and their counts are what was meant, and each folder that was looked into lists the
+    /// messages it should.
+    fn reads_back(&mut self, fresh: &mut Self) -> Result<bool, PstError> {
         let key = |f: &FolderInfo| (f.id, f.parent, f.name.clone(), f.total, f.unread);
         let mut want: Vec<_> = self.e_folders().map_err(|e| PstError::Source(e.to_string()))?.iter().map(key).collect();
         let mut got: Vec<_> = fresh.file_folders().map_err(|e| PstError::Source(e.to_string()))?.iter().map(key).collect();
@@ -1296,16 +1391,7 @@ impl PstStore {
             let listed: Vec<u64> = fresh.file_list(f.info.id).map(|l| l.iter().map(|s| s.id).collect()).unwrap_or_default();
             same &= f.items.iter().flatten().map(|e| u64::from(e.nid)).eq(listed);
         }
-        if !same {
-            return Err(PstError::Write("the new file does not read back as the mailbox that was saved; nothing was replaced".to_string()));
-        }
-        if let Some(p) = &self.progress {
-            p.part(4);
-        }
-        if self.progress.as_ref().is_some_and(|p| p.stopped()) {
-            return Err(PstError::Write(STOPPED.to_string()));
-        }
-        Ok((fresh, done))
+        Ok(same)
     }
 
     /// Put the new file, written and checked, in the data file's place in one step.

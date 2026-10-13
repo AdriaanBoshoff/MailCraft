@@ -19,12 +19,14 @@ mod ltp;
 mod ltp_write;
 mod ndb;
 mod store_write;
+mod undo;
 mod write;
 
 pub use check::{Check, check, check_until};
 pub use edit::original_beside;
 pub use journal::{journal_beside, journal_elsewhere, set_aside};
 pub use store_write::{Written, write_store, write_store_ansi, write_store_until};
+pub use undo::undo_beside;
 
 use ltp::Raw;
 use ndb::{Ndb, Subnodes, u32_at};
@@ -120,19 +122,59 @@ pub struct PstStore {
     progress: Option<std::sync::Arc<openmailclient_model::Progress>>,
     /// Whether the file as it was stays beside this one the first time a save replaces it.
     keep_before: bool,
+    /// Whether a save writes into the data file where that can be done.
+    in_place: bool,
+    /// What the file held where a save that was cut short wrote: the file is read as it
+    /// was, through this, until the next save puts it back.
+    torn: Option<undo::Undo>,
+    /// How many saves went into the file where it is, and why the last one that was tried
+    /// so was undone and written whole.
+    onto_done: u64,
+    onto_failed: Option<String>,
 }
 
 impl PstStore {
     /// Open a data file. Nothing is written to it until changes are saved.
+    ///
+    /// A save that was cut short (the power went, the program was ended) leaves its undo
+    /// file beside the data file. The file is then read as it was before that save, and is
+    /// put back by the next save that is asked for; opening still writes nothing.
     pub fn open(path: &Path) -> Result<Self, PstError> {
-        let file = std::fs::File::open(path)?;
-        let mut store = Self::from_source(Box::new(file))?;
+        let mut file = std::fs::File::open(path)?;
+        let torn = undo::Undo::read(&undo_beside(path)).filter(|u| u.fits(&mut file));
+        let mut store = match &torn {
+            Some(undo) => Self::from_source(Box::new(undo.over(file)))?,
+            None => Self::from_source(Box::new(file))?,
+        };
+        store.torn = torn;
+        store.named_after(path);
+        Ok(store)
+    }
+
+    /// Open a data file as it is, whatever is beside it.
+    pub(crate) fn open_plain(path: &Path) -> Result<Self, PstError> {
+        let mut store = Self::from_source(Box::new(std::fs::File::open(path)?))?;
+        store.named_after(path);
+        Ok(store)
+    }
+
+    fn named_after(&mut self, path: &Path) {
+        let store = self;
         if store.name.is_empty() {
             store.name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         }
         store.path = Some(path.to_path_buf());
         store.note_stamp();
-        Ok(store)
+    }
+
+    /// Why the last save that was tried in place was undone and written whole instead.
+    pub fn in_place_trouble(&self) -> Option<&str> {
+        self.onto_failed.as_deref()
+    }
+
+    /// True while the data file is read as it was before a save that was cut short.
+    pub fn torn(&self) -> bool {
+        self.torn.is_some()
     }
 
     /// Open a data file held in memory.
@@ -156,6 +198,10 @@ impl PstStore {
             saving: None,
             progress: None,
             keep_before: true,
+            in_place: true,
+            torn: None,
+            onto_done: 0,
+            onto_failed: None,
         };
         // The message store node ([MS-PST] 2.4.3): display name and the entry ids of the special folders.
         if let Ok((bag, _)) = store.node_props(NID_MESSAGE_STORE) {
@@ -436,7 +482,8 @@ impl Store for PstStore {
     }
 
     fn unsaved(&self) -> bool {
-        self.e_unsaved()
+        // A file that a save was cut short in is mended by saving.
+        self.e_unsaved() || self.torn.is_some()
     }
 
     fn save(&mut self, seed: [u8; 16]) -> Result<(), StoreError> {
@@ -461,6 +508,14 @@ impl Store for PstStore {
 
     fn keep_original(&mut self, keep: bool) {
         self.keep_before = keep;
+    }
+
+    fn save_in_place(&mut self, on: bool) {
+        self.in_place = on;
+    }
+
+    fn saved_in_place(&self) -> u64 {
+        self.onto_done
     }
 
     fn apart(&mut self) -> Result<Option<openmailclient_model::Apart>, StoreError> {
@@ -524,6 +579,8 @@ mod tests_ansi;
 mod tests_edit;
 #[cfg(test)]
 mod tests_journal;
+#[cfg(test)]
+mod tests_onto;
 #[cfg(test)]
 mod tests_store;
 #[cfg(test)]

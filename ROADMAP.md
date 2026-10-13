@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 80 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; next accounts (M4) · revision 81 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 328, all passing |
+| Tests | 339, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -115,7 +115,8 @@
 64. Done: Text within a line is drawn in its border, and boxes and cells have rounded corners, in the window, on paper and in the PDF (M3b.26).
 65. Done: An RTF highlight is one of the sixteen marker colours, and list numbers follow what their override changes (M3b.27).
 66. Done: Metafiles draw parts of bitmaps, mirrored and turned ones, run-packed ones, every way of mixing, hatched and patterned brushes, and regions (M3b.28).
-67. Next: The last M3b row: a save that does not rewrite the whole data file (writes into the data file that are journalled themselves).
+67. Done: A save writes what changed into the data file where it is, with what it writes over kept beside the file until the save is checked; M3b is closed (M3b.29).
+68. Next: M4: accounts (IMAP, POP3 and SMTP behind an account trait, against an in-process fake server). M1's checks against Outlook stay open.
 
 ## Do later (from M2)
 
@@ -152,7 +153,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
 | Unsaved changes saved on their own after a while (waits for the writer to be proved in Outlook: nothing writes a data file unasked until then) | when the owner says so, with the Outlook check |
 | ~~Saving off the UI thread, with progress~~ | done: M3b.12 |
-| A save that does not rewrite the whole data file (needs writes into the data file that are journalled themselves) | M3b |
+| ~~A save that does not rewrite the whole data file (needs writes into the data file that are journalled themselves)~~ | done: M3b.29 |
 | ~~Unknown properties of an attachment kept when a message's attachments change~~ | done: M3b.11 |
 | ~~Unknown properties of an attachment whose contents were changed too, and stored attachments that cannot be read~~ | done: M3b.17 |
 | ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
@@ -1400,3 +1401,38 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   through copies and ones onto a leaning box (EMR_MASKBLT, EMR_ALPHABLEND,
   EMR_TRANSPARENTBLT, EMR_PLGBLT), pens that mix or are patterned, colours that are numbers
   in a palette, a one-bit pattern in the text's colours, and a clip that is moved.
+- **2026-10-13** - M3b.29: a save that does not rewrite the whole data file. `file.save` now writes what
+  changed into the file where it is (`crates/pst/src/write_onto.rs`, `save_onto.rs`): new
+  blocks and pages go into the free end of the file's last section and past its end, a block
+  that comes out as it was is named once more and not written again, and nothing that holds
+  mail is written over ([MS-PST] 2.2.2.7 for the maps, 2.2.2.6 for the header). The writes are journalled themselves: before the first of them, the
+  bytes that will be written over (the header, the last section, a free map) go into an undo
+  file of our own beside the data file (`name.pst.openmailclient-undo`, `undo.rs`) and are
+  forced to disk; the header that names the new state is written only when all it names is
+  on disk; the file is then held against the structure check (blocks from before the save
+  are not read again, every block that names others is), read back and compared, and taking
+  the undo file away is what ends the save. Anything that goes wrong before that puts the
+  file back byte for byte, with its time of writing, and the save is done the old way, a
+  whole new file swapped in. A run that ends in the middle leaves the undo file: the next
+  open reads the data file as it was, through the undo file, writing nothing, and the next
+  save puts it back first; the journal of unsaved changes still fits it. A file is written
+  into only when it is plainly sound and nobody else can write it (on Windows it is opened
+  so that the open fails otherwise); the first save that keeps the file as it was, a 4K-page
+  file and an `.ost` are as before. Made better on the way, beyond the row: unused space
+  earlier saves left is given back by itself (past 4 MB or a quarter of the file the save
+  writes the file whole); a large attachment is not written again for a flag on its
+  message; a save that is not waited for goes into the file too; `file.saveInPlace` turns
+  it off and is kept with the settings; `file.save` says how many saves went into the file
+  (`inPlace`). 11 tests: every kind of change over four saves, each held against the whole
+  structure check and read back; a 1.5 MB attachment and a flag (the file grows by less
+  than 600 KB and what was before the last section is byte for byte the same); an ANSI
+  file; an error at each of five stages (the file is as it was, byte for byte, and the save
+  is then done whole); a stop at each of six stages, a half-written header among them (the
+  file reads as it was, a save puts it back byte for byte, and the changes come back from
+  the journal and are saved); undo files cut at every 977th byte, with a byte changed, with
+  sums that fit round junk, from another file and for a file changed since; the space given
+  back; a save on a thread of its own, stopped and not; a file another program writes.
+  Not done: no file written this way has been opened in Outlook (that waits for the owner's
+  say, as before), and no Outlook-written `.pst` with 512-byte pages was at hand to save
+  into: the only local files are 4K-page ones, which stay read-only. With this the do-later
+  batch is done and M3b is closed.

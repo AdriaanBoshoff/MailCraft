@@ -445,13 +445,40 @@ pub fn check<R: Read + Seek + Send>(src: &mut R) -> Result<Check, PstError> {
 /// each node, and gives `PstError::Stopped` when it is told to. A check that was stopped
 /// says nothing of the file.
 pub fn check_until<R: Read + Seek + Send>(src: &mut R, stop: Option<&openmailclient_model::Progress>) -> Result<Check, PstError> {
+    within(src, stop, 0, None)
+}
+
+/// The check of a file that was written into from `since` on: a data block that lies
+/// before that is where it was and is not read again (that it is in space the maps call
+/// used is still seen), every block that names others is read, so every count of
+/// references is held against what is found, and only the nodes of `only` are looked into.
+pub(crate) fn check_since<R: Read + Seek + Send>(
+    src: &mut R,
+    stop: Option<&openmailclient_model::Progress>,
+    since: u64,
+    only: &HashSet<u32>,
+) -> Result<Check, PstError> {
+    within(src, stop, since, Some(only))
+}
+
+/// What is wrong inside the nodes of `only`, as the check says it.
+pub(crate) fn inside_of(ndb: &mut crate::ndb::Ndb, only: &HashSet<u32>) -> Vec<String> {
+    crate::check_ltp::inside(ndb, MAX_PROBLEMS, &|| false, Some(only)).map(|found| found.0).unwrap_or_default()
+}
+
+fn within<R: Read + Seek + Send>(
+    src: &mut R,
+    stop: Option<&openmailclient_model::Progress>,
+    since: u64,
+    only: Option<&HashSet<u32>>,
+) -> Result<Check, PstError> {
     let stopped = || stop.is_some_and(openmailclient_model::Progress::stopped);
-    let mut out = structure(src, &stopped)?;
+    let mut out = structure(src, &stopped, since)?;
     if out.problems.is_empty() {
         src.seek(SeekFrom::Start(0))?;
         match crate::ndb::Ndb::open(Box::new(&mut *src)) {
             Ok(mut ndb) => {
-                let (inside, more) = crate::check_ltp::inside(&mut ndb, MAX_PROBLEMS, &stopped)?;
+                let (inside, more) = crate::check_ltp::inside(&mut ndb, MAX_PROBLEMS, &stopped, only)?;
                 out.inside = inside;
                 out.more = out.more.saturating_add(more);
             }
@@ -461,7 +488,7 @@ pub fn check_until<R: Read + Seek + Send>(src: &mut R, stop: Option<&openmailcli
     Ok(out)
 }
 
-fn structure<R: Read + Seek>(src: &mut R, stopped: &dyn Fn() -> bool) -> Result<Check, PstError> {
+fn structure<R: Read + Seek>(src: &mut R, stopped: &dyn Fn() -> bool, since: u64) -> Result<Check, PstError> {
     let len = src.seek(SeekFrom::End(0))?;
     let mut start = [0u8; 12];
     src.seek(SeekFrom::Start(0))?;
@@ -570,6 +597,14 @@ fn structure<R: Read + Seek>(src: &mut R, stopped: &dyn Fn() -> bool) -> Result<
         let after = pages.partition_point(|p| p + page <= ib);
         if pages.get(after).is_some_and(|p| *p < end) {
             c.out.problem(format!("the block {bid:#x} at {ib:#x} overlaps a page of a tree"));
+        }
+        // A data block from before the file was written into is as it was.
+        if bid & 2 == 0 && end <= since {
+            if !c.allocated(ib, g.stored(b.cb)) {
+                c.out.problem(format!("the block {bid:#x} at {ib:#x} is in space the allocation map calls free"));
+            }
+            c.out.blocks += 1;
+            continue;
         }
         // Only internal blocks are kept: they say which blocks they point at.
         if let Some(data) = c.block(bid, b)
