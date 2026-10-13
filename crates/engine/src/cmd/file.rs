@@ -49,9 +49,19 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Save",
             shortcut: "Ctrl+S",
-            params: r#"{"store": index}; default: every data file with unsaved changes. The data file is written anew beside itself, checked, read back and only then put in the old one's place; returns {"saved": how many, "kept": where each file as it first was is kept}"#,
-            enabled: unsaved,
+            params: r#"{"store": index, "wait": false to come back at once and do the writing on a thread of its own}; default: every data file with unsaved changes, and waiting. The data file is written anew beside itself, checked, read back and only then put in the old one's place. A save that is not waited for takes the mailbox as it stands when asked; until it ends the data file is read as before and takes no changes, and file.stopSave stops it; returns {"saved": how many, "started": how many are being saved, "kept": where each file as it first was is kept}"#,
+            enabled: can_save,
             run: save,
+        },
+        CommandSpec {
+            id: "file.stopSave",
+            label: "Stop Saving",
+            tab: "File",
+            group: "Save",
+            shortcut: "",
+            params: r#"{"store": index}; default: every save that is running. The data file stays as it was and the changes stay unsaved; returns {"stopping": how many}"#,
+            enabled: is_saving,
+            run: stop_save,
         },
         CommandSpec {
             id: "file.export",
@@ -130,8 +140,50 @@ fn has_store(s: &Session) -> bool {
     !s.stores.is_empty()
 }
 
-fn unsaved(s: &Session) -> bool {
-    s.unsaved()
+fn can_save(s: &Session) -> bool {
+    s.stores.iter().any(|st| st.unsaved() && !st.saving())
+}
+
+fn is_saving(s: &Session) -> bool {
+    !s.saves.is_empty()
+}
+
+/// Ask saves that are running to stop. They end when their work notices.
+fn stop_save(s: &mut Session, p: &Value) -> CmdResult {
+    let only = p_u64(p, "store").map(|i| usize::try_from(i).unwrap_or(usize::MAX));
+    let mut stopping = 0;
+    for saving in s.saves.iter().filter(|saving| only.is_none_or(|i| i == saving.store)) {
+        saving.progress.stop();
+        stopping += 1;
+    }
+    Ok(json!({ "stopping": stopping }))
+}
+
+/// Start the long part of a save on a thread of its own. False when this store has no such
+/// part, or no thread can be had: it is saved the plain way then.
+fn save_elsewhere(s: &mut Session, idx: usize, id: [u8; 16]) -> Result<bool, EngineError> {
+    if cfg!(target_arch = "wasm32") {
+        return Ok(false);
+    }
+    let Some(store) = s.stores.get_mut(idx) else { return Ok(false) };
+    let Some(work) = store.save_begin(id)? else { return Ok(false) };
+    let progress = std::sync::Arc::new(openmailclient_model::Progress::default());
+    let (tx, done) = std::sync::mpsc::channel();
+    let theirs = progress.clone();
+    let spawned = std::thread::Builder::new().name("save".to_string()).spawn(move || {
+        // A panic in the work becomes an error here; nobody waits for a save that says nothing.
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(theirs)))
+            .unwrap_or_else(|_| Err(StoreError::Format("the save failed inside; nothing was replaced".to_string())));
+        let _ = tx.send(done);
+    });
+    if spawned.is_err() {
+        // The work went with the thread that never was: the store is told, and saves plainly.
+        let _ = store.save_end(Err(StoreError::Format("no thread could be had".to_string())));
+        return Ok(false);
+    }
+    let name = store.display_name();
+    s.saves.push(crate::Saving::new(idx, name, progress, done));
+    Ok(true)
 }
 
 /// Put the changes made to data files into them.
@@ -146,10 +198,23 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => (0..s.stores.len()).collect(),
     };
+    let wait = p_bool(p, "wait") != Some(false);
     let (mut saved, mut kept) = (Vec::new(), Vec::new());
+    let mut started = 0;
     for idx in which {
         let id = io::new_store_id(s.now);
-        let Some(store) = s.stores.get_mut(idx).filter(|st| st.unsaved()) else { continue };
+        match s.stores.get(idx) {
+            Some(st) if st.saving() && wait => {
+                return Err(EngineError::BadParams(format!("{} is being saved already", st.display_name())));
+            }
+            Some(st) if st.unsaved() && !st.saving() => {}
+            _ => continue,
+        }
+        if !wait && save_elsewhere(s, idx, id)? {
+            started += 1;
+            continue;
+        }
+        let Some(store) = s.stores.get_mut(idx) else { continue };
         store.save(id)?;
         saved.push(store.display_name());
         if let Some(original) = store.path().map(openmailclient_pst::original_beside).filter(|o| o.exists()) {
@@ -158,11 +223,14 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
         s.refresh_folders(idx);
     }
     s.status = match saved.as_slice() {
+        // What is being saved says so itself (`Session::saving`); the status has nothing to add.
+        [] if started > 0 => String::new(),
+        [] if !s.saves.is_empty() => "The data file is being saved".to_string(),
         [] => "There are no unsaved changes".to_string(),
         [one] => format!("Saved {one}"),
         many => format!("Saved {} data files", many.len()),
     };
-    Ok(json!({ "saved": saved.len(), "kept": kept }))
+    Ok(json!({ "saved": saved.len(), "started": started, "kept": kept }))
 }
 
 /// Open a data file as `file.open` does.
@@ -461,6 +529,9 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
     };
     if idx >= s.stores.len() {
         return Err(EngineError::BadParams(format!("there is no data file {idx}")));
+    }
+    if !s.saves.is_empty() {
+        return Err(EngineError::BadParams("a data file is being saved; close when that is done, or stop it with file.stopSave".into()));
     }
     // Changes are not thrown away, and a file is not written, without being asked.
     if s.stores.get(idx).is_some_and(|st| st.unsaved()) {

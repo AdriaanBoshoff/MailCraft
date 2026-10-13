@@ -2053,6 +2053,73 @@ fn a_mailbox_is_exported_to_a_pst_and_opens_again() {
 }
 
 #[test]
+fn a_save_that_is_not_waited_for_leaves_the_session_to_be_used() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-save-elsewhere-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.pst");
+    run(&mut session(), "file.export", json!({"path": path}));
+    let first = std::fs::read(&path).unwrap();
+    let mut s = Session::new();
+    s.now = now();
+    run(&mut s, "file.open", json!({"path": path}));
+    assert!(!s.is_enabled("file.stopSave") && s.saving().is_none());
+    let (total, _) = folder(&s, "Inbox");
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut s, "mail.delete", Value::Null);
+    let until_ended = |s: &mut Session| {
+        for _ in 0..2000 {
+            if s.poll() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the save did not end");
+    };
+
+    // A save that is stopped: the file is as it was and the changes are still there.
+    let done = run(&mut s, "file.save", json!({"wait": false}));
+    assert_eq!((&done["saved"], &done["started"]), (&json!(0), &json!(1)));
+    assert!(s.saving().is_some() && s.is_enabled("file.stopSave") && !s.is_enabled("file.save"));
+    assert_eq!(run(&mut s, "file.stopSave", Value::Null)["stopping"], 1);
+    // While it runs the mailbox is read, and is not changed or closed.
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    assert!(s.open.is_some());
+    let asked_while_saving = [s.run("mail.delete", &Value::Null).is_err(), s.run("file.closeStore", &json!({"discard": true})).is_err()];
+    until_ended(&mut s);
+    // A save this small may be done before it hears it is to stop: either way nothing is half done.
+    if s.unsaved() {
+        assert!(s.status.contains("was stopped"), "{}", s.status);
+        assert_eq!(std::fs::read(&path).unwrap(), first);
+        assert_eq!(asked_while_saving, [true, true]);
+        assert!(s.saves.is_empty() && s.is_enabled("file.save"));
+        let done = run(&mut s, "file.save", json!({"wait": false}));
+        assert_eq!(done["started"], 1);
+        assert!(s.run("file.save", &Value::Null).is_err(), "a save that is running is not started again");
+        until_ended(&mut s);
+    }
+    assert!(s.status.starts_with("Saved "), "{}", s.status);
+    assert!(!s.unsaved() && s.saves.is_empty() && s.saving().is_none());
+    assert_eq!(folder(&s, "Inbox").0, total - 1);
+    assert!(crate::io::check_structure(&path).unwrap().unwrap().problems.is_empty());
+    assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+
+    // Leaving waits for a save that runs, and it is ended.
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut s, "mail.delete", Value::Null);
+    run(&mut s, "file.save", json!({"wait": false}));
+    s.finish_saves();
+    assert!(!s.unsaved() && s.saves.is_empty());
+    let mut other = Session::new();
+    run(&mut other, "file.open", json!({"path": path}));
+    assert_eq!(folder(&other, "Inbox").0, total - 2);
+    // A store that keeps nothing in a file is saved the plain way whatever is asked.
+    assert!(session().run("file.save", &json!({"wait": false})).is_err());
+    drop((s, other));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn changes_to_an_open_pst_are_saved_into_it() {
     let dir = std::env::temp_dir().join(format!("openmailclient-save-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

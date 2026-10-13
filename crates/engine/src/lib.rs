@@ -140,7 +140,37 @@ pub struct Draft {
     pub touched: bool,
 }
 
+/// A save of a data file that is being done on a thread of its own.
+pub struct Saving {
+    /// Which data file, by its place in `Session::stores`; no data file is closed meanwhile.
+    pub store: usize,
+    pub name: String,
+    pub progress: std::sync::Arc<openmailclient_model::Progress>,
+    done: std::sync::mpsc::Receiver<Result<openmailclient_model::SaveDone, StoreError>>,
+}
+
+impl Saving {
+    pub(crate) fn new(
+        store: usize,
+        name: String,
+        progress: std::sync::Arc<openmailclient_model::Progress>,
+        done: std::sync::mpsc::Receiver<Result<openmailclient_model::SaveDone, StoreError>>,
+    ) -> Self {
+        Self { store, name, progress, done }
+    }
+}
+
+impl Drop for Saving {
+    fn drop(&mut self) {
+        // Nobody is left to end it: it stops, and writes nothing over the data file.
+        self.progress.stop();
+    }
+}
+
 pub struct Session {
+    /// Saves of data files that are being done away from the caller: `file.save` with
+    /// `"wait": false` starts them, `Session::poll` ends them.
+    pub saves: Vec<Saving>,
     pub stores: Vec<Box<dyn Store>>,
     /// Folder lists per store, cached; refreshed after every command that changes a store.
     pub folders: Vec<Vec<FolderInfo>>,
@@ -188,6 +218,7 @@ impl Session {
     pub fn new() -> Self {
         let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Self {
+            saves: Vec::new(),
             stores: Vec::new(),
             folders: Vec::new(),
             module: Module::Mail,
@@ -397,7 +428,9 @@ impl Session {
         let (s, f) = self.current.ok_or(StoreError::NoFolder)?;
         let store = self.stores.get_mut(s).ok_or(StoreError::NoFolder)?;
         let mut item = store.load(f, ItemId(id))?;
-        if !item.is_read() && store.writable() {
+        // While its data file is being saved a message is read without being marked read:
+        // reading is never held up by a save.
+        if !item.is_read() && store.writable() && !store.saving() {
             item.set_read(true);
             store.update(f, ItemId(id), item.clone())?;
             if let Some(r) = self.rows.iter_mut().find(|r| r.id == id) {
@@ -493,6 +526,55 @@ impl Session {
     /// True when a data file has changes that are not in the file yet.
     pub fn unsaved(&self) -> bool {
         self.stores.iter().any(|s| s.unsaved())
+    }
+
+    /// End the saves whose work is done: each new file takes its data file's place, or the
+    /// status says why not. The host asks every so often while `saves` is not empty. True
+    /// when one ended.
+    pub fn poll(&mut self) -> bool {
+        self.end_saves(false)
+    }
+
+    /// Wait for every save that is running, and end it. The host asks before it leaves.
+    pub fn finish_saves(&mut self) {
+        self.end_saves(true);
+    }
+
+    fn end_saves(&mut self, wait: bool) -> bool {
+        let mut ended = false;
+        let mut at = 0;
+        while let Some(saving) = self.saves.get(at) {
+            let lost = || Err(StoreError::Format("the save ended without saying how; nothing was replaced".to_string()));
+            let done = if wait {
+                saving.done.recv().unwrap_or_else(|_| lost())
+            } else {
+                match saving.done.try_recv() {
+                    Ok(done) => done,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        at += 1;
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => lost(),
+                }
+            };
+            let saving = self.saves.remove(at);
+            ended = true;
+            let Some(store) = self.stores.get_mut(saving.store) else { continue };
+            self.status = match store.save_end(done) {
+                Ok(()) => format!("Saved {}", saving.name),
+                // Stopping was asked for: not a failure, and the file is as it was.
+                Err(_) if saving.progress.stopped() => format!("Saving {} was stopped; its changes are still unsaved", saving.name),
+                Err(e) => format!("{} was not saved: {e}", saving.name),
+            };
+            self.refresh_folders(saving.store);
+        }
+        ended
+    }
+
+    /// How far the saves that are running are, from 0 to 1; `None` when none is.
+    pub fn saving(&self) -> Option<f32> {
+        let least = self.saves.iter().map(|s| s.progress.fraction()).fold(f32::INFINITY, f32::min);
+        (!self.saves.is_empty()).then_some(least.clamp(0.0, 1.0))
     }
 
     /// The store new mail and loose files go to: the current one if writable, else the first writable.

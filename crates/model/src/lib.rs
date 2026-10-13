@@ -37,6 +37,55 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
 }
 
+/// The long part of a save, to be run once, anywhere. It reports how far it is and stops
+/// early when asked to.
+pub type SaveWork = Box<dyn FnOnce(std::sync::Arc<Progress>) -> Result<SaveDone, StoreError> + Send>;
+/// What the long part of a save gives back to the store that began it.
+pub type SaveDone = Box<dyn std::any::Any + Send>;
+
+/// How far a long piece of work is, read by whoever shows it while it runs elsewhere.
+#[derive(Debug, Default)]
+pub struct Progress {
+    done: std::sync::atomic::AtomicU64,
+    total: std::sync::atomic::AtomicU64,
+    stop: std::sync::atomic::AtomicBool,
+}
+
+impl Progress {
+    /// Say how many steps there are in all, and start counting from none.
+    pub fn begin(&self, total: u64) {
+        self.done.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.total.store(total, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// One more step is done.
+    pub fn step(&self) {
+        self.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// This part of all the steps is done as well: 4 for a quarter of them.
+    pub fn part(&self, of: u64) {
+        let total = self.total.load(std::sync::atomic::Ordering::Relaxed);
+        self.done.fetch_add(total / of.max(1), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How much is done, from 0 to 1; 0 while it is not known how much there is.
+    pub fn fraction(&self) -> f32 {
+        let total = self.total.load(std::sync::atomic::Ordering::Relaxed);
+        let done = self.done.load(std::sync::atomic::Ordering::Relaxed).min(total);
+        if total == 0 { 0.0 } else { (done as f64 / total as f64) as f32 }
+    }
+
+    /// Ask the work to stop where it is.
+    pub fn stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// What a folder is for; decides its icon and its place in the folder pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FolderKind {
@@ -568,6 +617,25 @@ pub trait Store {
     /// for the ids of what is new. A store that keeps nothing anywhere has nothing to do.
     fn save(&mut self, _seed: [u8; 16]) -> Result<(), StoreError> {
         Ok(())
+    }
+
+    /// Begin a save whose long part can be done away from the caller: the work comes back to
+    /// be run anywhere (another thread, say) and what it gives is handed to `save_end`. Until
+    /// then the store is read as before and takes no changes. `None` when this store has no
+    /// such work: `save` is the way then.
+    fn save_begin(&mut self, _seed: [u8; 16]) -> Result<Option<SaveWork>, StoreError> {
+        Ok(None)
+    }
+
+    /// End a save begun with `save_begin`, with what its work gave. Whatever that was, the
+    /// store takes changes again afterwards; when it was an error, nothing was saved.
+    fn save_end(&mut self, _done: Result<SaveDone, StoreError>) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    /// True between `save_begin` and `save_end`.
+    fn saving(&self) -> bool {
+        false
     }
 
     /// Write the store as it stands, unsaved changes with it, to a new file at `to`, with

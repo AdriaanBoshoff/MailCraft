@@ -403,6 +403,74 @@ fn a_file_on_disk_is_replaced_whole_or_not_at_all() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn a_save_done_elsewhere_replaces_the_file_whole_or_not_at_all() {
+    use openmailclient_model::Progress;
+    use std::sync::Arc;
+    let dir = scratch("save-elsewhere");
+    let path = dir.join("box.pst");
+    let bytes = save(&mut mailbox()).0;
+    std::fs::write(&path, &bytes).unwrap();
+    let mut store = PstStore::open(&path).unwrap();
+    let inbox = folder(&mut store, "Inbox");
+    let first = ItemId(store.list(inbox.id).unwrap()[0].id);
+    // Nothing to save: no work is given.
+    assert!(store.save_begin(UID).unwrap().is_none() && !store.saving());
+    let change = |store: &mut PstStore, read: bool| {
+        let mut item = store.load(inbox.id, first).unwrap();
+        item.set_read(read);
+        store.update(inbox.id, first, item)
+    };
+    change(&mut store, true).unwrap();
+
+    // The work is done on another thread while the store is read; it takes no changes then.
+    let work = store.save_begin(UID).unwrap().unwrap();
+    assert!(store.saving() && store.unsaved());
+    let progress = Arc::new(Progress::default());
+    let theirs = progress.clone();
+    let thread = std::thread::spawn(move || work(theirs));
+    assert!(store.load(inbox.id, first).unwrap().is_read());
+    assert!(change(&mut store, false).is_err() && store.save(UID).is_err() && store.save_begin(UID).is_err());
+    assert!(store.create_folder(inbox.id, "No").is_err());
+    let done = thread.join().unwrap();
+    assert!(std::fs::read(&path).unwrap() == bytes, "the data file is as it was until the save is ended");
+    assert!(progress.fraction() > 0.99);
+    store.save_end(done).unwrap();
+    assert!(!store.saving() && !store.unsaved());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    assert!(std::fs::read(crate::original_beside(&path)).unwrap() == bytes);
+    assert!(PstStore::open(&path).unwrap().load(inbox.id, first).unwrap().is_read());
+    assert_eq!(folder(&mut store, "Inbox").unread, 0);
+    let saved = std::fs::read(&path).unwrap();
+
+    // A save that is stopped leaves the file and the changes as they were, and nothing beside them
+    // but the journal; the store takes changes again.
+    change(&mut store, false).unwrap();
+    let work = store.save_begin(UID).unwrap().unwrap();
+    let progress = Arc::new(Progress::default());
+    progress.stop();
+    let done = work(progress);
+    assert!(done.is_err());
+    assert!(store.save_end(done).is_err());
+    assert!(!store.saving() && store.unsaved() && std::fs::read(&path).unwrap() == saved);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    store.create_folder(inbox.id, "Yes").unwrap();
+
+    // Another program writes the file while the work runs: nothing is replaced.
+    let work = store.save_begin(UID).unwrap().unwrap();
+    let done = work(Arc::new(Progress::default()));
+    assert!(done.is_ok());
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+    assert!(store.save_end(done).is_err());
+    assert!(!store.saving() && store.unsaved() && std::fs::read(&path).unwrap() == saved);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    // Ending a save that was not begun does nothing.
+    store.save_end(Err(StoreError::NoItem)).unwrap();
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(windows)]
 #[test]
 fn a_file_another_program_has_open_is_not_replaced() {

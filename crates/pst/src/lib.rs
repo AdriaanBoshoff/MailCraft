@@ -94,6 +94,10 @@ pub struct PstStore {
     /// What the journal of this file is tied to: the file's length and the sum of its header.
     ident: Option<(u64, u32)>,
     journal: journal::Journal,
+    /// The file a save that is being done elsewhere writes, from `save_begin` to `save_end`.
+    saving: Option<edit::Beside>,
+    /// Where a save says how far it is, and where it is told to stop.
+    progress: Option<std::sync::Arc<openmailclient_model::Progress>>,
 }
 
 impl PstStore {
@@ -127,6 +131,8 @@ impl PstStore {
             stamp: None,
             ident: None,
             journal: journal::Journal::default(),
+            saving: None,
+            progress: None,
         };
         // The message store node ([MS-PST] 2.4.3): display name and the entry ids of the special folders.
         if let Ok((bag, _)) = store.node_props(NID_MESSAGE_STORE) {
@@ -391,6 +397,18 @@ impl Store for PstStore {
 
     fn save(&mut self, seed: [u8; 16]) -> Result<(), StoreError> {
         self.e_save(seed)
+    }
+
+    fn save_begin(&mut self, seed: [u8; 16]) -> Result<Option<openmailclient_model::SaveWork>, StoreError> {
+        self.e_save_begin(seed)
+    }
+
+    fn save_end(&mut self, done: Result<openmailclient_model::SaveDone, StoreError>) -> Result<(), StoreError> {
+        self.e_save_end(done)
+    }
+
+    fn saving(&self) -> bool {
+        self.saving.is_some()
     }
 
     fn copy_to(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::Copied>, StoreError> {

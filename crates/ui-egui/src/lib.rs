@@ -543,6 +543,8 @@ impl MailUi {
     /// True when the window may close. With unsaved changes the first asking only says so;
     /// asking again straight after throws them away. No data file is written by closing.
     pub fn may_quit(&mut self) -> bool {
+        // A save that is running is waited for: leaving does not cut it short.
+        self.session.finish_saves();
         if !self.session.unsaved() || self.quit_asked {
             return true;
         }
@@ -781,6 +783,11 @@ impl MailUi {
             ctx.request_repaint();
             return;
         }
+        // Saves that run on threads of their own are ended here, and shown while they run.
+        self.session.poll();
+        if self.session.saving().is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         let t = self.tokens.clone();
         if self.theme_applied != Some(t.dark) {
             // egui's own widgets (text fields, the name prompt) follow the same light or dark set.
@@ -870,7 +877,8 @@ impl MailUi {
             run.push(("ui.saveAsDialog", Value::Null));
         }
         if hit(ctrl, Key::S) && self.session.is_enabled("file.save") {
-            run.push(("file.save", Value::Null));
+            // From the window a save does not hold the window: the status bar says how far it is.
+            run.push(("file.save", json!({ "wait": false })));
         }
         if hit(ctrl, Key::P) && self.session.is_enabled("file.print") {
             run.push(("ui.printPreview", Value::Null));
@@ -989,6 +997,7 @@ impl MailUi {
         p.rect_filled(rect, 0.0, t.bar_bg);
         let y = rect.center().y - 7.5;
         let mut x = rect.left() + 10.0;
+        let mut stop = false;
         if s.module == Module::Mail {
             let unread = s.current_folder().map_or(0, |f| f.unread);
             let counts =
@@ -1007,7 +1016,30 @@ impl MailUi {
         };
         let right_w = text_width(&p, right, font(11.5));
         p.text(pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, right, font(11.5), t.bar_text);
+        if let Some(done) = s.saving() {
+            // A save that runs: its name, a bar that fills, and how far it is.
+            let name = s.saves.first().map_or("", |saving| saving.name.as_str());
+            x += clip_text(&p, pos2(x, y), 220.0, &format!("Saving {name}"), font(11.5), t.bar_text) + 8.0;
+            let track = Rect::from_min_size(pos2(x, rect.center().y - 3.0), vec2(120.0, 6.0));
+            p.rect_filled(track, 3.0, t.bar_text.gamma_multiply(0.25));
+            p.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * done, track.height())), 3.0, t.bar_text);
+            x = track.right() + 8.0;
+            x += clip_text(&p, pos2(x, y), 60.0, &format!("{:.0}%", done * 100.0), font(11.5), t.bar_text) + 10.0;
+            // Stopping leaves the data file as it was and the changes unsaved.
+            let w = text_width(&p, "Stop", font(11.5));
+            let hit = Rect::from_min_size(pos2(x - 4.0, rect.top()), vec2(w + 8.0, rect.height()));
+            let resp = ui.interact(hit, egui::Id::new("stop-save"), Sense::click());
+            if resp.hovered() {
+                p.rect_filled(hit.shrink2(vec2(0.0, 3.0)), 2.0, t.bar_text.gamma_multiply(0.2));
+            }
+            p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, "Stop", font(11.5), t.bar_text);
+            stop = resp.clicked();
+            x += w + 16.0;
+        }
         clip_text(&p, pos2(x, y), rect.right() - right_w - 30.0 - x, &s.status, font(11.5), t.bar_text);
+        if stop {
+            let _ = self.session.run("file.stopSave", &Value::Null);
+        }
     }
 }
 

@@ -473,7 +473,7 @@ impl MailUi {
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
-            (Icon::Save, "Save Changes", "file.save", Value::Null),
+            (Icon::Save, "Save Changes", "file.save", json!({ "wait": false })),
             (Icon::Save, "Save Message As…", "ui.saveAsDialog", Value::Null),
             (Icon::Clip, "Save Attachment…", "ui.saveAttachmentDialog", json!({ "index": 0 })),
             (Icon::Clip, "Save All Attachments…", "ui.saveAllAttachmentsDialog", Value::Null),

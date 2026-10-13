@@ -51,11 +51,27 @@ fn settled(props: &PropBag) -> Vec<(u16, &PropValue)> {
     props.iter().filter(|(id, _)| !PLACED.contains(id)).collect()
 }
 
+/// The file a save that is done elsewhere writes beside the data file. Should the store go
+/// away before the save is ended, the file goes with it.
+pub(crate) struct Beside(PathBuf);
+
+impl Drop for Beside {
+    fn drop(&mut self) {
+        if !self.0.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+}
+
+const BEING_SAVED: &str = "the data file is being saved; changes are taken again when that is done";
+const STOPPED: &str = "the save was stopped; nothing was replaced, and the changes are still unsaved";
+
 /// Messages taken out of a folder are remembered this many at a time, so that one put into
 /// another folder is the same message still.
 const MAX_LIMBO: usize = 32;
 
 /// One message of a folder that was looked into.
+#[derive(Clone)]
 struct Entry {
     nid: u32,
     summary: Summary,
@@ -65,6 +81,7 @@ struct Entry {
     new: bool,
 }
 
+#[derive(Clone)]
 struct EFolder {
     info: FolderInfo,
     nid: u32,
@@ -93,6 +110,7 @@ impl EFolder {
 }
 
 /// What a folder was when the file was opened.
+#[derive(Clone)]
 struct Was {
     parent: Option<u32>,
     name: String,
@@ -100,6 +118,7 @@ struct Was {
 }
 
 /// The changes made to an open data file and not yet saved.
+#[derive(Clone)]
 pub(crate) struct Edits {
     /// The visible folders, each followed by what is inside it.
     folders: Vec<EFolder>,
@@ -207,6 +226,9 @@ impl PstStore {
 
     /// Throw the unsaved changes away, and their journal with them.
     pub(crate) fn e_discard(&mut self) {
+        if self.saving.is_some() {
+            return;
+        }
         self.edits = None;
         self.journal.finish();
     }
@@ -218,7 +240,7 @@ impl PstStore {
     pub fn recover(&mut self) -> Result<Recovery, PstError> {
         let mut out = Recovery::default();
         let (Some(path), Some(ident)) = (self.path.clone(), self.ident) else { return Ok(out) };
-        if !self.can_edit() || self.e_unsaved() || self.journal.open() {
+        if !self.can_edit() || self.e_unsaved() || self.journal.open() || self.saving.is_some() {
             return Ok(out);
         }
         match Journal::read(&path, ident, self.journal.elsewhere.as_deref())? {
@@ -294,6 +316,9 @@ impl PstStore {
     fn edits(&mut self) -> Result<&mut Edits, StoreError> {
         if !self.can_edit() {
             return Err(StoreError::ReadOnly);
+        }
+        if self.saving.is_some() {
+            return Err(StoreError::Format(BEING_SAVED.to_string()));
         }
         if self.edits.is_none() {
             let listed = self.file_folders()?;
@@ -617,7 +642,18 @@ impl PstStore {
         let mut searches = Vec::new();
         let mut nids: Vec<u32> = self.ndb.nbt.keys().copied().collect();
         nids.sort_unstable();
+        let progress = self.progress.clone();
+        if let Some(p) = &progress {
+            // The nodes to write, and as much again for checking the new file and reading it back.
+            p.begin((nids.len() as u64).saturating_mul(2));
+        }
         for nid in nids {
+            if let Some(p) = &progress {
+                if p.stopped() {
+                    return Err(PstError::Write(STOPPED.to_string()));
+                }
+                p.step();
+            }
             let Some(e) = self.ndb.nbt.get(&nid).copied() else { continue };
             if put_ids.contains(&nid) {
                 continue;
@@ -1047,19 +1083,14 @@ impl PstStore {
     /// then put in the old one's place in one step. Whatever goes wrong, the data file stays
     /// as it was and the changes stay to be saved again.
     pub fn save(&mut self, seed: [u8; 16]) -> Result<Written, PstError> {
+        if self.saving.is_some() {
+            return Err(PstError::Write(BEING_SAVED.to_string()));
+        }
         if !self.e_unsaved() {
             return Ok(Written::default());
         }
-        let path = self.path.clone().ok_or_else(|| PstError::Write("this data file is not kept in a file".to_string()))?;
-        if stamp(&path) != self.stamp {
-            return Err(PstError::Write("another program changed the data file since it was opened; nothing was saved".to_string()));
-        }
-        let name = path.file_name().ok_or_else(|| PstError::Write("the path has no file name".to_string()))?;
-        let mut tmp_name = std::ffi::OsString::from(".");
-        tmp_name.push(name);
-        tmp_name.push(format!(".{}.tmp", std::process::id()));
-        let tmp = path.with_file_name(tmp_name);
-        let done = self.swap(&path, &tmp, seed);
+        let (path, tmp) = self.places()?;
+        let done = self.prepare(&tmp, seed).and_then(|(fresh, done)| self.replace(&path, &tmp, fresh, done));
         match done {
             // The changes are in the file: the journal of them has done its work.
             Ok(_) => self.journal.finish(),
@@ -1070,7 +1101,76 @@ impl PstStore {
         done
     }
 
-    fn swap(&mut self, path: &Path, tmp: &PathBuf, seed: [u8; 16]) -> Result<Written, PstError> {
+    /// The data file and the file a save writes beside it; an error when the data file is not
+    /// a file, or is no longer the file that was opened.
+    fn places(&self) -> Result<(PathBuf, PathBuf), PstError> {
+        let path = self.path.clone().ok_or_else(|| PstError::Write("this data file is not kept in a file".to_string()))?;
+        if stamp(&path) != self.stamp {
+            return Err(PstError::Write("another program changed the data file since it was opened; nothing was saved".to_string()));
+        }
+        let name = path.file_name().ok_or_else(|| PstError::Write("the path has no file name".to_string()))?;
+        let mut tmp_name = std::ffi::OsString::from(".");
+        tmp_name.push(name);
+        tmp_name.push(format!(".{}.tmp", std::process::id()));
+        let tmp = path.with_file_name(tmp_name);
+        Ok((path, tmp))
+    }
+
+    /// Begin a save whose writing is done elsewhere. The work opens the data file for itself
+    /// and writes the mailbox as it stands now to a new file beside it, checks that file and
+    /// reads it back; `e_save_end` then puts it in the data file's place. Between the two the
+    /// store is read as before and takes no changes, so what is saved is what is shown.
+    pub(crate) fn e_save_begin(&mut self, seed: [u8; 16]) -> Result<Option<openmailclient_model::SaveWork>, StoreError> {
+        if self.saving.is_some() {
+            return Err(StoreError::Format(BEING_SAVED.to_string()));
+        }
+        let Some(edits) = self.edits.as_ref().filter(|e| e.dirty).cloned() else { return Ok(None) };
+        let (path, tmp) = self.places()?;
+        let was = self.stamp;
+        self.saving = Some(Beside(tmp.clone()));
+        Ok(Some(Box::new(move |progress: std::sync::Arc<openmailclient_model::Progress>| {
+            let work = || -> Result<Written, PstError> {
+                let mut store = Self::open(&path)?;
+                if store.stamp != was {
+                    return Err(PstError::Write("another program changed the data file since it was opened; nothing was saved".to_string()));
+                }
+                store.edits = Some(edits);
+                store.progress = Some(progress.clone());
+                store.prepare(&tmp, seed).map(|(_, done)| done)
+            };
+            let done = work();
+            if done.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            Ok(Box::new(done?) as openmailclient_model::SaveDone)
+        })))
+    }
+
+    /// End a save begun with `e_save_begin`: the new file its work wrote takes the data
+    /// file's place. With an error, or when the data file is no longer what it was, nothing
+    /// is replaced and the changes stay to be saved again.
+    pub(crate) fn e_save_end(&mut self, done: Result<openmailclient_model::SaveDone, StoreError>) -> Result<(), StoreError> {
+        let Some(mut tmp) = self.saving.take() else { return Ok(()) };
+        let tmp = std::mem::take(&mut tmp.0);
+        let ended = (|| -> Result<(), StoreError> {
+            let done = *done?.downcast::<Written>().map_err(|_| StoreError::Format("the save gave nothing to end it with".to_string()))?;
+            let (path, _) = self.places()?;
+            let fresh = Self::open(&tmp)?;
+            self.replace(&path, &tmp, fresh, done)?;
+            Ok(())
+        })();
+        match ended {
+            Ok(()) => self.journal.finish(),
+            Err(_) => {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        ended
+    }
+
+    /// Write the mailbox as it stands to `tmp`, hold that file against the structure check,
+    /// read it back and compare it with what was meant. Gives the new file, open.
+    fn prepare(&mut self, tmp: &Path, seed: [u8; 16]) -> Result<(Self, Written), PstError> {
         let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
         let (mut file, done) = self.save_to(file, seed)?;
         file.sync_all()?;
@@ -1080,6 +1180,9 @@ impl PstStore {
             return Err(PstError::Write(format!("the new file did not pass its own check ({problem}); nothing was replaced")));
         }
         drop(file);
+        if let Some(p) = &self.progress {
+            p.part(4);
+        }
         // Read it back: the folders and their counts are what was meant, and each folder that
         // was looked into lists as many messages as it should.
         let mut fresh = Self::open(tmp)?;
@@ -1096,6 +1199,17 @@ impl PstStore {
         if !same {
             return Err(PstError::Write("the new file does not read back as the mailbox that was saved; nothing was replaced".to_string()));
         }
+        if let Some(p) = &self.progress {
+            p.part(4);
+        }
+        if self.progress.as_ref().is_some_and(|p| p.stopped()) {
+            return Err(PstError::Write(STOPPED.to_string()));
+        }
+        Ok((fresh, done))
+    }
+
+    /// Put the new file, written and checked, in the data file's place in one step.
+    fn replace(&mut self, path: &Path, tmp: &Path, fresh: Self, done: Written) -> Result<Written, PstError> {
         // Let go of the old file, then put the new one in its place.
         let old = std::mem::replace(&mut self.ndb, fresh.ndb);
         drop(old);
@@ -1117,7 +1231,7 @@ impl PstStore {
                 }
                 // The old file cannot be read any more: the new one stays open under its own name.
                 Err(_) => {
-                    self.path = Some(tmp.clone());
+                    self.path = Some(tmp.to_path_buf());
                     self.finish_swap(fresh.name, fresh.names, fresh.root, fresh.special);
                     Ok(done)
                 }

@@ -213,6 +213,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.ui.session.finish_saves();
         self.ui.session.settle();
         self.keep_settings(true);
     }

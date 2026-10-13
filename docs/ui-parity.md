@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 15 · 2026-10-12 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 16 · 2026-10-13 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -32,7 +32,7 @@ and only the ribbon panel's height and contents change. OpenMailClient follows t
 | Row details | attachment mark at the right of the first line; date at the right of the second | marks at the right of the first line; time at the right of the second | close |
 | Reading pane, nothing open | envelope drawing with a one-line hint, centred | the same arrangement, our own drawing | close |
 | Reading pane, message open | formatted body on a page in the theme's colour | formatted body laid out as Outlook lays out the same message: see Message bodies below | close |
-| Status bar | 22 high: item count left; connection state, two view buttons and a zoom slider right | 22 high: item and unread counts left, store kind right | close |
+| Status bar | 22 high: item count left; connection state, two view buttons and a zoom slider right | 22 high: item and unread counts left, store kind right; while a data file is being saved, its name, a bar that fills, a percentage and Stop (ours; what Outlook shows while it saves was not observed) | close |
 
 ## Message bodies
 
@@ -123,6 +123,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 16 · 2026-10-13 — the status bar shows a save that is running, and stops it (M3b.12).
 - 15 · 2026-10-12 — in a paragraph written from the right, tab leaders, a border's indent, text beside a picture and table columns are counted from the right; `<bdo>`, `<bdi>` and `unicode-bidi` are read (M3b.9); not compared with Outlook.
 - 14 · 2026-10-12 — fields of one line are our own: right-to-left text reads right, and the cursor follows it, while it is typed (M3b.8); not compared with Outlook.
 - 13 · 2026-10-12 — one-line text with Hebrew or Arabic in it is drawn in the order it is read (M3b.4); not compared with Outlook.

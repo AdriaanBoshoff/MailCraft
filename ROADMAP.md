@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 63 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 64 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 276, all passing |
+| Tests | 278, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -98,7 +98,8 @@
 47. Done: what was left of a paragraph written from the right: tab stops and their leaders are counted from the right, a border's own indent is at the right, text stands beside a picture on the right side of it, the columns of a table written from the right start at the right, and `<bdo>`, `<bdi>`, `dir` on a piece of a line and `unicode-bidi` say which way their text runs, on screen and in print (M3b.9).
 48. Done: text copied out of our PDFs was tried in a reader (xpdf's `pdftotext` 4.06) and what it found was put right: text written from the right is given as it is seen, as readers expect it, and only glyphs that are not one letter each say what they stand for (M3b.10).
 49. Done: when a message's list of attachments changes, each attachment the file already holds keeps what is stored on it; a search folder's table shows a changed message as it is now (M3b.11).
-50. Next: M3b.12: a save that does not write the whole file again and does not hold the window, with progress shown.
+50. Done: a save asked for in the window is done on a thread of its own, with a bar that fills in the status bar and a way to stop it (M3b.12).
+51. Next: M3b.13: the next of the do-later list for data files (writing ANSI and 4K files, the structure check into heaps and tables).
 
 ## Do later (from M2)
 
@@ -133,7 +134,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
 | ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
 | Unsaved changes saved on their own after a while (waits for the writer to be proved in Outlook: nothing writes a data file unasked until then) | when the owner says so, with the Outlook check |
-| A save that does not rewrite the whole data file; saving off the UI thread, with progress | M3b.12 |
+| ~~Saving off the UI thread, with progress~~ | done: M3b.12 |
+| A save that does not rewrite the whole data file (needs writes into the data file that are journalled themselves) | M3b |
 | ~~Unknown properties of an attachment kept when a message's attachments change~~ | done: M3b.11 |
 | Unknown properties of an attachment whose contents were changed too (nothing tells it from a new one), and stored attachments that cannot be read (left out when the list changes) | M3b |
 | ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
@@ -948,3 +950,25 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   message belongs to is not worked out again (a message changed so that it no longer fits
   a search stays in that search's table until the program that made it looks again), and
   the third item of this task, a save that does not write the whole file, is M3b.12.
+- **2026-10-13** - M3b.12: a save that does not hold the window. `file.save` takes `"wait": false`: the
+  long part (writing the new file beside the old one, the structure check, reading it back
+  and comparing) is done on a thread of its own, with its own handle on the data file and
+  its own copy of the changes; the short part (the new file takes the old one's place, the
+  journal is ended) is done by the caller when `Session::poll` finds the work finished, after
+  looking once more that no other program changed the file meanwhile. Until then the data
+  file is read as before and takes no changes: what is saved is what was shown when the
+  save was asked for, and a change asked for meanwhile is refused with a reason, not lost.
+  Selecting a message while a save runs shows it and does not mark it read. Closing the
+  data file is refused until the save ends; leaving the program waits for it. The window
+  saves this way (Ctrl+S and Save Changes on the File page); the command line and callers
+  that say nothing wait, as before. The status bar shows the name of what is being saved,
+  a bar that fills and a percentage, seen in a headless shot with a 240 MB mailbox written
+  by our own exporter. Made better on the way: a save can be stopped (`file.stopSave`, and
+  Stop in the status bar); the data file stays as it was, the changes stay unsaved and in
+  the journal, and the status says it was stopped and not that it failed. The file written
+  beside the data file is removed whether the save ends, is stopped, fails, or the store
+  goes away first. A panic in the work becomes an error; no thread on the web build, where
+  the save waits. Not done: every save still writes the whole file anew. Writing only what
+  changed means writing into the file that holds the mail, which the rule that a failed
+  write leaves the file byte for byte as it was forbids unless such writes are journalled
+  themselves; that stays in Do later. Export still holds the window.
