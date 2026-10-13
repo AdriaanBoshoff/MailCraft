@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 76 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 77 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 312, all passing |
+| Tests | 316, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -111,7 +111,8 @@
 60. Done: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom (M3b.22).
 61. Done: SVG, WebP and TIFF pictures are shown, and pictures that move are played (M3b.23).
 62. Done: Several pictures stand at the sides of one paragraph, and a dark see-through picture has paper behind it on the dark pane (M3b.24).
-63. Next: M3b.25: boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners.
+63. Done: Boxes stand inside one another, a table stands inside the block it was written in, and a body has its colour behind all of it (M3b.25).
+64. Next: M3b.26: borders on text within a line; rounded corners.
 
 ## Do later (from M2)
 
@@ -182,7 +183,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Pictures decoded off the thread that draws the window | M4, with pictures loaded from a server on command |
 | ~~A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph~~ | done: M3b.24 |
 | On paper, a table or a bordered block beside a picture at the side (in the window it stands beside it) | M5, with the other print styles |
-| Boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners | M3b |
+| ~~Boxes inside one another; a fill behind a table in a block and behind the whole body~~ | done: M3b.25 |
+| Borders on text within a line; rounded corners | M3b |
 | Outlook's highlight colours; list numbers an override changes (`\lfolevel`) | M3b |
 | Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes | M3b |
 | Pictures on a server, loaded on an explicit command (never by themselves) | M4, with accounts |
@@ -1282,3 +1284,32 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   laid behind a dark picture in a cell the message filled dark; what Outlook does with
   several pictures at the sides, or with see-through pictures in its dark mode, was not
   observed.
+- **2026-10-13** - M3b.25: boxes inside one another, tables in blocks, a colour behind the body. A
+  block with a border, a fill or room of its own that is written inside another is a box
+  inside that box (`Frame::within` in `crates/formats/src/rich.rs`), eight deep at most
+  (`MAX_BOXES`); before, the inner one took the outer one's place. A table written inside a
+  filled or bordered block stands inside it (`Table::inside`), where before the block ended
+  above the table and began again under it. A colour on `<body>` or `<html>` is the colour
+  behind the whole message (`Doc::fill`, CSS 2.1 section 14.2): in the reading pane it fills
+  the pane from edge to edge and text with no colour of its own is drawn to be read on it; on
+  paper it lies behind the body on every page the body is on, under every other fill. Both
+  drawers walk the boxes level by level with `rich::boxed_run`: `framed` in
+  `crates/ui-egui/src/body.rs` and in `crates/layout/src/flow.rs`, where `Flow::lift` keeps
+  each fill over the one it stands in. Made better on the way: a box keeps only its own fill,
+  so a box with none inside a filled one no longer paints the outer colour a second time;
+  white is kept as a colour on a coloured body as it is in a coloured block; what a layout
+  table of one column held keeps the box the table stood in; and what a box holds never
+  stands outside it, however much room boxes inside one another ask for (found by the
+  hostile test on small paper: text was set past the right margin). 4 tests: in the reader,
+  three levels of boxes and which paragraph stands in which, the colour nearest behind, the
+  body colour from `<body>` and `<html>` and not from inside a table, five thousand blocks
+  inside one another, and a chain of ten thousand made by hand; in the window, the heights of
+  one box, two, and three paragraphs in two, a table in a filled block, three hundred deep at
+  widths from nothing to a million, and the ink of text on a dark body in both themes; on
+  paper, the order and the place of four fills inside one another, what text stands in
+  which, the body colour on every page, and forty boxes deep with tables in cells on small
+  paper. Looked at in the window in both themes (`plan/shots/boxes.jsonl`,
+  `plan/shots/boxes-body.jsonl`). Not done: borders on text within a line and rounded
+  corners (M3b.26); a word wider than a very narrow column still stands out of its cell; a
+  body colour is not drawn behind the message header; what Outlook does with a body colour
+  in its dark mode was not observed.

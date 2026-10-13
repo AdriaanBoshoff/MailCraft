@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-312%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-316%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -61,26 +61,32 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 ## What works today
 
 - Opens Outlook data files (`.pst`, `.ost`) and single messages (`.msg`, `.oft`, `.eml`). Nothing is
-  written to a data file until Save Changes (Ctrl+S): changes to a Unicode `.pst` are then written
+  written to a data file until Save Changes (Ctrl+S): changes to a Unicode or ANSI `.pst` are then written
   to a new file that is checked, read back and swapped in, with the file as it was kept beside
   it on the first save. Until then each change is journalled beside the file (or in a folder of our own when that
   one cannot be written), so a crash or a
   closed window does not lose it: it comes back, still unsaved, when the file is opened again.
-  `.ost` and 4K-page files are read-only.
+  `.ost` and 4K-page files are read-only. A save or an export runs beside the window, with
+  progress and a way to stop it, and a structure check (`inspect --check`) reads a data file
+  through without changing it.
 - An Outlook-Classic-style window: ribbon (simplified and classic), folder pane, message list with
   date groups, reading pane, light and dark themes.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
 - Reply, reply all, forward and new mail as drafts; saving messages as `.msg`, `.oft` or `.eml`.
 - **Formatted bodies.** HTML and RTF mail is laid out and drawn: fonts the message names (installed
   ones only), colours, lists, links, tables (cell borders, fills, merged cells, tables inside cells),
-  paragraph borders and spacing, line spacing, tab stops. Nothing in a message is run and nothing is fetched.
+  paragraph borders and spacing, bordered and filled blocks inside one another, a colour behind
+  the whole body, line spacing, tab stops, right-to-left text. Nothing in a message is run and
+  nothing is fetched.
 - **Pictures.** Attached and written-in pictures (PNG, JPEG, GIF, WebP, TIFF, SVG, bitmaps, Windows and enhanced metafiles
   that are drawings, with the bitmaps in them) are decoded in-process and drawn in the text; animated GIF, PNG and WebP
-  pictures are played, or stand still when asked (`view.animations`); an attachment that stands in the
+  pictures are played, or stand still when asked (`view.animations`); pictures stand at the sides of
+  a paragraph with the text beside them; an attachment that stands in the
   text is a card that a click saves.
 - **Printing.** A message (Memo Style) or a folder's list (Table Style) prints to a PDF file, with
   tables, borders and pictures; a print window shows the pages beside the page setup (paper,
-  direction, margins, header and footer). Nothing is sent to a printer yet.
+  direction, margins, header and footer) and has a zoom; Table Style prints the columns chosen,
+  group headings and the selected row. Nothing is sent to a printer yet.
 - A sample mailbox with invented content, for trying things without any real mail.
 
 ## What does not work yet
@@ -89,7 +95,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 - **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. 4K-page
   data files cannot be changed.
 - **Parts of formatted bodies.** Right-to-left text while it is typed; complex scripts
-  on screen beyond what egui shapes; metafiles that draw a part of a bitmap, a run-packed bitmap or a
+  on screen beyond what egui shapes; borders on text within a line and rounded corners; metafiles that draw a part of a bitmap, a run-packed bitmap or a
   patterned brush; printing to a printer. Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
 - Calendar, People and Tasks.

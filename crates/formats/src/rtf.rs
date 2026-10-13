@@ -819,7 +819,14 @@ impl Builder<'_> {
         }
         // Where the body says nothing, a little room so that the text does not touch the lines.
         let (above, beside) = (cur.pad.max(1), cur.pad.max(4));
-        let frame = Frame { edges: cur.edges, padding: [above, beside, above, beside], indent: cur.indent, between: cur.between, fill: cur.shade };
+        let frame = Frame {
+            edges: cur.edges,
+            padding: [above, beside, above, beside],
+            indent: cur.indent,
+            between: cur.between,
+            fill: cur.shade,
+            within: None,
+        };
         match &self.frame {
             Some(last) if **last == frame => Some(Arc::clone(last)),
             _ => {

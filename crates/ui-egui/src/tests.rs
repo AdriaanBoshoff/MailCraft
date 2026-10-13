@@ -1540,3 +1540,78 @@ fn a_dark_picture_seen_through_is_given_paper_behind_it_on_the_dark_pane() {
     assert_eq!(backed("<p><img src=cid:light> <img src=cid:solid> <img src=cid:none></p>", true), 0);
     assert_eq!(backed("<table><tr><td bgcolor=#203040><img src=cid:dark></table>", true), 0);
 }
+
+#[test]
+fn boxes_stand_inside_one_another_and_hold_tables() {
+    // A box inside a box takes the room of both: 2 * (1 line + 10 room) for the outer, and
+    // 2 * (3 lines + 4 room) for the one inside it.
+    let plain = drawn_height("<p style=\"margin:0\">text</p>", 600.0);
+    let one = drawn_height("<div style=\"border:1px solid red;padding:10px\"><p style=\"margin:0\">text</p></div>", 600.0);
+    let two = drawn_height(
+        "<div style=\"border:1px solid red;padding:10px\"><div style=\"border:3px solid blue;padding:4px\"><p style=\"margin:0\">text</p></div></div>",
+        600.0,
+    );
+    assert!((one - plain - 22.0).abs() < 1.5, "{plain}, {one}");
+    assert!((two - one - 14.0).abs() < 1.5, "{one}, {two}");
+    // What stands in the inner box and what stands only in the outer one are all inside the
+    // outer: three paragraphs in two boxes are as tall as their text and the boxes' room.
+    let three = drawn_height(
+        "<div style=\"border:1px solid red;padding:10px\"><p style=\"margin:0\">a</p>\
+         <div style=\"border:3px solid blue;padding:4px\"><p style=\"margin:0\">b</p></div><p style=\"margin:0\">c</p></div>",
+        600.0,
+    );
+    assert!((three - two - 2.0 * plain).abs() < 3.0, "{two}, {three}, {plain}");
+    // A table in a box is inside it: the box's room is above and below the table.
+    let table = "<table border=1><tr><td>cell<td>two</table>";
+    let bare = drawn_height(table, 600.0);
+    let held = drawn_height(&format!("<div style=\"background:#036;padding:10px\">{table}</div>"), 600.0);
+    assert!((held - bare - 20.0).abs() < 1.5, "{bare}, {held}");
+
+    // Far more boxes inside one another than are drawn, with tables and pictures in them, at
+    // any width: drawn, and never a panic.
+    let deep = format!(
+        "<body bgcolor=#123>{}<p>x</p><table border=1><tr><td>{}y{}<td><img src=cid:none align=left width=90 height=90>z</table>{}</body>",
+        "<div style=\"border:2px solid red;background:#345;padding:7px\">".repeat(300),
+        "<blockquote style=\"background:#567;border:1px dashed #fff\">".repeat(300),
+        "</blockquote>".repeat(300),
+        "</div>".repeat(200),
+    );
+    for width in [0.0, 1.0, 40.0, 333.3, 2000.0, 1e6] {
+        let height = drawn_height(&deep, width);
+        assert!(height.is_finite() && height > 0.0, "{width}: {height}");
+    }
+}
+
+fn inks(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
+    match shape {
+        egui::Shape::Text(text) => out.extend(text.galley.job.sections.iter().map(|s| s.format.color)),
+        egui::Shape::Vec(list) => list.iter().for_each(|s| inks(s, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn a_body_with_a_colour_behind_it_is_read_on_that_colour() {
+    let dark = openmailclient_formats::html::parse("<body bgcolor=\"#102030\"><p>text</p></body>");
+    assert_eq!(body::page(&dark), Some(egui::Color32::from_rgb(16, 32, 48)));
+    assert_eq!(body::page(&openmailclient_formats::html::parse("<body bgcolor=white><p>text</p></body>")), None);
+    // Text with no colour of its own is drawn in one that can be read on the body's colour,
+    // on the light pane and the dark one alike.
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    for named in [false, true] {
+        let tokens = theme::Tokens::named(named);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_max_width(400.0);
+            body::draw(ui, &dark, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+        });
+        output.textures_delta.clear();
+        let mut seen = Vec::new();
+        output.shapes.iter().for_each(|clipped| inks(&clipped.shape, &mut seen));
+        assert!(!seen.is_empty());
+        for ink in seen {
+            let light = u32::from(ink.r()) + u32::from(ink.g()) + u32::from(ink.b());
+            assert!(light > 3 * 150, "{ink:?} on a dark body, dark pane: {named}");
+        }
+    }
+}

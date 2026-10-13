@@ -50,6 +50,7 @@ pub(crate) fn owner(name: &str) -> Para {
         indent: 0,
         between: Edge::default(),
         fill: None,
+        within: None,
     });
     let mut owner = text(name, true, Some(12.0));
     owner.frame = Some(frame);
@@ -140,7 +141,12 @@ pub fn memo(memo: &Memo, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<P
     let start = flow.start();
     let at = flow.blocks(&head(memo), x, width, start, 0);
     flow.base = if memo.plain { Base { family: PLAIN_FONT.into(), size: 11.0 } } else { Base { family: BODY_FONT.into(), size: 12.0 } };
-    flow.blocks(&memo.body.blocks, x, width, at, 0);
+    let end = flow.blocks(&memo.body.blocks, x, width, at, 0);
+    // A body that asks for a colour behind it has it behind all of it, on every page it is on:
+    // text chosen to be read on that colour is not lost on the paper.
+    if let Some(fill) = memo.body.fill {
+        flow.behind(at, end, x, width, fill);
+    }
     let (pages, full) = finish(flow, &setup)?;
     Ok(Printed { pages, faces: fonts.faces().to_vec(), truncated: full || memo.body.truncated })
 }

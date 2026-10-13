@@ -646,6 +646,10 @@ impl MailUi {
             }
         };
         let body_rect = Rect::from_min_max(pos2(rect.left() + 1.0, y), rect.max);
+        // A body that asks for a colour behind it has it behind all of the pane it is read in.
+        if let Some(fill) = doc.as_ref().and_then(|doc| body::page(doc)) {
+            ui.painter().rect_filled(body_rect, 0.0, fill);
+        }
         ui.scope_builder(UiBuilder::new().max_rect(body_rect), |ui| {
             ScrollArea::vertical().id_salt(("body", self.session.selected)).auto_shrink(false).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad as i8, 12)).show(ui, |ui| {

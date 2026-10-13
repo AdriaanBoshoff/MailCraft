@@ -197,7 +197,7 @@ fn a_table_stands_in_columns_inside_its_lines() {
 fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
     let rows: Vec<Vec<Cell>> = (0..60).map(|i| vec![cell(&format!("r{i}")), cell("v")]).collect();
     let edge = Edge { width: 4, color: Some([0, 0, 90]), line: Line::Double };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between: Edge::default(), fill: None });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between: Edge::default(), fill: None, within: None });
     let framed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Table(Table { rows, border: true, frame: [edge; 4], ..Table::default() }), framed("in"), framed("frame")]);
     let printed = print(&body, SMALL);
@@ -243,7 +243,7 @@ fn nested(depth: usize) -> Block {
 #[test]
 fn hostile_bodies_never_panic_and_stay_within_the_limits() {
     let wild = Edge { width: 255, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]) });
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]), within: None });
     let odd = |size: f32| Run {
         text: "odd \u{10ffff}\u{0}\n\n\t".repeat(20),
         style: Style { size: Some(size), family: Some(",,,;\"".into()), ..Style::default() },
@@ -449,7 +449,7 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
     let stop = |at, lead| Tab { at, kind: TabKind::Right, lead };
     let edge = Edge { width: 1, color: None, line: Line::Solid };
     let between = Edge { width: 2, color: Some([200, 0, 0]), line: Line::Solid };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between, fill: None });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between, fill: None, within: None });
     let body = doc(vec![
         Block::Para(Para { tabs: vec![stop(160, Leader::Dots)], ..para("aa\t1") }),
         Block::Para(Para { tabs: vec![stop(160, Leader::None)], ..para("bb\t2") }),
@@ -485,7 +485,7 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
 
     // Hostile: lines of any width between many paragraphs, leaders with no room to stand in.
     let wild = Edge { width: u8::MAX, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]) });
+    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]), within: None });
     let mut blocks: Vec<Block> = (0..300).map(|_| Block::Para(Para { frame: Some(frame.clone()), ..para("a") })).collect();
     blocks.push(Block::Para(Para { tabs: (1..40).map(|n| stop(n, Leader::ThickLine)).collect(), ..para(&"a\t".repeat(500)) }));
     blocks.push(Block::Para(Para { tabs: vec![stop(u16::MAX, Leader::Hyphens)], ..para("a\tb\t\t") }));
@@ -494,8 +494,14 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
 
 #[test]
 fn a_filled_box_is_behind_its_paragraphs_with_its_room_on_each_side() {
-    let frame =
-        Arc::new(Frame { edges: Default::default(), padding: [6, 10, 14, 30], indent: 0, between: Edge::default(), fill: Some([0, 51, 102]) });
+    let frame = Arc::new(Frame {
+        edges: Default::default(),
+        padding: [6, 10, 14, 30],
+        indent: 0,
+        between: Edge::default(),
+        fill: Some([0, 51, 102]),
+        within: None,
+    });
     let boxed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Para(para("before")), boxed("one"), boxed("two"), Block::Para(para("after"))]);
     let printed = print(&body, Paper::A4);
@@ -673,7 +679,14 @@ fn text_stands_beside_a_picture_at_one_side() {
         Block::Para(Para { clear: true, ..para("below") }),
         Block::Table(Table { rows: vec![vec![cell("below")]], ..Table::default() }),
         Block::Para(Para {
-            frame: Some(Arc::new(Frame { edges: Default::default(), padding: [0; 4], indent: 0, between: Edge::default(), fill: Some([1, 2, 3]) })),
+            frame: Some(Arc::new(Frame {
+                edges: Default::default(),
+                padding: [0; 4],
+                indent: 0,
+                between: Edge::default(),
+                fill: Some([1, 2, 3]),
+                within: None,
+            })),
             ..para("below")
         }),
     ] {
@@ -1603,7 +1616,7 @@ fn what_stands_in_a_paragraph_written_from_the_right_is_counted_from_the_right()
     // A border set in is set in from the side its paragraphs start at.
     let boxed = |rtl: bool| {
         let edge = Edge { width: 1, color: None, line: Line::Solid };
-        let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 2, between: Edge::default(), fill: None });
+        let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 2, between: Edge::default(), fill: None, within: None });
         Block::Para(Para { rtl, frame: Some(frame), ..para("ab") })
     };
     let sides = |printed: &Printed| {
@@ -1730,6 +1743,101 @@ fn several_pictures_stand_at_the_sides_of_one_paragraph() {
     for paper in [Paper::A4, SMALL] {
         within(
             &print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body: &doc(blocks.clone()), plain: false, sizes: &sizes }, paper)
+                .unwrap(),
+            paper,
+        );
+    }
+}
+
+#[test]
+fn boxes_stand_inside_one_another_on_paper_over_the_colour_behind_the_body() {
+    use crate::Fill;
+    use openmailclient_formats::rich::{Edge, Frame};
+    let line = |width: u8| Edge { width, color: Some([0, 0, 0]), line: Line::Solid };
+    let outer = Arc::new(Frame { edges: [line(1); 4], padding: [10; 4], indent: 0, between: Edge::default(), fill: Some([200, 0, 0]), within: None });
+    let inner = Arc::new(Frame {
+        edges: [line(2); 4],
+        padding: [4; 4],
+        indent: 0,
+        between: Edge::default(),
+        fill: Some([0, 0, 200]),
+        within: Some(outer.clone()),
+    });
+    let boxed = |text: &str, frame: &Arc<Frame>| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
+    let shaded = Cell { background: Some([0, 200, 0]), ..cell("cell") };
+    let table = Block::Table(Table { rows: vec![vec![shaded, cell("two")]], inside: Some(inner.clone()), ..Table::default() });
+    let blocks =
+        vec![Block::Para(para("before")), boxed("first", &outer), boxed("second", &inner), table, boxed("last", &outer), Block::Para(para("after"))];
+    let body = Doc { fill: Some([10, 20, 30]), ..doc(blocks) };
+    let printed = print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body: &body, plain: false, sizes: &|_| None }, Paper::A4).unwrap();
+    let page = &printed.pages[0];
+    let find = |text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap().clone();
+    let fill = |color: [u8; 3]| *page.fills.iter().find(|f| f.color == color).unwrap();
+    let (behind, red, blue, green) = (fill([10, 20, 30]), fill([200, 0, 0]), fill([0, 0, 200]), fill([0, 200, 0]));
+    // Each lies over the one it stands in: the body's colour, the outer box, the inner box,
+    // the cell.
+    assert!(
+        behind.depth < red.depth && red.depth < blue.depth && blue.depth < green.depth,
+        "{} {} {} {}",
+        behind.depth,
+        red.depth,
+        blue.depth,
+        green.depth
+    );
+    let inside = |a: &Fill, b: &Fill| {
+        a.x >= b.x - 0.01 && a.y >= b.y - 0.01 && a.x + a.width <= b.x + b.width + 0.01 && a.y + a.height <= b.y + b.height + 0.01
+    };
+    assert!(inside(&green, &blue) && inside(&blue, &red) && inside(&red, &behind), "{green:?} {blue:?} {red:?} {behind:?}");
+    // The inner box is set in by the outer one's line and room: 11 pixels are 8.25 points.
+    assert!((blue.x - red.x - 8.25).abs() < 0.01 && (red.x + red.width - blue.x - blue.width - 8.25).abs() < 0.01, "{red:?} {blue:?}");
+    // What stands in which: text and table in the inner box, the first and last in the outer only.
+    let over = |text: &str, f: &Fill| {
+        let t = find(text);
+        t.x >= f.x && t.x + t.width <= f.x + f.width && t.y > f.y && t.y <= f.y + f.height
+    };
+    assert!(over("second", &blue) && over("cell", &blue) && over("two", &blue));
+    assert!(over("first", &red) && over("last", &red) && !over("first", &blue) && !over("last", &blue));
+    assert!(over("before", &behind) && over("after", &behind) && !over("before", &red) && !over("after", &red));
+    assert!(find("last").y > blue.y + blue.height && find("second").y < find("cell").y);
+    within(&printed, Paper::A4);
+
+    // A body longer than a page has its colour on every page; one with none has none.
+    let long =
+        Doc { fill: Some([10, 20, 30]), ..doc((0..200).map(|i| boxed(&format!("line {i}"), if i % 3 == 0 { &inner } else { &outer })).collect()) };
+    let printed = print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body: &long, plain: false, sizes: &|_| None }, Paper::A4).unwrap();
+    assert!(printed.pages.len() > 1);
+    assert!(printed.pages.iter().all(|p| p.fills.iter().any(|f| f.color == [10, 20, 30] && f.depth == 0)));
+    within(&printed, Paper::A4);
+    let none = print_on(
+        &Library::empty(),
+        &Memo { owner: "Owner", fields: &[], body: &doc(vec![Block::Para(para("x"))]), plain: false, sizes: &|_| None },
+        Paper::A4,
+    )
+    .unwrap();
+    assert!(none.pages[0].fills.is_empty());
+
+    // Hostile: boxes far deeper than are drawn, tables in boxes in cells in boxes, small paper.
+    let mut frame = outer.clone();
+    let mut blocks = Vec::new();
+    for i in 0..40u8 {
+        frame = Arc::new(Frame {
+            edges: [line(i % 9); 4],
+            padding: [u16::from(i) * 9; 4],
+            indent: i % 20,
+            between: line(i % 3),
+            fill: Some([i; 3]),
+            within: Some(frame),
+        });
+        blocks.push(boxed("dp", &frame));
+        let held = Cell { blocks: if i % 10 == 3 { blocks.clone() } else { vec![boxed("hd", &frame)] }, span: 1, rows: 1, ..Cell::default() };
+        blocks.push(Block::Table(Table { rows: vec![vec![cell("in"), held]], inside: Some(frame.clone()), ..Table::default() }));
+        if blocks.len() > 60 {
+            blocks.drain(..30);
+        }
+    }
+    for paper in [Paper::A4, SMALL] {
+        within(
+            &print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body: &doc(blocks.clone()), plain: false, sizes: &|_| None }, paper)
                 .unwrap(),
             paper,
         );

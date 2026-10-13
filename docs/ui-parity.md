@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 19 · 2026-10-13 · several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 20 · 2026-10-13 · boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -123,6 +123,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 20 · 2026-10-13 — boxes inside one another; a table inside the block it was written in; a body colour fills the reading pane (M3b.25). Not compared with Outlook.
 - 19 · 2026-10-13 — several pictures at the sides of one paragraph; paper behind a dark see-through picture on the dark pane (M3b.24). Not compared with Outlook.
 - 18 · 2026-10-13 — the print window: a zoom, and Table Style's columns, group headings and rows (M3b.22).
 - 17 · 2026-10-13 — the status bar shows an export that is running, as it does a save (M3b.14).

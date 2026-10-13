@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 66 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 67 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -23,9 +23,9 @@
    their own bold and italic faces, with open fonts of the same measures standing in; no font is
    bundled. Borders set in styles are drawn round paragraphs, tables and cells, and cells span
    rows as well as columns. Several pictures stand at the sides of one paragraph, and a dark see-through picture has
-   paper behind it on the dark pane (M3b.24). Not yet: boxes
-   inside one another, a fill behind a table in a block and behind the whole body; borders on
-   text within a line and rounded corners. Style sheets
+   paper behind it on the dark pane (M3b.24). Boxes stand inside one another, a table stands
+   inside the block it was written in, and a body has its colour behind all of it (M3b.25).
+   Not yet: borders on text within a line and rounded corners. Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
    their width, place, cell fills, padding, spacing and the vertical place of what cells hold; a
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
@@ -78,6 +78,7 @@
 
 ## Revision history
 
+- 67 · 2026-10-13 — M3b.25: boxes stand inside one another, a table stands inside its block, and a body has its colour behind it, in the window and on paper.
 - 66 · 2026-10-13 — M3b.24: several pictures stand at the sides of one paragraph, in the window and on paper; a dark see-through picture has paper behind it on the dark pane.
 - 65 · 2026-10-13 — M3b.23: SVG, WebP and TIFF pictures are shown; animated GIF, PNG and WebP are played (`view.animations`).
 - 64 · 2026-10-13 — M3b.22: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom.

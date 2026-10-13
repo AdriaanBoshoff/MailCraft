@@ -12,8 +12,8 @@
 //! is kept as bytes for the reader to decode; nothing else about it is trusted.
 
 use crate::rich::{
-    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style,
-    Table, TableWidth, VAlign, any_edge,
+    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, MAX_BOXES, Para, ParaKind, Picture, Rgb, Run,
+    Script, Style, Table, TableWidth, VAlign, any_edge,
 };
 use openmailclient_model::html::entity;
 use std::collections::HashMap;
@@ -204,6 +204,8 @@ struct TableBuild {
     spacing: u16,
     frame: Edges,
     line: Option<Rgb>,
+    /// The box the table stands inside.
+    inside: Option<Arc<Frame>>,
     /// Background of the row being read; its cells start from it.
     row_fill: Option<Rgb>,
     row_valign: Option<VAlign>,
@@ -766,29 +768,36 @@ impl Builder {
         let edges = self.css_border.take().filter(any_edge).filter(|_| name != "blockquote");
         let fill = self.css_fill.take();
         let padding = self.css_padding.take().filter(|p| p.iter().any(|v| *v > 0));
-        if block && !matches!(name, "body" | "html") {
+        if matches!(name, "body" | "html") {
+            // A background on the body is behind all of the message (CSS 2.1 section 14.2),
+            // and is not a highlight of each of its words. White is the page itself.
+            if let Some(c) = fill {
+                self.fmt.style.background = None;
+                if self.tables.is_empty() {
+                    self.doc.fill = page_or(c);
+                }
+            }
+        } else if block {
             // A background on a block is behind all of it (CSS 2.1 section 14.2), and is not a
-            // highlight of its text. Inside a filled block, white is a colour like any other.
+            // highlight of its text. On a colour, white is a colour like any other.
             let within = self.fmt.frame.clone();
-            let inherited = within.as_ref().and_then(|f| f.fill);
+            let behind = within.as_ref().and_then(|f| f.behind()).or(self.doc.fill);
             if fill.is_some() {
                 self.fmt.style.background = None;
             }
-            let fill = fill.and_then(|c| if inherited.is_some() { Some(c) } else { page_or(c) });
-            // Room alone makes a box only where there is none already: boxes do not stand
-            // inside one another here.
-            if edges.is_some() || fill.is_some() || (padding.is_some() && within.is_none()) {
-                let frame = Frame {
+            let fill = fill.and_then(|c| if behind.is_some() { Some(c) } else { page_or(c) });
+            // A box stands inside the box round it, as many deep as are ever drawn; one
+            // deeper than that is not a box of its own.
+            let deep = within.as_ref().map_or(0, |f| f.depth() + 1);
+            if (edges.is_some() || fill.is_some() || padding.is_some()) && deep < MAX_BOXES {
+                self.fmt.frame = Some(Arc::new(Frame {
                     edges: edges.unwrap_or_default(),
                     padding: padding.unwrap_or_default(),
                     indent: 0,
                     between: Edge::default(),
-                    fill: fill.or(inherited),
-                };
-                self.fmt.frame = Some(match within {
-                    Some(same) if *same == frame => same,
-                    _ => Arc::new(frame),
-                });
+                    fill,
+                    within,
+                }));
             }
         }
         // Word-processor paragraphs ("MsoNormal" and friends) are written with no margins.
@@ -1066,8 +1075,9 @@ impl Builder {
         self.fmt.align = if around { Align::Right } else { Align::Left };
         let thick = attr(attrs, "border").and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0);
         let border = thick.is_some();
-        // What stands outside the table does not put its border round the table's paragraphs.
-        self.fmt.frame = None;
+        // What stands outside the table does not put its border round the table's paragraphs:
+        // the table as a whole stands inside it.
+        let inside = self.fmt.frame.take();
         self.common("table", attrs);
         let line = attr(attrs, "bordercolor").and_then(color);
         // The table's own border: its style's, or as thick as `border` says.
@@ -1096,6 +1106,7 @@ impl Builder {
             spacing: if collapsed { 0 } else { room("cellspacing", CELL_SPACING) },
             frame,
             line,
+            inside,
             row_fill: None,
             row_valign: None,
             open_len: self.open.len(),
@@ -1175,8 +1186,14 @@ impl Builder {
             || any_edge(&t.frame)
             || rows.iter().flatten().any(|c| c.background.is_some() || c.edges.is_some());
         if !shaped && rows.iter().all(|r| r.iter().filter(|c| !c.blocks.is_empty()).count() <= 1) {
+            // What it held stands in the box the table stood in, where it has none of its own.
             for cell in rows.drain(..).flatten() {
-                for block in cell.blocks {
+                for mut block in cell.blocks {
+                    match &mut block {
+                        Block::Para(p) if p.frame.is_none() => p.frame = t.inside.clone(),
+                        Block::Table(inner) if inner.inside.is_none() => inner.inside = t.inside.clone(),
+                        _ => {}
+                    }
                     self.push_block(block);
                 }
             }
@@ -1193,6 +1210,7 @@ impl Builder {
                 snug: false,
                 repeat: false,
                 rtl: t.rtl,
+                inside: t.inside,
             }));
         }
         self.gap = true;

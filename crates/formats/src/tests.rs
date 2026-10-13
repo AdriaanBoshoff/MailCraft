@@ -2331,13 +2331,19 @@ fn blocks_have_fills_and_room_on_each_side() {
     assert_eq!((frame(4).fill, frame(4).padding, frame(4).edges[0].width), (Some([204, 0, 0]), [3, 0, 5, 0], 1));
     // On the page itself, white is no fill.
     assert_eq!((p[5].text(), p[5].frame.is_none()), ("page".to_string(), true));
-    // Room asked for inside a box that is there already does not take the box away.
-    assert_eq!((frame(6).edges[0].width, frame(6).padding), (1, [0; 4]));
+    // Room asked for inside a box that is there already is a box of its own inside that one.
+    assert_eq!((frame(6).edges[0].width, frame(6).padding, frame(6).depth()), (0, [20; 4], 1));
+    let outer = frame(6).within.as_ref().unwrap();
+    assert_eq!((outer.edges[0].width, outer.padding, outer.within.is_none()), (1, [0; 4], true));
+    // The card stands inside the block it was written in, and keeps its own fill only.
+    assert!(Arc::ptr_eq(frame(2).within.as_ref().unwrap(), frame(0)));
     // A quotation's line at the left is its bar; its fill is a fill.
     assert_eq!((p[7].quote, frame(7).fill, crate::rich::any_edge(&frame(7).edges)), (1, Some([221, 221, 221]), false));
     // A table inside a filled block: its cells' paragraphs are not boxes of their own.
     let Some(Block::Table(table)) = doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
     assert!(matches!(&table.rows[0][0].blocks[0], Block::Para(q) if q.frame.is_none()));
+    // The table as a whole stands in that block, with what follows it.
+    assert!(Arc::ptr_eq(table.inside.as_ref().unwrap(), frame(8)));
     assert_eq!((p[8].text(), frame(8).fill), ("after".to_string(), Some([0, 51, 102])));
     // More lengths than four, none, and lengths that are not understood.
     assert!(p[9].frame.is_none() && p[10].frame.is_none() && p[11].frame.is_none());
@@ -2920,4 +2926,71 @@ fn a_table_written_from_the_right_says_so() {
         t.rtl
     };
     assert!(rtf("\\rtlrow") && !rtf("") && !rtf("\\ltrrow") && !rtf("\\rtlrow\\ltrrow"));
+}
+
+#[test]
+fn boxes_stand_inside_one_another_and_the_body_has_a_colour_behind_it() {
+    use crate::rich::{MAX_BOXES, box_at, boxed_run};
+    let doc = parse(
+        "<body bgcolor=\"#102030\" style=\"color:#fff\"><div style=\"border:2px solid #f00;padding:10px\"><p>a</p>         <div style=\"background:#fff;border:1px solid #00f\"><p>b</p><div style=\"padding:5px\">c</div><p>d</p></div><p>e</p></div><p>f</p>         <div style=\"background:#ffffff\">white</div></body>",
+    );
+    // CSS 2.1 section 14.2: the body's background is behind the whole message, not behind
+    // each word of it.
+    assert_eq!(doc.fill, Some([16, 32, 48]));
+    let p = paras(&doc);
+    assert!(p.iter().all(|q| q.runs.iter().all(|r| r.style.background.is_none())));
+    let frame = |n: usize| p[n].frame.as_ref().unwrap();
+    assert_eq!(p.iter().map(|q| q.frame.as_ref().map_or(0, |f| f.depth() + 1)).collect::<Vec<_>>(), [1, 2, 3, 2, 1, 0, 1]);
+    assert!(Arc::ptr_eq(frame(0), frame(4)) && Arc::ptr_eq(frame(1), frame(3)));
+    assert!(Arc::ptr_eq(frame(1).within.as_ref().unwrap(), frame(0)) && Arc::ptr_eq(frame(2).within.as_ref().unwrap(), frame(1)));
+    // The colour behind what a box holds is the nearest one round it.
+    assert_eq!((frame(0).behind(), frame(1).behind(), frame(2).fill, frame(2).behind()), (None, Some([255; 3]), None, Some([255; 3])));
+    // On a body with a colour, white is a colour.
+    assert_eq!(frame(6).fill, Some([255; 3]));
+    // Outermost first; none past the innermost.
+    assert!(Arc::ptr_eq(box_at(frame(2), 0).unwrap(), frame(0)) && Arc::ptr_eq(box_at(frame(2), 2).unwrap(), frame(2)));
+    assert!(box_at(frame(2), 3).is_none() && box_at(frame(0), 1).is_none());
+    // Five blocks in the outer box, three of them in the one inside it, one in the innermost.
+    assert_eq!(boxed_run(&doc.blocks, 0).map(|r| r.1), Some(5));
+    assert_eq!(boxed_run(&doc.blocks[1..], 1).map(|r| r.1), Some(3));
+    assert_eq!(boxed_run(&doc.blocks[2..], 2).map(|r| r.1), Some(1));
+    assert!(boxed_run(&doc.blocks, 1).is_none() && boxed_run(&doc.blocks[5..], 0).is_none() && boxed_run(&[], 0).is_none());
+
+    // White behind the body is the page itself; a colour set inside a table is that cell's.
+    assert_eq!(parse("<body style=\"background:#fff\">x</body>").fill, None);
+    assert_eq!(parse("<html style=\"background-color:#ddd\"><body>x</body></html>").fill, Some([221; 3]));
+    assert_eq!(parse("<table><tr><td><body bgcolor=#123456>x</body></table>").fill, None);
+
+    // A layout table of one column is taken away; what it held stands in the box it stood in.
+    let doc = parse("<div style=\"background:#036\"><table><tr><td><p>one</p></td></tr><tr><td><p>two</p></td></tr></table></div>");
+    let p = paras(&doc);
+    assert!(p.len() == 2 && Arc::ptr_eq(p[0].frame.as_ref().unwrap(), p[1].frame.as_ref().unwrap()));
+    assert_eq!(p[0].frame.as_ref().unwrap().fill, Some([0, 51, 102]));
+
+    // Hostile: far more boxes inside one another than are ever kept.
+    let deep = format!("{}x{}", "<div style=\"border:1px solid red;background:#ccc\">".repeat(5000), "</div>".repeat(4000));
+    let doc = parse(&deep);
+    let p = paras(&doc);
+    let innermost = p.iter().filter_map(|q| q.frame.as_ref()).map(|f| f.depth()).max().unwrap();
+    assert_eq!(innermost, MAX_BOXES - 1);
+    for q in &p {
+        if let Some(f) = &q.frame {
+            assert!(box_at(f, MAX_BOXES).is_none() && f.behind().is_some());
+        }
+    }
+    // A chain made by hand that is longer than any reader makes is walked only so far.
+    let mut chain = Arc::new(crate::rich::Frame::default());
+    for _ in 0..10_000 {
+        chain = Arc::new(crate::rich::Frame { within: Some(chain), ..crate::rich::Frame::default() });
+    }
+    assert_eq!(chain.depth(), MAX_BOXES * 2);
+    assert!(chain.behind().is_none() && box_at(&chain, MAX_BOXES).is_none());
+    let list = vec![Block::Para(Para { frame: Some(chain), ..Para::default() })];
+    assert!(boxed_run(&list, 0).is_some_and(|r| r.1 == 1) && boxed_run(&list, MAX_BOXES).is_none());
+    // Taking the chain apart one box at a time, so that dropping it is not as deep as it is long.
+    let Some(Block::Para(mut para)) = list.into_iter().next() else { panic!("no paragraph") };
+    let mut at = para.frame.take();
+    while let Some(frame) = at {
+        at = Arc::try_unwrap(frame).ok().and_then(|f| f.within);
+    }
 }

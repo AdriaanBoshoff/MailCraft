@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use openmailclient_formats::rich::{
     Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, TAB_STEP, Tab, Table, TableWidth,
-    VAlign, tab_room, tab_stop,
+    VAlign, boxed_run, tab_room, tab_stop,
 };
 
 use crate::fonts::{Fonts, Pick};
@@ -158,6 +158,8 @@ pub(crate) struct Flow<'f, 'l> {
     sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>,
     /// The pictures that stand at the sides of the blocks being set.
     asides: Vec<Aside>,
+    /// How far what is being set lies over the fills of the boxes it stands inside.
+    lift: u16,
 }
 
 fn px(v: u16) -> f32 {
@@ -360,6 +362,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             glyphs_left: MAX_GLYPHS,
             sizes,
             asides: Vec::new(),
+            lift: 0,
         }
     }
 
@@ -1364,6 +1367,11 @@ impl<'f, 'l> Flow<'f, 'l> {
         (mins, maxs, asked)
     }
 
+    /// A colour behind all that was set from `from` to `to`, under every other fill.
+    pub fn behind(&mut self, from: At, to: At, x: f32, width: f32, fill: Rgb) {
+        self.boxed(from, to, x, width, &Edges::default(), Some(fill), 0, false);
+    }
+
     /// The lines and the fill of a box that starts at `from` and ends at `to`, on every page it
     /// is on. Lines stand on the box's edge when `on_edge`, else just inside it.
     fn boxed(&mut self, from: At, to: At, x: f32, width: f32, edges: &Edges, fill: Option<Rgb>, depth: u16, on_edge: bool) {
@@ -1409,40 +1417,81 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
     }
 
-    /// Paragraphs inside one border.
-    fn framed(&mut self, paras: &[Block], frame: &Frame, x: f32, width: f32, at: At, first: bool, depth: usize) -> At {
+    /// Which of the fills on a page one lies among: over those of the tables and boxes it
+    /// stands inside, `over` more than a table that deep has for its own cells.
+    fn layer(&self, depth: usize, over: u16) -> u16 {
+        u16::try_from(depth).unwrap_or(u16::MAX - 1).saturating_add(over).saturating_add(self.lift).min(u16::MAX - 1)
+    }
+
+    /// Blocks inside one border: paragraphs, tables, and the boxes that stand inside this one.
+    /// `level` is how many boxes this one stands inside.
+    #[allow(clippy::too_many_arguments)]
+    fn framed(&mut self, paras: &[Block], frame: &Frame, x: f32, width: f32, at: At, first: bool, depth: usize, level: usize) -> At {
         let mut at = at;
-        if let (false, Some(Block::Para(p)), true) = (first, paras.first(), at.y > self.top() + 0.01) {
-            at.y += px(p.lead());
+        match paras.first() {
+            Some(Block::Para(p)) if !first && at.y > self.top() + 0.01 => at.y += px(p.lead()),
+            Some(Block::Table(t)) if !first && !t.snug && at.y > self.top() + 0.01 => at.y += 6.0 * PX,
+            _ => {}
         }
         let (near, far) = frame_room(frame);
-        let inset = (f32::from(frame.indent.min(12)) * INDENT * PX).min(width * 0.6);
+        let inset = (f32::from(frame.indent.min(12)) * INDENT * PX).min(width * 0.6).min((width - 24.0).max(0.0));
         // Set in on the side its paragraphs start at.
         let rtl = matches!(paras.first(), Some(Block::Para(p)) if p.rtl);
         let (x, width) = (if rtl { x } else { x + inset }, width - inset);
         let start = self.room(at, near.1 + self.base.size * 1.3);
         let mut inner = At { page: start.page, y: start.y + near.1 };
-        let left = (x + near.0).min(x + width);
-        let room = (width - near.0 - far.0).max(24.0);
+        // What it holds never stands outside it, however much room boxes inside one another
+        // ask for.
+        let room = (width - near.0 - far.0).max(width.min(24.0)).max(0.0);
+        let left = (x + near.0).min(x + width - room).max(x);
         // The line between one paragraph and the next, with the room the border keeps.
         let between = f32::from(frame.between.width.min(MAX_EDGE)) * PX;
-        for (k, block) in paras.iter().enumerate() {
-            if let Block::Para(p) = block {
-                if k > 0 && between > 0.0 && !self.full {
-                    let [above, _, below, _] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)) * PX);
-                    inner = self.room(At { page: inner.page, y: inner.y + below }, between + above);
-                    let y = inner.y + between / 2.0;
-                    self.edge(inner.page, (x, y), (x + width, y), between, &frame.between, true);
-                    inner.y += between + above;
-                }
-                inner = self.para(p, left, room, inner, k == 0 || between > 0.0);
+        // Over the fill of a cell it stands in, under any highlight of its text; what it
+        // holds lies over its own fill.
+        let over = self.layer(depth, 2);
+        let lift = self.lift;
+        self.lift = lift.saturating_add(2);
+        let mut k = 0usize;
+        while let Some(block) = paras.get(k) {
+            if self.full {
+                break;
             }
+            if k > 0 && between > 0.0 {
+                let [above, _, below, _] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)) * PX);
+                inner = self.below_aside(inner);
+                inner = self.room(At { page: inner.page, y: inner.y + below }, between + above);
+                let y = inner.y + between / 2.0;
+                self.edge(inner.page, (x, y), (x + width, y), between, &frame.between, true);
+                inner.y += between + above;
+            }
+            let start_of = k == 0 || between > 0.0;
+            let rest = paras.get(k..).unwrap_or_default();
+            k += match (boxed_run(rest, level + 1), block) {
+                // A box inside this one, with all that stands in it.
+                (Some((within, count)), _) => {
+                    inner = self.below_aside(inner);
+                    inner = self.framed(rest.get(..count).unwrap_or_default(), within, left, room, inner, start_of, depth, level + 1);
+                    count.max(1)
+                }
+                (None, Block::Para(p)) => {
+                    inner = self.para(p, left, room, inner, start_of);
+                    1
+                }
+                (None, Block::Table(table)) => {
+                    inner = self.below_aside(inner);
+                    if !start_of && !table.snug && inner.y > self.top() + 0.01 {
+                        inner.y += 6.0 * PX;
+                    }
+                    inner = self.table(table, left, room, inner, depth);
+                    1
+                }
+                (None, Block::Rule) => 1,
+            };
         }
+        self.lift = lift;
         // A picture at one side of the last paragraph is inside the border too.
         inner = self.below_aside(inner);
         let end = At { page: inner.page, y: inner.y + far.1 };
-        // Over the fill of a cell it stands in, under any highlight of its text.
-        let over = u16::try_from(depth).unwrap_or(u16::MAX - 2).saturating_add(2).min(u16::MAX - 1);
         self.boxed(start, end, x, width, &frame.edges, frame.fill, over, false);
         end
     }
@@ -1460,20 +1509,18 @@ impl<'f, 'l> Flow<'f, 'l> {
             if self.full {
                 break;
             }
-            let mut step = 1usize;
+            let step = 1usize;
             // Only plain paragraphs stand beside a picture; anything else starts below it.
             if !matches!(block, Block::Para(p) if p.frame.is_none()) {
                 at = self.below_aside(at);
             }
+            if let Some((frame, count)) = boxed_run(list.get(i..).unwrap_or_default(), 0) {
+                at = self.framed(list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, x, width, at, i == 0, depth, 0);
+                i += count.max(1);
+                continue;
+            }
             match block {
-                Block::Para(para) => match &para.frame {
-                    Some(frame) => {
-                        let same = |b: &Block| matches!(b, Block::Para(q) if q.frame.as_ref().is_some_and(|f| Arc::ptr_eq(f, frame)));
-                        step += list.get(i + 1..).unwrap_or_default().iter().take_while(|b| same(b)).count();
-                        at = self.framed(list.get(i..i.saturating_add(step)).unwrap_or_default(), frame, x, width, at, i == 0, depth);
-                    }
-                    None => at = self.para(para, x, width, at, i == 0),
-                },
+                Block::Para(para) => at = self.para(para, x, width, at, i == 0),
                 Block::Rule => {
                     let tall = 13.0 * PX;
                     at = self.room(at, tall);
@@ -1501,7 +1548,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         let (lefts, widths, gap) = columns;
         let (Some(row), Some(starts)) = (table.rows.first(), places.first()) else { return at };
         let lined = Edge { width: 1, color: Some(table.line.unwrap_or(GREY)), line: Line::Solid };
-        let fill_depth = u16::try_from(depth).unwrap_or(u16::MAX - 1).saturating_add(1).min(u16::MAX - 1);
+        let fill_depth = self.layer(depth, 1);
         let mut set: Vec<(&Cell, f32, f32)> = Vec::new();
         let mut end = at;
         for (cell, col) in row.iter().zip(starts) {
@@ -1574,7 +1621,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         let lefts = table.lefts(&widths, x + rim + gap, x + target - rim - gap, gap);
 
         let lined = Edge { width: 1, color: Some(table.line.unwrap_or(GREY)), line: Line::Solid };
-        let fill_depth = u16::try_from(depth).unwrap_or(u16::MAX - 1).saturating_add(1).min(u16::MAX - 1);
+        let fill_depth = self.layer(depth, 1);
         let line_tall = self.base.size * 1.3;
         let start = self.room(at, rim + gap + line_tall);
         let mut at = At { page: start.page, y: start.y + rim + gap };

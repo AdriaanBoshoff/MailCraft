@@ -20,6 +20,8 @@ pub struct Doc {
     /// Places the body keeps for attachments ([`Picture::Object`]), counted even where no
     /// run was kept for one.
     pub objects: usize,
+    /// The colour the body asks to be read on, behind all of it; `None` is the reader's own.
+    pub fill: Option<Rgb>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,6 +213,70 @@ pub struct Frame {
     pub between: Edge,
     /// The colour the box is filled with, behind what it holds.
     pub fill: Option<Rgb>,
+    /// The box this one stands inside.
+    pub within: Option<Arc<Frame>>,
+}
+
+/// How many boxes may stand inside one another.
+pub const MAX_BOXES: usize = 8;
+
+impl Frame {
+    /// How many boxes this one stands inside; no more than are ever looked at.
+    pub fn depth(&self) -> usize {
+        let (mut depth, mut at) = (0usize, self.within.as_ref());
+        while let Some(outer) = at.filter(|_| depth < MAX_BOXES * 2) {
+            depth += 1;
+            at = outer.within.as_ref();
+        }
+        depth
+    }
+
+    /// The colour behind what the box holds: its own, or that of the nearest box round it
+    /// that has one.
+    pub fn behind(&self) -> Option<Rgb> {
+        let (mut left, mut at) = (MAX_BOXES * 2, Some(self));
+        while let Some(frame) = at.filter(|_| left > 0) {
+            if frame.fill.is_some() {
+                return frame.fill;
+            }
+            left -= 1;
+            at = frame.within.as_deref();
+        }
+        None
+    }
+}
+
+/// Of the boxes `frame` stands in and itself, the outermost first, the one `level` deep.
+/// `None` past the innermost, and past the [`MAX_BOXES`] that are ever drawn.
+pub fn box_at(frame: &Arc<Frame>, level: usize) -> Option<&Arc<Frame>> {
+    let depth = frame.depth();
+    if level > depth || level >= MAX_BOXES {
+        return None;
+    }
+    let mut at = frame;
+    for _ in level..depth {
+        at = at.within.as_ref()?;
+    }
+    Some(at)
+}
+
+/// The box that is `level` deep round the first of `list`, and how many blocks from the first
+/// on stand in that same box. `None` where the first block stands in no box that deep.
+pub fn boxed_run(list: &[Block], level: usize) -> Option<(&Arc<Frame>, usize)> {
+    let frame = box_at(list.first()?.boxed()?, level)?;
+    let same = |b: &Block| b.boxed().and_then(|f| box_at(f, level)).is_some_and(|f| Arc::ptr_eq(f, frame));
+    Some((frame, 1 + list.get(1..).unwrap_or_default().iter().take_while(|b| same(b)).count()))
+}
+
+impl Block {
+    /// The innermost box the block stands in.
+    pub fn boxed(&self) -> Option<&Arc<Frame>> {
+        match self {
+            Block::Para(p) => p.frame.as_ref(),
+            Block::Table(t) => t.inside.as_ref(),
+            Block::Rule => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -334,6 +400,8 @@ pub struct Table {
     pub repeat: bool,
     /// The table is written from the right: its first column stands at the right.
     pub rtl: bool,
+    /// The box the table stands inside, as a paragraph stands inside its `frame`.
+    pub inside: Option<Arc<Frame>>,
 }
 
 /// How wide a table asks to be.

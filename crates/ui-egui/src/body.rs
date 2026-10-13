@@ -110,8 +110,15 @@ pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, face
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
     let picked = Cell::new(None);
     let link = RefCell::new(None);
-    blocks(ui, &doc.blocks, Look { t, pictures, faces, on: t.surface, picked: &picked, link: &link }, 0);
+    // A body that asks for a colour behind it is read against that colour.
+    let on = page(doc).unwrap_or(t.surface);
+    blocks(ui, &doc.blocks, Look { t, pictures, faces, on, picked: &picked, link: &link }, 0);
     Picked { file: picked.get(), link: link.into_inner() }
+}
+
+/// The colour a body asks to be read on, for whoever paints the pane behind it.
+pub(crate) fn page(doc: &Doc) -> Option<Color32> {
+    doc.fill.map(|c| Color32::from_rgb(c[0], c[1], c[2]))
 }
 
 /// A picture standing at one side, with room beside it still to fill.
@@ -148,13 +155,7 @@ fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
     let mut standing: Vec<Aside> = Vec::new();
     let mut i = 0usize;
     while let Some(block) = list.get(i) {
-        let group: Group = match block {
-            Block::Para(p) => p.frame.as_ref().map(|frame| {
-                let same = |b: &Block| matches!(b, Block::Para(q) if q.frame.as_ref().is_some_and(|f| Arc::ptr_eq(f, frame)));
-                (frame, 1 + list.get(i + 1..).unwrap_or_default().iter().take_while(|b| same(b)).count())
-            }),
-            _ => None,
-        };
+        let group: Group = rich::boxed_run(list.get(i..).unwrap_or_default(), 0);
         // A picture at the side ends where it ends, or where a paragraph asks to start below it.
         let top = ui.cursor().top();
         standing.retain(|a| a.bottom > top + 0.5);
@@ -190,7 +191,7 @@ fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
 /// Draw the block at `i`, or the paragraphs that share its border.
 fn one(ui: &mut Ui, list: &[Block], i: usize, group: Group, look: Look, depth: usize) {
     match (list.get(i), group) {
-        (Some(Block::Para(_)), Some((frame, count))) => framed(ui, list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, look, i),
+        (Some(_), Some((frame, count))) => framed(ui, list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, look, (i, 0, depth)),
         (Some(Block::Para(p)), None) => contained(ui, p, look, i > 0),
         (Some(Block::Rule), _) => {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 13.0), Sense::hover());
@@ -215,10 +216,15 @@ fn frame_room(frame: &Frame) -> (Vec2, Vec2) {
     (vec2(clear(side(3), left), side(0) + above), vec2(clear(side(1), right), side(2) + below))
 }
 
-/// Paragraphs inside one border.
-fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
-    if let (true, Some(Block::Para(p))) = (at > 0, paras.first()) {
-        ui.add_space(f32::from(p.lead()));
+/// Blocks inside one border: paragraphs, tables, and the boxes that stand inside this one.
+/// `place` is which block of its list the first is, how many boxes this one stands inside, and
+/// how deep in tables it is.
+fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, place: (usize, usize, usize)) {
+    let (at, level, depth) = place;
+    match paras.first() {
+        Some(Block::Para(p)) if at > 0 => ui.add_space(f32::from(p.lead())),
+        Some(Block::Table(t)) if at > 0 && !t.snug => ui.add_space(6.0),
+        _ => {}
     }
     let top = ui.cursor().top();
     let mut full = ui.available_rect_before_wrap();
@@ -231,29 +237,43 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
     }
     let (near, far) = frame_room(frame);
     let left = (full.left() + near.x).min(full.right());
-    let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0), top + near.y));
+    let inside = Rect::from_min_max(pos2(left, top + near.y), pos2((full.right() - far.x).max(left + 8.0).min(full.right().max(left)), top + near.y));
     // The fill goes behind what the box holds, and what it holds is read against the fill.
     let behind = ui.painter().add(egui::Shape::Noop);
     let fill = frame.fill.map(|c| Color32::from_rgb(c[0], c[1], c[2]));
     let look = Look { on: fill.unwrap_or(look.on), ..look };
-    let mut child = ui.new_child(UiBuilder::new().id_salt(("framed", at)).max_rect(inside));
+    let mut child = ui.new_child(UiBuilder::new().id_salt(("framed", at, level)).max_rect(inside));
     child.spacing_mut().item_spacing = vec2(0.0, 0.0);
     let between = f32::from(frame.between.width.min(MAX_EDGE));
-    for (k, block) in paras.iter().enumerate() {
-        if let Block::Para(p) = block {
-            // The line between one paragraph and the next, with the room the border keeps.
-            if k > 0 && between > 0.0 {
-                let [above, _, below, _] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)));
-                child.add_space(below);
-                let y = child.cursor().top();
-                let line = Rect::from_min_max(pos2(full.left(), y), pos2(full.right(), y + between));
-                child.add_space(between + above);
-                let only = [frame.between, Edge::default(), Edge::default(), Edge::default()];
-                edges(ui, line, &only, look, look.text());
+    let mut k = 0usize;
+    while let Some(block) = paras.get(k) {
+        // The line between one paragraph and the next, with the room the border keeps.
+        if k > 0 && between > 0.0 {
+            let [above, _, below, _] = frame.padding.map(|v| f32::from(v.min(MAX_CELL_ROOM)));
+            child.add_space(below);
+            let y = child.cursor().top();
+            let line = Rect::from_min_max(pos2(full.left(), y), pos2(full.right(), y + between));
+            child.add_space(between + above);
+            let only = [frame.between, Edge::default(), Edge::default(), Edge::default()];
+            edges(ui, line, &only, look, look.text());
+        }
+        let rest = paras.get(k..).unwrap_or_default();
+        k += match (rich::boxed_run(rest, level + 1), block) {
+            // A box inside this one, with all that stands in it.
+            (Some((inner, count)), _) => {
+                framed(&mut child, rest.get(..count).unwrap_or_default(), inner, look, (if between > 0.0 { 0 } else { k }, level + 1, depth));
+                count.max(1)
             }
             // A picture at the side stays inside the border.
-            contained(&mut child, p, look, k > 0 && between == 0.0);
-        }
+            (None, Block::Para(p)) => {
+                contained(&mut child, p, look, k > 0 && between == 0.0);
+                1
+            }
+            (None, _) => {
+                one(&mut child, paras, k, None, look, depth);
+                1
+            }
+        };
     }
     let rect = Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(inside.top()) + far.y));
     ui.allocate_rect(rect, Sense::hover());
