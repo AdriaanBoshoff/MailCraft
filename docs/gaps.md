@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 52 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 53 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 53 · 2026-10-13 — M3b.11: attachments keep what is stored on them when the list changes; search-folder rows of changed messages are brought up to date.
 - 52 · 2026-10-13 — M3b.10: text copied out of a printed PDF was tried in one reader; right-to-left text is given as it is seen and only ligatures and clusters say what they stand for.
 - 51 · 2026-10-12 — M3b.9: tab stops, leaders, a border's indent, text beside a picture and table columns follow a paragraph written from the right; `<bdo>`, `<bdi>` and `unicode-bidi` are read.
 - 50 · 2026-10-12 — M3b.8: fields of one line are our own; right-to-left text reads right, and the cursor follows it, while it is typed.

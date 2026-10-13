@@ -228,20 +228,28 @@ impl PstStore {
                 item.recipients = rows.into_iter().take(MAX_CHILDREN).map(|(_, bag)| bag).collect();
             }
         }
+        item.attachments = self.attachments(&subs, cp, depth).into_iter().map(|(_, att)| att).collect();
+        item.normalise_html();
+        Ok(item)
+    }
+
+    /// The attachments of a message with these subnodes, in the order of its attachment table,
+    /// each with the id of the subnode that holds it. One that cannot be read is left out.
+    fn attachments(&mut self, subs: &Subnodes, cp: u32, depth: usize) -> Vec<(u32, Attachment)> {
+        let mut list = Vec::new();
         if let Some(&(data, sub)) = subs.get(&NID_ATTACHMENT_TABLE) {
             let table_subs = self.ndb.subnodes(sub).unwrap_or_default();
             let rows = self.table(data, &table_subs, cp).unwrap_or_default();
             // Each row's id names the subnode that holds the attachment object ([MS-PST] 2.4.6.2).
             for (nid, _) in rows.into_iter().take(MAX_CHILDREN) {
                 if let Some(&(data, sub)) = subs.get(&nid)
-                    && let Ok(att) = self.attachment(data, sub, &subs, cp, depth)
+                    && let Ok(att) = self.attachment(data, sub, subs, cp, depth)
                 {
-                    item.attachments.push(att);
+                    list.push((nid, att));
                 }
             }
         }
-        item.normalise_html();
-        Ok(item)
+        list
     }
 
     fn attachment(&mut self, data: u64, sub: u64, message_subs: &Subnodes, cp: u32, depth: usize) -> Result<Attachment, PstError> {

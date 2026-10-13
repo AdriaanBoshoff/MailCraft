@@ -194,6 +194,159 @@ fn what_this_program_does_not_understand_is_kept() {
     assert!(!row.read && row.to.is_empty());
 }
 
+/// The attachments of a message as they are stored, in the order of its table: the name of
+/// each and the value of a property no name stands for.
+fn stored_attachments(store: &mut PstStore, msg: ItemId) -> Vec<(String, Option<Vec<u8>>, i32)> {
+    let e = *store.ndb.nbt.get(&(msg.0 as u32)).unwrap();
+    let subs = store.ndb.subnodes(e.sub).unwrap();
+    let list = store.attachments(&subs, 1252, 0);
+    list.into_iter()
+        .map(|(nid, att)| {
+            let (data, sub) = *subs.get(&nid).unwrap();
+            let props = store.open_pc(crate::ndb::NbtEntry { data, sub, parent: 0 }).unwrap().0;
+            (att.name(), props.get(&0x9F01).map(|r| r.data.clone()), att.props.i32(pid::ATTACH_NUM).unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn what_is_not_understood_on_an_attachment_is_kept_when_the_list_changes() {
+    use crate::store_write::PLANTED;
+    let plant = |n: Option<u8>| {
+        PLANTED.with(|p| *p.borrow_mut() = n.map(|n| Raw { id: 0x9F01, ty: ptype::INT32, data: vec![n, 0, 0, 0] }).into_iter().collect());
+    };
+    // A message with three attachments, each with a property the model has no place for: a
+    // large file, a message, and a file added by a later save.
+    let mut store = open();
+    let inbox = folder(&mut store, "Inbox");
+    let mut item = mail("With attachments", false);
+    item.attachments.push(Attachment::file("large.bin", "application/octet-stream", (0..40_000u32).map(|i| (i % 251) as u8).collect()));
+    let mut inner = Attachment::file("", "", Vec::new());
+    inner.props.set_str(pid::DISPLAY_NAME, "A message inside");
+    inner.embedded = Some(Box::new(mail("Inside", true)));
+    item.attachments.push(inner);
+    let id = store.add(inbox.id, item).unwrap();
+    plant(Some(7));
+    let mut store = saved(&mut store);
+    let mut item = store.load(inbox.id, id).unwrap();
+    assert!(item.attachments.iter().all(|a| a.props.get(0x9F01).is_none()));
+    item.attachments.push(Attachment::file("late.txt", "text/plain", b"late".to_vec()));
+    store.update(inbox.id, id, item).unwrap();
+    plant(Some(8));
+    let mut store = saved(&mut store);
+    plant(None);
+    let seven = Some(vec![7, 0, 0, 0]);
+    let eight = Some(vec![8, 0, 0, 0]);
+    assert_eq!(
+        stored_attachments(&mut store, id),
+        [("large.bin".to_string(), seven.clone(), 0), ("A message inside".to_string(), seven.clone(), 1), ("late.txt".to_string(), eight.clone(), 2)]
+    );
+
+    // The list is turned round, one attachment is renamed, one is added, and the message
+    // inside is left alone.
+    let mut item = store.load(inbox.id, id).unwrap();
+    let before = item.clone();
+    item.attachments.reverse();
+    item.attachments[2].props.set_str(pid::ATTACH_LONG_FILENAME, "renamed.bin");
+    item.attachments[2].props.0.remove(&pid::ATTACH_FILENAME);
+    item.attachments.insert(1, Attachment::file("new.txt", "text/plain", b"new".to_vec()));
+    store.update(inbox.id, id, item.clone()).unwrap();
+    let mut store = saved(&mut store);
+    assert_eq!(
+        stored_attachments(&mut store, id),
+        [
+            ("late.txt".to_string(), eight.clone(), 0),
+            ("new.txt".to_string(), None, 1),
+            ("A message inside".to_string(), seven.clone(), 2),
+            ("renamed.bin".to_string(), seven.clone(), 3)
+        ]
+    );
+    let got = store.load(inbox.id, id).unwrap();
+    assert_eq!(got.attachments.len(), 4);
+    assert_eq!(got.attachments[3].data, before.attachments[0].data);
+    assert!(got.attachments[3].props.get(pid::ATTACH_FILENAME).is_none());
+    assert_eq!(got.attachments[2].embedded, before.attachments[1].embedded);
+    assert_eq!(got.attachments[1].data, b"new");
+    assert!(got.flags() & openmailclient_model::MSGFLAG_HASATTACH != 0);
+
+    // Attachments are taken away: what is left keeps what it had, and with none left the
+    // message has no table and says it has none.
+    let mut item = got;
+    item.attachments.retain(|a| a.name() == "renamed.bin");
+    store.update(inbox.id, id, item.clone()).unwrap();
+    let mut store = saved(&mut store);
+    assert_eq!(stored_attachments(&mut store, id), [("renamed.bin".to_string(), seven, 0)]);
+    item.attachments.clear();
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    assert!(stored_attachments(&mut store, id).is_empty());
+    let got = store.load(inbox.id, id).unwrap();
+    assert!(got.attachments.is_empty() && got.flags() & openmailclient_model::MSGFLAG_HASATTACH == 0);
+    let e = *store.ndb.nbt.get(&(id.0 as u32)).unwrap();
+    assert!(store.ndb.subnodes(e.sub).unwrap().keys().all(|nid| nid & 0x1F != 0x05 && *nid != 0x671));
+}
+
+#[test]
+fn a_search_folder_shows_a_changed_message_as_it_is_now() {
+    // A search folder's table, as another program keeps one, with a row for each of two
+    // messages of the Inbox and a column the messages have nothing for.
+    let mut plain = open();
+    let inbox = folder(&mut plain, "Inbox");
+    let listed = plain.list(inbox.id).unwrap();
+    let (first, second) = (listed[0].id as u32, listed[1].id as u32);
+    let table = (0x7100 << 5) | 0x10;
+    let text = |id: u16, s: &str| Raw { id, ty: ptype::STRING, data: s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+    let int = |id: u16, n: i32| Raw { id, ty: ptype::INT32, data: n.to_le_bytes().to_vec() };
+    let columns = vec![(pid::SUBJECT, ptype::STRING), (pid::DISPLAY_TO, ptype::STRING), (pid::MESSAGE_FLAGS, ptype::INT32), (0x0E05, ptype::STRING)];
+    let row = |plain: &mut PstStore, nid: u32| {
+        let e = *plain.ndb.nbt.get(&nid).unwrap();
+        let props = plain.open_pc(e).unwrap().0;
+        let mut cells: Vec<Raw> = props.into_values().filter(|r| columns.contains(&(r.id, r.ty))).collect();
+        cells.push(text(0x0E05, "Inbox"));
+        crate::ltp::Row { id: nid, cells }
+    };
+    let rows = vec![row(&mut plain, first), row(&mut plain, second)];
+    crate::edit::TABLES.with(|t| t.borrow_mut().push((table, columns.clone(), rows)));
+    let (out, _) = plain.save_with(Cursor::new(Vec::new()), UID, Vec::new()).unwrap();
+    let mut store = PstStore::from_bytes(out.into_inner()).unwrap();
+    let cells = |store: &mut PstStore| -> Vec<(u32, std::collections::BTreeMap<u16, Vec<u8>>)> {
+        let (_, rows) = store.table_of(table).unwrap();
+        rows.into_iter().map(|r| (r.id, r.cells.into_iter().map(|c| (c.id, c.data)).collect())).collect()
+    };
+    let before = cells(&mut store);
+    assert_eq!(before.iter().map(|r| r.0).collect::<Vec<_>>(), [first, second]);
+
+    // Nothing changed that the table shows: it goes across block for block.
+    let unread = folder(&mut store, "Sent Items");
+    store.add(unread.id, mail("Elsewhere", true)).unwrap();
+    let mut store = saved(&mut store);
+    assert_eq!(cells(&mut store), before);
+
+    // One message is changed: its row says what it says now, and no longer what it lost;
+    // what the table knows and the message does not is still there. The other row is as it was.
+    let id = ItemId(u64::from(second));
+    let mut item = store.load(inbox.id, id).unwrap();
+    item.props.set_str(pid::SUBJECT, "A new subject");
+    item.set_read(!item.is_read());
+    item.props.0.remove(&pid::DISPLAY_TO);
+    let flags = item.flags();
+    store.update(inbox.id, id, item).unwrap();
+    let mut store = saved(&mut store);
+    let after = cells(&mut store);
+    assert_eq!(after[0], before[0]);
+    let (nid, row) = &after[1];
+    assert_eq!(*nid, second);
+    assert_eq!(row.get(&pid::SUBJECT), Some(&text(pid::SUBJECT, "A new subject").data));
+    assert_eq!(row.get(&pid::MESSAGE_FLAGS), Some(&int(pid::MESSAGE_FLAGS, flags).data));
+    assert_eq!(row.get(&0x0E05), Some(&text(0x0E05, "Inbox").data));
+    assert!(before[1].1.contains_key(&pid::DISPLAY_TO) && !row.contains_key(&pid::DISPLAY_TO));
+
+    // A message deleted for good leaves the table; the changed one stays as it is now.
+    store.remove(inbox.id, ItemId(u64::from(first))).unwrap();
+    let mut store = saved(&mut store);
+    assert_eq!(cells(&mut store), [after[1].clone()]);
+}
+
 pub(super) fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("omc-edit-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -339,6 +492,10 @@ fn a_damaged_file_is_changed_and_saved_or_refused_never_a_panic() {
             if let Some(s) = list.first() {
                 if let Ok(mut item) = store.load(f.id, ItemId(s.id)) {
                     item.set_read(!item.is_read());
+                    if !item.attachments.is_empty() {
+                        item.attachments.rotate_left(1);
+                        item.attachments.push(Attachment::file("more.txt", "text/plain", b"more".to_vec()));
+                    }
                     let _ = store.update(f.id, ItemId(s.id), item);
                 }
                 if let (Some(s), Some(to)) = (list.get(1), folders.last())

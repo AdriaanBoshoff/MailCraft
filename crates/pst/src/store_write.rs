@@ -153,7 +153,7 @@ const ATTACHMENTS: &[(u16, u16)] = &[(0x0E20, I), (0x3704, S), (0x3705, I), (0x3
 /// Bookkeeping columns of a table (PidTagLtpRowId and neighbours): the table writer's own.
 const LTP_INTERNAL: std::ops::RangeInclusive<u16> = 0x67F1..=0x67F3;
 
-fn cannot(what: &str) -> PstError {
+pub(crate) fn cannot(what: &str) -> PstError {
     PstError::Write(format!("a .pst cannot hold {what}"))
 }
 
@@ -472,16 +472,23 @@ impl<W: Read + Write + Seek> Out<W> {
                 list.push(Sub { nid, data, sub });
                 rows.push(Row { id: nid, cells });
             }
-            let (table, table_sub) = self.table(ATTACHMENTS, &rows)?;
-            list.push(Sub { nid: NID_ATTACHMENT_TABLE, data: table, sub: table_sub });
+            list.push(self.attachment_table(&rows)?);
         }
         Ok(list)
     }
 
+    /// The attachment table of a message ([MS-PST] 2.4.6.1), as a subnode.
+    pub(crate) fn attachment_table(&mut self, rows: &[Row]) -> Result<Sub, PstError> {
+        let (data, sub) = self.table(ATTACHMENTS, rows)?;
+        Ok(Sub { nid: NID_ATTACHMENT_TABLE, data, sub })
+    }
+
     /// An attachment as a subnode's data and subnodes ([MS-PST] 2.4.6.2), and the cells of its
     /// row in the attachment table.
-    fn attachment(&mut self, a: &Attachment, index: usize, depth: usize) -> Result<(u64, u64, Vec<Raw>), PstError> {
+    pub(crate) fn attachment(&mut self, a: &Attachment, index: usize, depth: usize) -> Result<(u64, u64, Vec<Raw>), PstError> {
         let mut props = raws(&a.props);
+        #[cfg(test)]
+        PLANTED.with(|p| props.extend(p.borrow().iter().map(|r| (r.id, copy(r)))));
         props.remove(&pid::ATTACH_DATA);
         props.insert(pid::ATTACH_NUM, int(pid::ATTACH_NUM, count(index as u64)));
         // What an attachment must have ([MS-PST] 2.4.6.2.1), where it does not say.
@@ -513,12 +520,25 @@ impl<W: Read + Write + Seek> Out<W> {
             a.data.len()
         };
         props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, i32::try_from(size).unwrap_or(i32::MAX)));
-        let cells: Vec<Raw> = ATTACHMENTS.iter().filter_map(|(id, ty)| props.get(id).filter(|r| r.ty == *ty)).map(copy).collect();
+        let cells = attachment_cells(&props);
         let props: Vec<Raw> = props.into_values().collect();
         let data = write_pc(&mut self.w, &props, &mut subs)?;
         let sub = self.w.subnodes(subs.list)?;
         Ok((data, sub, cells))
     }
+}
+
+/// The cells of an attachment's row in the attachment table: those of its properties the table
+/// has a column for.
+pub(crate) fn attachment_cells(props: &BTreeMap<u16, Raw>) -> Vec<Raw> {
+    ATTACHMENTS.iter().filter_map(|(id, ty)| props.get(id).filter(|r| r.ty == *ty)).map(copy).collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Properties a test has every attachment written with, as another program might write
+    /// what the model has no place for.
+    pub(crate) static PLANTED: std::cell::RefCell<Vec<Raw>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Write everything `store` holds to `out` as a Unicode `.pst`. `uid` becomes the id of the new

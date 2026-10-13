@@ -11,11 +11,13 @@ use crate::journal::{self, Diff, Found, Journal, Op};
 use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Subs, encode, write_pc};
 use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver};
-use crate::store_write::{ASSOC, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, copy, count, flag, int, text};
+use crate::store_write::{
+    ASSOC, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, copy, count, flag, int, text,
+};
 use crate::write::{NdbWriter, Sub};
-use crate::{LTP_INTERNAL, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore};
+use crate::{LTP_INTERNAL, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore, code_page};
 use openmailclient_model::{
-    FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropValue, Recovery, StoreError, Summary, pid,
+    Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropBag, PropValue, Recovery, StoreError, Summary, pid,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -33,6 +35,22 @@ const TYPE_LTP: u32 = 0x1F;
 
 /// Subnodes are copied this deep; a message attached to a message goes two levels down.
 const MAX_COPY_DEPTH: usize = 40;
+#[cfg(test)]
+thread_local! {
+    /// Tables a test has the next save write (node, columns, rows) in place of what the file
+    /// has there: what another program keeps and our own writer never makes.
+    pub(crate) static TABLES: std::cell::RefCell<Vec<(u32, Vec<(u16, u16)>, Vec<Row>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What says where an attachment is and how large, not what it is: its place in the list and
+/// its size are worked out when it is written.
+const PLACED: [u16; 3] = [pid::ATTACH_NUM, pid::ATTACH_SIZE, pid::ATTACH_DATA];
+
+/// An attachment's properties without those that only say where it is.
+fn settled(props: &PropBag) -> Vec<(u16, &PropValue)> {
+    props.iter().filter(|(id, _)| !PLACED.contains(id)).collect()
+}
+
 /// Messages taken out of a folder are remembered this many at a time, so that one put into
 /// another folder is the same message still.
 const MAX_LIMBO: usize = 32;
@@ -584,11 +602,19 @@ impl PstStore {
         for nid in &dead {
             tables.insert(edits.and_then(|e| e.was.get(nid)).and_then(|w| w.parent).unwrap_or(root));
         }
-        let put_ids: HashSet<u32> = put.iter().map(|p| p.0).collect();
+        #[allow(unused_mut)]
+        let mut put_ids: HashSet<u32> = put.iter().map(|p| p.0).collect();
+        #[cfg(test)]
+        for (nid, columns, rows) in TABLES.take() {
+            o.tc_node(nid, &columns, &rows)?;
+            put_ids.insert(nid);
+        }
 
         // What a changed or new message shows in its folder's table: its short values, and
         // the properties it no longer has.
         let mut shown: HashMap<u32, (Vec<Raw>, Vec<u16>)> = HashMap::new();
+        // Search folders' tables wait until every changed message has been written.
+        let mut searches = Vec::new();
         let mut nids: Vec<u32> = self.ndb.nbt.keys().copied().collect();
         nids.sort_unstable();
         for nid in nids {
@@ -633,11 +659,17 @@ impl PstStore {
                     o.w.node(nid, parent_of(f), data, sub);
                     continue;
                 }
-                if ty == TYPE_SEARCH_CONTENTS && !gone.is_empty() && self.without_rows(&mut o, nid, e, &gone)? {
+                if ty == TYPE_SEARCH_CONTENTS {
+                    searches.push((nid, e));
                     continue;
                 }
             }
             self.copy_node(&mut o, nid, e.parent, e, &mut budget)?;
+        }
+        for (nid, e) in searches {
+            if !self.search_table(&mut o, nid, e, &gone, &shown)? {
+                self.copy_node(&mut o, nid, e.parent, e, &mut budget)?;
+            }
         }
         for (nid, parent, props) in &put {
             o.pc_node(*nid, *parent, props)?;
@@ -735,7 +767,7 @@ impl PstStore {
 
     /// A table's columns and rows, the table's own bookkeeping left out; `None` when the
     /// file has no such table or it cannot be read.
-    fn table_of(&mut self, nid: u32) -> Option<(Vec<(u16, u16)>, Vec<Row>)> {
+    pub(crate) fn table_of(&mut self, nid: u32) -> Option<(Vec<(u16, u16)>, Vec<Row>)> {
         let e = self.ndb.nbt.get(&nid).copied()?;
         let subs = self.ndb.subnodes(e.sub).ok()?;
         let (mut columns, mut rows) = ltp::read_table(&mut self.ndb, e.data, &subs).ok()?;
@@ -747,14 +779,33 @@ impl PstStore {
         Some((columns, rows))
     }
 
-    /// Write a search folder's table without the rows of messages that are gone; false when
-    /// it has none of them (or cannot be read) and is to be copied as it is.
-    fn without_rows<W: Read + Write + Seek>(&mut self, o: &mut Out<W>, nid: u32, e: NbtEntry, gone: &HashSet<u32>) -> Result<bool, PstError> {
+    /// Write a search folder's table ([MS-PST] 2.4.8.6.2) with what changed: without the rows
+    /// of messages that are gone, and with the rows of changed messages showing what those
+    /// have now, as their folders' tables do. False when it has no row of either kind (or
+    /// cannot be read) and is to be copied as it is.
+    fn search_table<W: Read + Write + Seek>(
+        &mut self,
+        o: &mut Out<W>,
+        nid: u32,
+        e: NbtEntry,
+        gone: &HashSet<u32>,
+        shown: &HashMap<u32, (Vec<Raw>, Vec<u16>)>,
+    ) -> Result<bool, PstError> {
+        if gone.is_empty() && shown.is_empty() {
+            return Ok(false);
+        }
         let Some((columns, mut rows)) = self.table_of(nid) else { return Ok(false) };
-        if !rows.iter().any(|r| gone.contains(&r.id)) {
+        if !rows.iter().any(|r| gone.contains(&r.id) || shown.contains_key(&r.id)) {
             return Ok(false);
         }
         rows.retain(|r| !gone.contains(&r.id));
+        for row in &mut rows {
+            let Some((now, removed)) = shown.get(&row.id) else { continue };
+            let mut cells: BTreeMap<u16, Raw> =
+                std::mem::take(&mut row.cells).into_iter().filter(|c| !removed.contains(&c.id)).map(|c| (c.id, c)).collect();
+            cells.extend(now.iter().filter(|r| columns.iter().any(|(id, ty)| *id == r.id && *ty == r.ty)).map(|r| (r.id, copy(r))));
+            row.cells = cells.into_values().collect();
+        }
         let mut subs = Subs::new(1);
         let data = crate::ltp_write::write_tc(&mut o.w, &columns, &rows, &mut subs)?;
         let sub = o.w.subnodes(subs.list)?;
@@ -807,6 +858,99 @@ impl PstStore {
             subs.remove(&nid);
         }
         Ok((props.into_iter().map(|r| (r.id, r)).collect(), subs))
+    }
+
+    /// The attachments of a changed message, as subnodes, and its attachment table. An
+    /// attachment the file already holds stays in the subnode it has, with every property
+    /// stored on it: only what the model says differently is changed. `kept` loses the
+    /// attachments and the table the file had.
+    fn changed_attachments<W: Read + Write + Seek>(
+        &mut self,
+        o: &mut Out<W>,
+        e: NbtEntry,
+        new: &Item,
+        kept: &mut Subnodes,
+        budget: &mut usize,
+    ) -> Result<Vec<Sub>, PstError> {
+        let subs = self.ndb.subnodes(e.sub)?;
+        let cp = code_page(&ltp::read_pc(&mut self.ndb, e.data, &subs)?);
+        let mut stored: Vec<Option<(u32, Attachment)>> = self.attachments(&subs, cp, 0).into_iter().map(Some).collect();
+        kept.remove(&NID_ATTACHMENT_TABLE);
+        kept.retain(|nid, _| nid & 0x1F != TYPE_ATTACHMENT);
+        // Which stored attachment each one is: first those that are the same but for their
+        // place in the list, then those with the same contents and other properties (a new
+        // name, say). Contents are what tells attachments apart; without any, none is matched.
+        let holds = |a: &Attachment, b: &Attachment| a.data == b.data && a.embedded == b.embedded;
+        let same = |a: &Attachment, b: &Attachment| holds(a, b) && settled(&a.props) == settled(&b.props);
+        let mut was: Vec<Option<(u32, Attachment)>> = new.attachments.iter().map(|_| None).collect();
+        for exact in [true, false] {
+            for (a, slot) in new.attachments.iter().zip(was.iter_mut()).filter(|(_, slot)| slot.is_none()) {
+                let fits = |b: &Attachment| if exact { same(a, b) } else { holds(a, b) && (!a.data.is_empty() || a.embedded.is_some()) };
+                *slot = stored.iter_mut().find(|s| s.as_ref().is_some_and(|(_, b)| fits(b))).and_then(Option::take);
+            }
+        }
+        // New attachments get subnode ids past every one the file had.
+        let mut next = subs.keys().filter(|nid| *nid & 0x1F == TYPE_ATTACHMENT).map(|nid| nid >> 5).max().unwrap_or(0).max(0x400);
+        let mut list = Vec::new();
+        let mut rows = Vec::with_capacity(new.attachments.len());
+        for (i, (a, was)) in new.attachments.iter().zip(was).enumerate() {
+            let at = was.and_then(|(nid, b)| Some((nid, *subs.get(&nid)?, b)));
+            let merged = match at {
+                Some((nid, (data, sub), b)) => self.merged_attachment(o, data, sub, &b, a, i, budget).ok().map(|m| (nid, m)),
+                None => None,
+            };
+            let (nid, (data, sub, cells)) = match merged {
+                Some(m) => m,
+                None => {
+                    next = next.checked_add(1).filter(|n| *n <= MAX_INDEX).ok_or_else(|| cannot("that many attachments"))?;
+                    (next << 5 | TYPE_ATTACHMENT, o.attachment(a, i, 0)?)
+                }
+            };
+            list.push(Sub { nid, data, sub });
+            rows.push(Row { id: nid, cells });
+        }
+        if !rows.is_empty() {
+            list.push(o.attachment_table(&rows)?);
+        }
+        Ok(list)
+    }
+
+    /// A stored attachment with what the model now says of it: its data and subnodes, and the
+    /// cells of its row. Its contents are the same, so they stay as they are stored.
+    #[allow(clippy::too_many_arguments)]
+    fn merged_attachment<W: Read + Write + Seek>(
+        &mut self,
+        o: &mut Out<W>,
+        data: u64,
+        sub: u64,
+        old: &Attachment,
+        new: &Attachment,
+        index: usize,
+        budget: &mut usize,
+    ) -> Result<(u64, u64, Vec<Raw>), PstError> {
+        let (mut props, kept) = self.open_pc(NbtEntry { data, sub, parent: 0 })?;
+        let ids: HashSet<u16> = old
+            .props
+            .iter()
+            .chain(new.props.iter())
+            .map(|(id, _)| id)
+            .filter(|id| *id < 0x8000 && !PLACED.contains(id) && !LTP_INTERNAL.contains(id))
+            .collect();
+        for id in ids {
+            match (old.props.get(id), new.props.get(id)) {
+                (was, Some(now)) if was != Some(now) => {
+                    props.insert(id, encode(id, now));
+                }
+                (Some(_), None) => {
+                    props.remove(&id);
+                }
+                _ => {}
+            }
+        }
+        props.insert(pid::ATTACH_NUM, int(pid::ATTACH_NUM, i32::try_from(index).unwrap_or(i32::MAX)));
+        let cells = attachment_cells(&props);
+        let (data, sub) = self.close_pc(o, props, &kept, Vec::new(), budget)?;
+        Ok((data, sub, cells))
     }
 
     /// Write properties as a node's data and subnodes: `kept` are copied from the file as they
@@ -887,9 +1031,7 @@ impl PstStore {
             more.push(o.recipients(new)?);
         }
         if old.attachments != new.attachments {
-            kept.remove(&NID_ATTACHMENT_TABLE);
-            kept.retain(|nid, _| nid & 0x1F != TYPE_ATTACHMENT);
-            more.extend(o.attachments(new, 0)?);
+            more.extend(self.changed_attachments(o, e, new, &mut kept, budget)?);
             let has = !new.attachments.is_empty();
             let flags = if has { new.flags() | MSGFLAG_HASATTACH } else { new.flags() & !MSGFLAG_HASATTACH };
             props.insert(pid::MESSAGE_FLAGS, int(pid::MESSAGE_FLAGS, flags));

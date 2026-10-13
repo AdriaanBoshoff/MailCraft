@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 62 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 63 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 274, all passing |
+| Tests | 276, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -97,7 +97,8 @@
 46. Done: a line that is typed (the search box, a folder's new name, the address and subject lines, a page's head and foot) is seen in the order it is read while it is typed, with the cursor, the selection and a click where the text is seen (M3b.8).
 47. Done: what was left of a paragraph written from the right: tab stops and their leaders are counted from the right, a border's own indent is at the right, text stands beside a picture on the right side of it, the columns of a table written from the right start at the right, and `<bdo>`, `<bdi>`, `dir` on a piece of a line and `unicode-bidi` say which way their text runs, on screen and in print (M3b.9).
 48. Done: text copied out of our PDFs was tried in a reader (xpdf's `pdftotext` 4.06) and what it found was put right: text written from the right is given as it is seen, as readers expect it, and only glyphs that are not one letter each say what they stand for (M3b.10).
-49. Next: M3b.11: the rest of the M3b list (a save that does not write the whole file again and does not hold the window; what is not understood on an attachment kept; the cells of a changed message in search-folder tables).
+49. Done: when a message's list of attachments changes, each attachment the file already holds keeps what is stored on it; a search folder's table shows a changed message as it is now (M3b.11).
+50. Next: M3b.12: a save that does not write the whole file again and does not hold the window, with progress shown.
 
 ## Do later (from M2)
 
@@ -132,9 +133,11 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
 | ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
 | Unsaved changes saved on their own after a while (waits for the writer to be proved in Outlook: nothing writes a data file unasked until then) | when the owner says so, with the Outlook check |
-| A save that does not rewrite the whole data file; saving off the UI thread, with progress | M3b |
-| Unknown properties of an attachment kept when a message's attachments change (the list is rewritten from the model then) | M3b |
-| The cells of a changed message in search-folder tables (rows of deleted messages are taken out; changed ones keep their old cells) | M3b |
+| A save that does not rewrite the whole data file; saving off the UI thread, with progress | M3b.12 |
+| ~~Unknown properties of an attachment kept when a message's attachments change~~ | done: M3b.11 |
+| Unknown properties of an attachment whose contents were changed too (nothing tells it from a new one), and stored attachments that cannot be read (left out when the list changes) | M3b |
+| ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
+| Working out again which search folders a changed message belongs to (its rows are brought up to date; a row is not added or taken away) | M5 |
 | Changes to an ANSI `.pst` and a 4K-page file kept; an `.ost` stays read-only for good (it is a server's copy) | M3b, with writing those kinds |
 | The node-id counters of a file's header carried into the rewritten file | M3b |
 | A choice not to keep the file as it was beside a data file on its first save | M3b |
@@ -922,3 +925,26 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   Latin line moves to its other side. Its `-raw` mode gives right-to-left text as it is
   seen, as it does for any PDF. No other reader was tried (none here gives its text to a
   script, and windows are not driven with keystrokes on this machine).
+- **2026-10-13** - M3b.11: what is stored on an attachment is kept, and search folders show a changed
+  message as it is now. Until now, adding, removing or moving one attachment of a stored
+  message wrote every attachment again from the model, so anything stored on them that the
+  model has no place for (a property under a name of another program's, a value of a kind
+  not understood) was dropped from all of them. Now each attachment in the new list is
+  matched with the one the file holds: first those that are the same but for their place,
+  then those with the same contents and other properties. A matched attachment stays in
+  the subnode it has, every stored property with it; only what the model says differently
+  is written over, and its number in the list is set. Only an attachment that is truly new
+  is written from the model, under an id past every one the file had. An attachment whose
+  stored form cannot be opened is written from the model, as before. Made better on the
+  way: a renamed attachment keeps what was stored on it too, and so does a message attached
+  to a message, which stays in the file as it was stored and is not written again. Search
+  folders: their tables were only cleared of deleted messages; the row of a changed message
+  kept saying what the message said before. Now such a row is brought up to date the way
+  the folder's own table is: what the message has now under the columns the table has,
+  less what the message lost, and what only the table knows left alone. A table none of
+  whose rows changed still goes across block for block. This is also the first test that a
+  search folder's rows survive a save at all: our writer makes no search folder with rows,
+  so the test writes one as another program would. Not done: the list of search folders a
+  message belongs to is not worked out again (a message changed so that it no longer fits
+  a search stays in that search's table until the program that made it looks again), and
+  the third item of this task, a save that does not write the whole file, is M3b.12.
