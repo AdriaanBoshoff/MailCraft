@@ -243,6 +243,8 @@ pub struct Session {
     pub page_setup: openmailclient_layout::Setup,
     /// What is printed: the open message, or the folder's list. `file.pageSetup` changes it.
     pub print_style: print::Style,
+    /// What Table Style prints of a list: its columns, its headings, which rows.
+    pub print_list: print::Listing,
     /// A folder of the program's own where the journal of a data file's unsaved changes is
     /// kept when it cannot be kept beside the file. Set by the host; `None` keeps none there.
     pub journal_dir: Option<std::path::PathBuf>,
@@ -285,6 +287,7 @@ impl Session {
             page_setup: openmailclient_layout::Setup::default(),
             journal_dir: None,
             print_style: print::Style::default(),
+            print_list: print::Listing::default(),
         }
     }
 

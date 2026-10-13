@@ -915,7 +915,8 @@ fn a_list_is_a_table_whose_names_stand_on_every_page() {
         Column { name: "Subject", share: 50, right: false },
         Column { name: "Size", share: 20, right: true },
     ];
-    let rows: Vec<Row> = (0..40).map(|n| Row { cells: vec![format!("who{n}"), format!("about{n}"), format!("{n}")], bold: n == 3 }).collect();
+    let rows: Vec<Row> =
+        (0..40).map(|n| Row { cells: vec![format!("who{n}"), format!("about{n}"), format!("{n}")], bold: n == 3, heading: false }).collect();
     let listed = Listed { owner: "Owner", title: "Inbox", note: "40 items", columns: &columns, rows: &rows };
     let printed = list_on(&listed, SMALL).unwrap();
     within(&printed, SMALL);
@@ -967,15 +968,64 @@ fn a_list_is_a_table_whose_names_stand_on_every_page() {
 }
 
 #[test]
+fn a_heading_in_a_list_stands_across_every_column() {
+    let columns = [
+        Column { name: "From", share: 30, right: false },
+        Column { name: "Subject", share: 50, right: false },
+        Column { name: "Size", share: 20, right: true },
+    ];
+    let mut rows: Vec<Row> = Vec::new();
+    for n in 0..12 {
+        if n % 4 == 0 {
+            // More texts than the first are not printed in a heading; none is an empty one.
+            rows.push(Row {
+                cells: vec![format!("group{n} has a name longer than the first column is wide"), "not this".into()],
+                bold: false,
+                heading: true,
+            });
+        }
+        rows.push(Row { cells: vec![format!("who{n}"), format!("about{n}"), format!("{n}")], bold: false, heading: false });
+    }
+    rows.push(Row { cells: Vec::new(), bold: false, heading: true });
+    let listed = Listed { owner: "Owner", title: "Inbox", note: "", columns: &columns, rows: &rows };
+    let printed = list_on(&listed, Paper::A4).unwrap();
+    within(&printed, Paper::A4);
+    let page = &printed.pages[0];
+    let text = page.text();
+    let lines: Vec<&str> = text.lines().collect();
+    // Each heading is a line of its own, whole, before the rows of its group.
+    let at = |want: &str| lines.iter().position(|l| *l == want).unwrap_or_else(|| panic!("{want} in {text}"));
+    for n in [0, 4, 8] {
+        let head = at(&format!("group{n} has a name longer than the first column is wide"));
+        assert_eq!(lines[head + 1], format!("who{n}about{n}{n}"), "{text}");
+    }
+    assert!(!text.contains("not this"));
+    // It is bold, begins where the first column does, and has a fill behind it as wide as
+    // the table: the rows have none.
+    let head = page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>().starts_with("group4")).unwrap();
+    let who = page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>().starts_with("who4")).unwrap();
+    assert!(head.bold && !who.bold && (head.x - who.x).abs() < 0.01);
+    let fills: Vec<_> = page.fills.iter().filter(|f| f.color == [238, 238, 238]).collect();
+    assert_eq!(fills.len(), 4, "three groups and the empty heading");
+    let room = Paper::A4.width - 2.0 * 36.0;
+    assert!(
+        fills.iter().all(|f| f.width > room * 0.9 && f.y < head.y + 40.0 || f.width > room * 0.9),
+        "{:?}",
+        fills.iter().map(|f| f.width).collect::<Vec<_>>()
+    );
+    assert!(fills.iter().any(|f| f.y <= head.y && head.y <= f.y + f.height));
+}
+
+#[test]
 fn hostile_lists_are_printed_within_the_limits() {
     let wide: Vec<Column> = (0..40).map(|_| Column { name: "N", share: 255, right: true }).collect();
     let none: [Column; 0] = [];
     let zero = [Column { name: "", share: 0, right: false }];
     let long = "x".repeat(100_000);
     let rows = vec![
-        Row { cells: Vec::new(), bold: true },
-        Row { cells: vec![long.clone(); 50], bold: false },
-        Row { cells: vec!["\u{0}\u{7}\n\t".into(), "a b c".into()], bold: false },
+        Row { cells: Vec::new(), bold: true, heading: false },
+        Row { cells: vec![long.clone(); 50], bold: false, heading: false },
+        Row { cells: vec!["\u{0}\u{7}\n\t".into(), "a b c".into()], bold: false, heading: false },
     ];
     for columns in [&wide[..], &none[..], &zero[..]] {
         let printed = list_on(&Listed { owner: &long, title: &long, note: "\n", columns, rows: &rows }, SMALL).unwrap();
@@ -986,7 +1036,7 @@ fn hostile_lists_are_printed_within_the_limits() {
         assert!(glyphs <= 12 * 300 * 2 + 400, "{glyphs}");
     }
     // More rows than may be printed: the list says so and stops.
-    let many: Vec<Row> = (0..MAX_ROWS + 5).map(|n| Row { cells: vec![format!("{n}")], bold: false }).collect();
+    let many: Vec<Row> = (0..MAX_ROWS + 5).map(|n| Row { cells: vec![format!("{n}")], bold: false, heading: false }).collect();
     let columns = [Column { name: "N", share: 100, right: false }];
     let printed = list_on(&Listed { owner: "Owner", title: "Inbox", note: "", columns: &columns, rows: &many }, Paper::A4).unwrap();
     assert!(printed.truncated);

@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 63 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 64 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -42,7 +42,7 @@
    (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
-   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), the view's own columns and group headings in Table Style (`"style": "table"` prints the list with fixed columns), other print styles, sending pages to a printer,
+   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -79,6 +79,7 @@
 
 ## Revision history
 
+- 64 · 2026-10-13 — M3b.22: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom.
 - 63 · 2026-10-13 — M3b.21: ANSI data files are written (`file.export` with `"kind": "ansi"`), take changes and stay ANSI when saved; 4K-page files stay read-only.
 - 62 · 2026-10-13 — M3b.20: the structure check covers ANSI files (from the specification) and 4K-page files (from measurement); three local Outlook-written 4K-page files pass it.
 - 61 · 2026-10-13 — M3b.19: `file.export` with `"wait": false` runs on a thread of its own for every kind of mailbox, the writing from what is read included.

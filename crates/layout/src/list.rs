@@ -30,6 +30,8 @@ pub struct Row {
     pub cells: Vec<String>,
     /// Printed in bold, as a message not yet read is listed.
     pub bold: bool,
+    /// A heading over the rows that follow: its first text alone, across every column.
+    pub heading: bool,
 }
 
 /// A folder's list to print.
@@ -86,6 +88,20 @@ pub fn list(list: &Listed, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result
         let mut rows: Vec<Vec<Cell>> = Vec::with_capacity(list.rows.len().min(MAX_ROWS).saturating_add(1));
         rows.push(columns.iter().enumerate().map(|(n, column)| cell(column.name, true, column, share(n), dark)).collect());
         for row in list.rows.iter().take(MAX_ROWS) {
+            if row.heading {
+                let short: String = row.cells.first().map_or("", String::as_str).chars().take(MAX_CELL_CHARS).collect();
+                rows.push(vec![Cell {
+                    blocks: vec![Block::Para(text(&short, true, None))],
+                    span: u16::try_from(columns.len()).unwrap_or(1),
+                    rows: 1,
+                    share: 100,
+                    padding: Some((4, 3)),
+                    background: Some([238, 238, 238]),
+                    edges: Some([Edge::default(), Edge::default(), light, Edge::default()]),
+                    ..Cell::default()
+                }]);
+                continue;
+            }
             rows.push(
                 columns
                     .iter()

@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 17 · 2026-10-13 · side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 18 · 2026-10-13 · the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -105,7 +105,7 @@ owner's name over a line, field names in bold beside their values, the body, a p
 foot) is laid out from general knowledge of the style, and its measures are our own. File > Print
 and Ctrl+P open a print window: the page as it will be printed beside the paper, direction, margins,
 header and footer; its button asks for a PDF file to write. It prints the open message (Memo Style) or the
-folder's list (Table Style, with columns of our own choosing). The window's arrangement is our own;
+folder's list (Table Style, with columns that are chosen, group headings and the selected row alone; the page is shown whole or at 25 to 400 hundredths of its size). The window's arrangement is our own;
 Outlook's print pane was not observed.
 
 ## Behaviour seen
@@ -123,6 +123,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 18 · 2026-10-13 — the print window: a zoom, and Table Style's columns, group headings and rows (M3b.22).
 - 17 · 2026-10-13 — the status bar shows an export that is running, as it does a save (M3b.14).
 - 16 · 2026-10-13 — the status bar shows a save that is running, and stops it (M3b.12).
 - 15 · 2026-10-12 — in a paragraph written from the right, tab leaders, a border's indent, text beside a picture and table columns are counted from the right; `<bdo>`, `<bdi>` and `unicode-bidi` are read (M3b.9); not compared with Outlook.

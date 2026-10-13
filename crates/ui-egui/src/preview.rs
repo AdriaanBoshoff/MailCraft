@@ -4,7 +4,7 @@
 //! holds. Every control runs `file.pageSetup`; printing itself is asked of the host.
 
 use egui::{Align2, Color32, ColorImage, Key, Rect, Sense, TextureHandle, TextureOptions, pos2, vec2};
-use openmailclient_engine::print::{self, Laid, Links, Style};
+use openmailclient_engine::print::{self, Field, Laid, Links, Listing, Rows, Style};
 use openmailclient_layout::{MM, Paper, Setup};
 use openmailclient_model::FolderId;
 use serde_json::{Value, json};
@@ -15,6 +15,10 @@ use crate::{MailUi, UiRequest, bold, font};
 const ROOM: egui::Vec2 = vec2(470.0, 610.0);
 /// The widest a page is drawn, in pixels.
 const MAX_PIXELS: f32 = 2400.0;
+/// The sizes a page is stepped through, in hundredths of its size on paper, and the screen's
+/// points to a point of the page at 100.
+const ZOOMS: [f32; 8] = [25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 400.0];
+const ACTUAL: f32 = 96.0 / 72.0;
 
 /// The print window while it is open.
 #[derive(Default)]
@@ -28,18 +32,45 @@ pub(crate) struct Preview {
     pub laid: Option<Result<Laid, String>>,
     /// The drawn page, with which page it is and how many pixels wide.
     shown: Option<(TextureHandle, usize, usize)>,
+    /// How large the page is shown, in hundredths of its size on paper; `None` is as large
+    /// as the room lets the whole page be.
+    pub zoom: Option<f32>,
+    /// What that came to when the page was last drawn to fit, in the same measure.
+    fit: f32,
 }
 
-type Of = (Option<u64>, Option<(usize, FolderId)>, (usize, usize), Style, Setup);
+type Of = (Option<u64>, Option<(usize, FolderId)>, (usize, usize), Style, Setup, Listing);
 
 impl Preview {
-    /// The window opened at `page`.
-    pub(crate) fn at(page: usize) -> Self {
-        Self { page, ..Self::default() }
+    /// Show the page at the size `asked`: "fit", "in" or "out" for a step, or hundredths of
+    /// its size on paper, 25 to 400.
+    pub(crate) fn zoom_to(&mut self, asked: &Value) -> Result<(), String> {
+        let (least, most) = (ZOOMS[0], ZOOMS[ZOOMS.len() - 1]);
+        let now = self.zoom.unwrap_or(if self.fit > 0.0 { self.fit } else { 100.0 });
+        let bad = || format!("\"zoom\" is \"fit\", \"in\", \"out\" or a number from {least} to {most}");
+        self.zoom = match asked {
+            Value::String(name) => match name.trim().to_ascii_lowercase().as_str() {
+                "fit" => None,
+                "in" => Some(ZOOMS.iter().copied().find(|z| *z > now + 0.5).unwrap_or(most)),
+                "out" => Some(ZOOMS.iter().rev().copied().find(|z| *z < now - 0.5).unwrap_or(least)),
+                _ => return Err(bad()),
+            },
+            Value::Number(n) => Some(n.as_f64().filter(|z| (f64::from(least)..=f64::from(most)).contains(z)).ok_or_else(bad)? as f32),
+            _ => return Err(bad()),
+        };
+        Ok(())
     }
 
     pub(crate) fn pages(&self) -> usize {
         self.laid.as_ref().and_then(|laid| laid.as_ref().ok()).map_or(0, |laid| laid.printed.pages.len())
+    }
+}
+
+fn field_label(field: Field) -> &'static str {
+    match field {
+        Field::Who => "From, or To in outgoing mail",
+        Field::Date => "Date",
+        other => other.label(false),
     }
 }
 
@@ -67,7 +98,8 @@ impl MailUi {
         let t = self.tokens.clone();
         let style = self.session.print_style;
         let listed = (self.session.rows.len(), self.session.rows.iter().filter(|row| !row.read).count());
-        let of = (self.session.selected, self.session.current, listed, style, self.session.page_setup.clone());
+        let listing = self.session.print_list.clone();
+        let of = (self.session.selected, self.session.current, listed, style, self.session.page_setup.clone(), listing.clone());
         if pv.of.as_ref() != Some(&of) {
             pv.of = Some(of);
             pv.laid = None;
@@ -75,7 +107,7 @@ impl MailUi {
         }
         if pv.laid.is_none() {
             let s = &self.session;
-            pv.laid = Some(print::laid_as(s, style, &s.page_setup, Links::default()).map_err(|e| e.to_string()));
+            pv.laid = Some(print::laid_as(s, style, &s.page_setup, &s.print_list, Links::default()).map_err(|e| e.to_string()));
         }
         let pages = pv.pages();
         pv.page = pv.page.min(pages.saturating_sub(1));
@@ -98,6 +130,38 @@ impl MailUi {
                             }
                         }
                     });
+                    if style == Style::Table {
+                        ui.horizontal(|ui| {
+                            for (label, rows) in [("All rows", Rows::All), ("Selected row", Rows::Selected)] {
+                                if ui.selectable_label(listing.rows == rows, label).clicked() && listing.rows != rows {
+                                    changes.push(json!({ "rows": rows.name() }));
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let mut groups = listing.groups;
+                            if ui.checkbox(&mut groups, "Group headings").changed() {
+                                changes.push(json!({ "groups": groups }));
+                            }
+                            ui.menu_button("Columns", |ui| {
+                                for field in Field::ALL {
+                                    let mut on = listing.columns.contains(&field);
+                                    if ui.checkbox(&mut on, field_label(field)).changed() {
+                                        let mut columns = listing.columns.clone();
+                                        if on {
+                                            columns.push(field);
+                                        } else {
+                                            columns.retain(|f| *f != field);
+                                        }
+                                        // The last column stays: a table has one at least.
+                                        if !columns.is_empty() {
+                                            changes.push(json!({ "columns": columns.iter().map(|f| f.name()).collect::<Vec<_>>() }));
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                    }
                     ui.add_space(6.0);
                     ui.add(dim("Paper"));
                     let now = setup.paper.name().unwrap_or("");
@@ -157,7 +221,8 @@ impl MailUi {
                         .wrap(),
                     );
                     ui.add_space(6.0);
-                    if ui.add_enabled(setup != Setup::default() || style != Style::default(), egui::Button::new("Defaults")).clicked() {
+                    let changed = setup != Setup::default() || style != Style::default() || listing != Listing::default();
+                    if ui.add_enabled(changed, egui::Button::new("Defaults")).clicked() {
                         changes.push(json!({ "reset": true }));
                     }
                     ui.add_space(14.0);
@@ -173,26 +238,52 @@ impl MailUi {
                 });
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
-                    let (room, _) = ui.allocate_exact_size(ROOM, Sense::hover());
+                    let (room, over) = ui.allocate_exact_size(ROOM, Sense::hover());
                     ui.painter().rect_filled(room, 2.0, t.pane);
+                    // Ctrl and the wheel, or a pinch, over the page makes it larger or smaller.
+                    let pinch = ui.input(|i| i.zoom_delta());
+                    if over.hovered() && (pinch - 1.0).abs() > 0.001 && pinch.is_finite() {
+                        let now = pv.zoom.unwrap_or(if pv.fit > 0.0 { pv.fit } else { 100.0 });
+                        pv.zoom = Some((now * pinch).clamp(ZOOMS[0], ZOOMS[ZOOMS.len() - 1]));
+                    }
                     match pv.laid.as_ref() {
                         Some(Ok(laid)) => {
                             if let Some(page) = laid.printed.pages.get(pv.page) {
                                 // The page as large as the room lets it be, a little in from its edges.
                                 let fit = ((room.width() - 24.0) / page.width.max(1.0)).min((room.height() - 24.0) / page.height.max(1.0));
-                                let size = vec2(page.width * fit, page.height * fit);
-                                let sheet = Rect::from_center_size(room.center(), size);
-                                let pixels = (size.x * ui.ctx().pixels_per_point()).clamp(16.0, MAX_PIXELS).round() as usize;
+                                pv.fit = fit / ACTUAL * 100.0;
+                                let scale = pv.zoom.map_or(fit, |zoom| zoom / 100.0 * ACTUAL);
+                                let size = vec2(page.width * scale, page.height * scale);
+                                // No wider or taller than a picture may be here: a larger one
+                                // is refused by what draws it. It is stretched to its place.
+                                let side = (ui.ctx().input(|i| i.max_texture_side) as f32 - 2.0).max(16.0);
+                                let widest = MAX_PIXELS.min(side).min(side * page.width / page.height.max(1.0)).max(16.0);
+                                let pixels = (size.x * ui.ctx().pixels_per_point()).clamp(16.0, widest).floor() as usize;
                                 if !pv.shown.as_ref().is_some_and(|(_, page, wide)| *page == pv.page && *wide == pixels) {
-                                    pv.shown = print::raster(laid, pv.page, pixels as f32 / page.width.max(1.0)).map(|image| {
+                                    let drawn = print::raster(laid, pv.page, pixels as f32 / page.width.max(1.0));
+                                    pv.shown = drawn.filter(|image| image.width.max(image.height) as f32 <= side + 2.0).map(|image| {
                                         let picture = ColorImage::from_rgb([image.width, image.height], &image.rgb);
                                         (ui.ctx().load_texture("print-preview", picture, TextureOptions::LINEAR), pv.page, pixels)
                                     });
                                 }
-                                ui.painter().rect_filled(sheet.translate(vec2(2.0, 2.0)), 0.0, Color32::from_black_alpha(40));
-                                ui.painter().rect_filled(sheet, 0.0, Color32::WHITE);
-                                if let Some((texture, ..)) = &pv.shown {
-                                    ui.painter().image(texture.id(), sheet, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                                let texture = pv.shown.as_ref().map(|(texture, ..)| texture.id());
+                                let draw = |ui: &egui::Ui, sheet: Rect| {
+                                    ui.painter().rect_filled(sheet.translate(vec2(2.0, 2.0)), 0.0, Color32::from_black_alpha(40));
+                                    ui.painter().rect_filled(sheet, 0.0, Color32::WHITE);
+                                    if let Some(texture) = texture {
+                                        ui.painter().image(texture, sheet, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                                    }
+                                };
+                                if size.x <= room.width() - 24.0 && size.y <= room.height() - 24.0 {
+                                    draw(ui, Rect::from_center_size(room.center(), size));
+                                } else {
+                                    // Larger than the room: the page is moved about under it.
+                                    ui.scope_builder(egui::UiBuilder::new().max_rect(room), |ui| {
+                                        egui::ScrollArea::both().id_salt("print-page").auto_shrink(false).show(ui, |ui| {
+                                            let (all, _) = ui.allocate_exact_size(size + vec2(24.0, 24.0), Sense::hover());
+                                            draw(ui, Rect::from_center_size(all.center(), size));
+                                        });
+                                    });
                                 }
                             }
                         }
@@ -211,6 +302,18 @@ impl MailUi {
                         }
                         if pages > 0 {
                             ui.add(dim(&format!("Page {} of {pages}", pv.page + 1)));
+                            ui.add_space(10.0);
+                            let now = pv.zoom.unwrap_or(pv.fit);
+                            if ui.add_enabled(now > ZOOMS[0] + 0.5, egui::Button::new("-")).on_hover_text("Smaller").clicked() {
+                                let _ = pv.zoom_to(&json!("out"));
+                            }
+                            ui.add(dim(&format!("{}%", now.round())));
+                            if ui.add_enabled(now < ZOOMS[ZOOMS.len() - 1] - 0.5, egui::Button::new("+")).on_hover_text("Larger").clicked() {
+                                let _ = pv.zoom_to(&json!("in"));
+                            }
+                            if ui.add_enabled(pv.zoom.is_some(), egui::Button::new("Whole page")).clicked() {
+                                pv.zoom = None;
+                            }
                         }
                         if pv.laid.as_ref().is_some_and(|laid| laid.as_ref().is_ok_and(|laid| laid.printed.truncated)) {
                             ui.add(egui::Label::new(

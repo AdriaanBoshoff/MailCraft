@@ -92,6 +92,237 @@ pub fn style_with(now: Style, p: &Value) -> Result<Style, EngineError> {
     }
 }
 
+/// A column of Table Style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// Who the message is from, or in a folder of outgoing mail who it is to.
+    Who,
+    From,
+    To,
+    Subject,
+    /// When it was received or sent.
+    Date,
+    Size,
+    /// High importance, an attachment, a flag: in words.
+    Notes,
+    Categories,
+    Importance,
+    Flag,
+    Attachment,
+    /// The first words of the body.
+    Preview,
+}
+
+impl Field {
+    pub const ALL: [Field; 12] = [
+        Self::Who,
+        Self::From,
+        Self::To,
+        Self::Subject,
+        Self::Date,
+        Self::Size,
+        Self::Notes,
+        Self::Categories,
+        Self::Importance,
+        Self::Flag,
+        Self::Attachment,
+        Self::Preview,
+    ];
+
+    /// By name, in any letter case; "received" and "sent" are the date.
+    pub fn named(name: &str) -> Option<Field> {
+        let name = name.trim().to_ascii_lowercase();
+        match name.as_str() {
+            "received" | "sent" => Some(Self::Date),
+            "attachments" => Some(Self::Attachment),
+            name => Self::ALL.into_iter().find(|f| f.name() == name),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Who => "who",
+            Self::From => "from",
+            Self::To => "to",
+            Self::Subject => "subject",
+            Self::Date => "date",
+            Self::Size => "size",
+            Self::Notes => "notes",
+            Self::Categories => "categories",
+            Self::Importance => "importance",
+            Self::Flag => "flag",
+            Self::Attachment => "attachment",
+            Self::Preview => "preview",
+        }
+    }
+
+    /// What heads the column; `outgoing` in a folder of mail that was or will be sent.
+    pub fn label(self, outgoing: bool) -> &'static str {
+        match self {
+            Self::Who if outgoing => "To",
+            Self::Who | Self::From => "From",
+            Self::To => "To",
+            Self::Subject => "Subject",
+            Self::Date if outgoing => "Sent",
+            Self::Date => "Received",
+            Self::Size => "Size",
+            Self::Notes => "Notes",
+            Self::Categories => "Categories",
+            Self::Importance => "Importance",
+            Self::Flag => "Flag",
+            Self::Attachment => "Attachment",
+            Self::Preview => "Preview",
+        }
+    }
+
+    /// Its part of the page beside the others, before they are fitted to it.
+    fn share(self) -> u8 {
+        match self {
+            Self::Who | Self::From | Self::To => 22,
+            Self::Subject => 38,
+            Self::Date => 18,
+            Self::Size => 9,
+            Self::Notes => 13,
+            Self::Categories => 16,
+            Self::Importance | Self::Attachment => 14,
+            Self::Flag => 10,
+            Self::Preview => 40,
+        }
+    }
+
+    fn of(self, row: &openmailclient_model::Summary, outgoing: bool, tz_offset_min: i32) -> String {
+        match self {
+            Self::Who if outgoing || row.from.is_empty() => row.to.clone(),
+            Self::Who | Self::From => row.from.clone(),
+            Self::To => row.to.clone(),
+            Self::Subject => row.subject.clone(),
+            Self::Date if row.time > 0 => {
+                let at = time::civil(row.time, tz_offset_min);
+                format!("{}/{}/{} {}", at.month, at.day, at.year, at.time_short())
+            }
+            Self::Date => String::new(),
+            Self::Size => attachments::size_words(row.size as usize),
+            Self::Notes => {
+                let mut notes: Vec<&str> = Vec::new();
+                if row.importance > 1 {
+                    notes.push("High");
+                }
+                if row.has_attachments {
+                    notes.push("Attachment");
+                }
+                match row.flag {
+                    Flag::None => {}
+                    Flag::Complete => notes.push("Done"),
+                    _ => notes.push("Flagged"),
+                }
+                notes.join(", ")
+            }
+            Self::Categories => row.categories.join(", "),
+            Self::Importance => match row.importance {
+                i32::MIN..=0 => "Low",
+                1 => "",
+                _ => "High",
+            }
+            .to_string(),
+            Self::Flag => match row.flag {
+                Flag::None => "",
+                Flag::Complete => "Done",
+                _ => "Flagged",
+            }
+            .to_string(),
+            Self::Attachment => if row.has_attachments { "Yes" } else { "" }.to_string(),
+            Self::Preview => row.preview.clone(),
+        }
+    }
+}
+
+/// Which rows of the list Table Style prints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rows {
+    /// The list as it is shown.
+    #[default]
+    All,
+    /// The selected message alone.
+    Selected,
+}
+
+impl Rows {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Selected => "selected",
+        }
+    }
+}
+
+/// What Table Style prints of a list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listing {
+    /// The columns, from the left; never none.
+    pub columns: Vec<Field>,
+    /// A heading over each group, as the list is arranged.
+    pub groups: bool,
+    pub rows: Rows,
+}
+
+impl Default for Listing {
+    fn default() -> Self {
+        Self { columns: vec![Field::Who, Field::Subject, Field::Date, Field::Size, Field::Notes], groups: true, rows: Rows::All }
+    }
+}
+
+/// Names given for the columns of one print.
+const MAX_COLUMN_NAMES: usize = 64;
+
+/// The listing `p` asks for: `"columns"` (names, or "default"), `"groups"` and `"rows"`; what
+/// it does not name stays as it is in `now`.
+pub fn listing_with(now: &Listing, p: &Value) -> Result<Listing, EngineError> {
+    let mut out = now.clone();
+    let bad = || {
+        let names: Vec<&str> = Field::ALL.iter().map(|f| f.name()).collect();
+        EngineError::BadParams(format!("\"columns\" is \"default\" or a list of one or more of: {}", names.join(", ")))
+    };
+    match p.get("columns") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(name)) if name.trim().eq_ignore_ascii_case("default") => out.columns = Listing::default().columns,
+        Some(Value::Array(names)) if !names.is_empty() && names.len() <= MAX_COLUMN_NAMES => {
+            let mut columns: Vec<Field> = Vec::new();
+            for name in names {
+                let field = name.as_str().and_then(Field::named).ok_or_else(bad)?;
+                // A column named twice is printed once, where it was first named.
+                if !columns.contains(&field) {
+                    columns.push(field);
+                }
+            }
+            out.columns = columns;
+        }
+        Some(_) => return Err(bad()),
+    }
+    match p.get("groups") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(on)) => out.groups = *on,
+        Some(_) => return Err(EngineError::BadParams("\"groups\" is true or false".into())),
+    }
+    match p.get("rows") {
+        None | Some(Value::Null) => {}
+        Some(v) => {
+            out.rows = match v.as_str().map(|name| name.trim().to_ascii_lowercase()).as_deref() {
+                Some("all") => Rows::All,
+                Some("selected") => Rows::Selected,
+                _ => return Err(EngineError::BadParams("\"rows\" is \"all\" or \"selected\"".into())),
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The listing as the commands tell it, into `out`.
+pub fn listing_json(listing: &Listing, out: &mut Value) {
+    out["columns"] = json!(listing.columns.iter().map(|f| f.name()).collect::<Vec<_>>());
+    out["groups"] = json!(listing.groups);
+    out["rows"] = json!(listing.rows.name());
+}
+
 /// A link that is listed: what it says, where it goes, and what is wrong with it.
 struct Noted {
     text: String,
@@ -255,12 +486,14 @@ pub struct Job<'a> {
     pub now: i64,
     pub setup: &'a Setup,
     pub links: Links,
+    /// What Table Style prints of the list.
+    pub listing: &'a Listing,
 }
 
 /// A print of the session's open message: from its owner's mailbox, now.
 pub fn job<'a>(s: &'a crate::Session, setup: &'a Setup, links: Links) -> Job<'a> {
     let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
-    Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup, links }
+    Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup, links, listing: &s.print_list }
 }
 
 /// The widest margin that may be asked for, and the most characters of one part of a header
@@ -454,47 +687,45 @@ pub fn layout(item: &Item, job: &Job, library: &Library) -> Result<Laid, EngineE
 /// Characters of a search that the head of a printed list repeats.
 const MAX_SEARCH_SHOWN: usize = 80;
 
-/// Lay the folder's list out as it is shown (searched, filtered and ordered), in the fonts
-/// of `library`.
+/// Lay the folder's list out as it is shown (searched, filtered, ordered and grouped), in the
+/// fonts of `library`: the columns, the rows and the headings the job's listing asks for.
 pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<Laid, EngineError> {
     let folder = s.current_folder().ok_or(StoreError::NoFolder)?;
     let outgoing = matches!(folder.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox);
-    let columns = [
-        Column { name: if outgoing { "To" } else { "From" }, share: 22, right: false },
-        Column { name: "Subject", share: 38, right: false },
-        Column { name: if outgoing { "Sent" } else { "Received" }, share: 18, right: false },
-        Column { name: "Size", share: 9, right: true },
-        Column { name: "Notes", share: 13, right: false },
-    ];
-    let rows: Vec<Row> = s
-        .rows
-        .iter()
-        .take(openmailclient_layout::MAX_ROWS.saturating_add(1))
-        .map(|row| {
-            let who = if outgoing || row.from.is_empty() { &row.to } else { &row.from };
-            let when = if row.time > 0 {
-                let at = time::civil(row.time, job.tz_offset_min);
-                format!("{}/{}/{} {}", at.month, at.day, at.year, at.time_short())
-            } else {
-                String::new()
-            };
-            let mut notes: Vec<&str> = Vec::new();
-            if row.importance > 1 {
-                notes.push("High");
+    let listing = job.listing;
+    let fields: &[Field] = if listing.columns.is_empty() { &[Field::Subject] } else { &listing.columns };
+    let columns: Vec<Column> = fields.iter().map(|f| Column { name: f.label(outgoing), share: f.share(), right: matches!(f, Field::Size) }).collect();
+    // The rows that are printed: the list, or the one message that is selected in it.
+    let (first, chosen) = match listing.rows {
+        Rows::All => (0, s.rows.as_slice()),
+        Rows::Selected => {
+            let at = s.selected_index().ok_or_else(|| EngineError::BadParams("no message is selected to print".into()))?;
+            (at, s.rows.get(at..at.saturating_add(1)).unwrap_or_default())
+        }
+    };
+    // A heading stands over each group of the list as it is arranged; one row has none.
+    let groups = if listing.groups && listing.rows == Rows::All { s.groups() } else { Vec::new() };
+    let mut heads = groups.iter().peekable();
+    let most = openmailclient_layout::MAX_ROWS.saturating_add(1);
+    let mut rows: Vec<Row> = Vec::with_capacity(chosen.len().min(most));
+    for (at, row) in chosen.iter().enumerate() {
+        if rows.len() >= most {
+            break;
+        }
+        if let Some(group) = heads.next_if(|group| group.start <= first.saturating_add(at)) {
+            let mut says = format!("{}: {} item{}", group.label, group.count, if group.count == 1 { "" } else { "s" });
+            if group.unread > 0 {
+                says.push_str(&format!(", {} unread", group.unread));
             }
-            if row.has_attachments {
-                notes.push("Attachment");
-            }
-            match row.flag {
-                Flag::None => {}
-                Flag::Complete => notes.push("Done"),
-                _ => notes.push("Flagged"),
-            }
-            Row { cells: vec![who.clone(), row.subject.clone(), when, attachments::size_words(row.size as usize), notes.join(", ")], bold: !row.read }
-        })
-        .collect();
+            rows.push(Row { cells: vec![says], bold: true, heading: true });
+        }
+        rows.push(Row { cells: fields.iter().map(|f| f.of(row, outgoing, job.tz_offset_min)).collect(), bold: !row.read, heading: false });
+    }
     let unread = s.rows.iter().filter(|row| !row.read).count();
     let mut note = format!("{} item{}, {unread} unread", s.rows.len(), if s.rows.len() == 1 { "" } else { "s" });
+    if listing.rows == Rows::Selected {
+        note = format!("The selected message, {} of {}", first.saturating_add(1), s.rows.len());
+    }
     if s.unread_only {
         note.push_str("; unread only");
     }
@@ -529,8 +760,8 @@ pub fn title(s: &crate::Session, style: Style) -> String {
 
 /// Lay out what the session shows in `style`, in the installed fonts: the open message, or
 /// the folder's list.
-pub fn laid_as(s: &crate::Session, style: Style, setup: &Setup, links: Links) -> Result<Laid, EngineError> {
-    let job = job(s, setup, links);
+pub fn laid_as(s: &crate::Session, style: Style, setup: &Setup, listing: &Listing, links: Links) -> Result<Laid, EngineError> {
+    let job = Job { listing, ..job(s, setup, links) };
     match style {
         Style::Memo => layout(s.open.as_ref().ok_or(StoreError::NoItem)?, &job, library()),
         Style::Table => list_layout(s, &job, library()),
@@ -538,8 +769,8 @@ pub fn laid_as(s: &crate::Session, style: Style, setup: &Setup, links: Links) ->
 }
 
 /// Print what the session shows in `style` to a PDF file's bytes, in the installed fonts.
-pub fn pdf_as(s: &crate::Session, style: Style, setup: &Setup, links: Links) -> Result<Print, EngineError> {
-    let Laid { links, printed, pictures } = laid_as(s, style, setup, links)?;
+pub fn pdf_as(s: &crate::Session, style: Style, setup: &Setup, listing: &Listing, links: Links) -> Result<Print, EngineError> {
+    let Laid { links, printed, pictures } = laid_as(s, style, setup, listing, links)?;
     Ok(Print { file: write(&printed, &pictures, &title(s, style))?, pages: printed.pages.len(), truncated: printed.truncated, links })
 }
 

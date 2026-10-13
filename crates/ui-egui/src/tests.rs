@@ -684,6 +684,46 @@ fn the_print_window_shows_the_pages_and_follows_the_setup() {
     assert!(ui.session.rows.len() < before);
     frame(&mut ui, Vec::new());
     assert_eq!(ui.preview.as_ref().unwrap().pages(), usize::from(laid));
+    // The page is shown whole at first, then at the size asked for: a step at a time, or
+    // in hundredths of its size on paper. A size is not a page: the page shown stays.
+    assert!(ui.preview.as_ref().unwrap().zoom.is_none());
+    ui.execute("ui.printPreview", &json!({"zoom": 200})).unwrap();
+    assert_eq!(ui.preview.as_ref().unwrap().zoom, Some(200.0));
+    for _ in 0..2 {
+        frame(&mut ui, Vec::new());
+    }
+    ui.execute("ui.printPreview", &json!({"zoom": "in"})).unwrap();
+    assert_eq!(ui.preview.as_ref().unwrap().zoom, Some(300.0));
+    for (step, to) in [("in", 400.0), ("in", 400.0), ("out", 300.0), ("out", 200.0), ("out", 150.0)] {
+        ui.execute("ui.printPreview", &json!({"zoom": step})).unwrap();
+        assert_eq!(ui.preview.as_ref().unwrap().zoom, Some(to));
+        frame(&mut ui, Vec::new());
+    }
+    for bad in [json!(0), json!(24), json!(401), json!(-3), json!("huge"), json!(null), json!([100]), json!(1e300)] {
+        assert!(ui.execute("ui.printPreview", &json!({"zoom": bad})).is_err(), "{bad}");
+        assert_eq!(ui.preview.as_ref().unwrap().zoom, Some(150.0), "a size that is refused changes nothing");
+    }
+    ui.execute("ui.printPreview", &json!({"zoom": 25})).unwrap();
+    frame(&mut ui, Vec::new());
+    ui.execute("ui.printPreview", &json!({"zoom": "out"})).unwrap();
+    assert_eq!(ui.preview.as_ref().unwrap().zoom, Some(25.0));
+    ui.execute("ui.printPreview", &json!({"zoom": "fit"})).unwrap();
+    assert!(ui.preview.as_ref().unwrap().zoom.is_none());
+    frame(&mut ui, Vec::new());
+    if laid {
+        // A step from the whole page goes to the next size above what the whole page came to.
+        ui.execute("ui.printPreview", &json!({"zoom": "in"})).unwrap();
+        let stepped = ui.preview.as_ref().unwrap().zoom.unwrap();
+        assert!((75.0..=100.0).contains(&stepped), "{stepped}");
+    }
+    // What Table Style prints of the list is laid out again when it changes.
+    ui.execute("file.pageSetup", &json!({"columns": ["subject", "size"], "groups": false})).unwrap();
+    frame(&mut ui, Vec::new());
+    assert_eq!(ui.preview.as_ref().unwrap().pages(), usize::from(laid));
+    ui.execute("file.pageSetup", &json!({"rows": "selected"})).unwrap();
+    frame(&mut ui, Vec::new());
+    assert!(ui.preview.as_ref().unwrap().laid.as_ref().unwrap().is_err(), "no message is selected");
+    ui.execute("file.pageSetup", &json!({"rows": "all"})).unwrap();
     // With no folder shown either, there is nothing to print and the window goes away.
     ui.session.current = None;
     frame(&mut ui, Vec::new());

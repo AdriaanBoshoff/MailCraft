@@ -1185,7 +1185,8 @@ fn a_message_prints_to_a_pdf_file() {
                 tz_offset_min: 0,
                 now: 0,
                 setup: &openmailclient_layout::Setup::default(),
-                links: crate::print::Links::All
+                links: crate::print::Links::All,
+                listing: &crate::print::Listing::default(),
             },
             &library
         )
@@ -1716,7 +1717,8 @@ fn page_setup_is_kept_and_printed_with() {
     let was = run(&mut s, "file.pageSetup", json!({}));
     assert_eq!(
         was,
-        json!({"style": "memo", "paper": "a4", "width_mm": 210.0, "height_mm": 297.0, "orientation": "portrait",
+        json!({"style": "memo", "columns": ["who", "subject", "date", "size", "notes"], "groups": true, "rows": "all",
+            "paper": "a4", "width_mm": 210.0, "height_mm": 297.0, "orientation": "portrait",
             "margins": {"top": 12.7, "right": 12.7, "bottom": 12.7, "left": 12.7},
             "header": {"left": "", "center": "", "right": ""}, "footer": {"left": "", "center": "[Page of Pages]", "right": ""}})
     );
@@ -1770,12 +1772,14 @@ fn page_setup_is_kept_and_printed_with() {
     assert_eq!(s.page_setup, Setup { header: ["[Subject]".into(), String::new(), String::new()], ..Setup::default() });
     run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
     let item = s.open.clone().unwrap();
+    let listing = crate::print::Listing::default();
     let job = |tz: i32| crate::print::Job {
         owner: "Alex Morgan",
         tz_offset_min: tz,
         now: openmailclient_model::time::from_civil(2026, 10, 12, 23, 5, 0, 0),
         setup: &kept,
         links: crate::print::Links::default(),
+        listing: &listing,
     };
     let words = crate::print::words(&item, &job(0));
     let word = |words: &[(String, String)], name: &str| words.iter().find(|w| w.0 == name).unwrap().1.clone();
@@ -1939,7 +1943,7 @@ fn a_folders_list_is_printed_as_a_table() {
             assert_eq!(s.print_style, crate::print::Style::Memo, "a look keeps nothing");
             let kept = run(&mut s, "file.pageSetup", json!({"style": "table", "header": "[Folder]"}));
             assert_eq!(kept["style"], "table");
-            let laid = crate::print::laid_as(&s, s.print_style, &s.page_setup, crate::print::Links::default()).unwrap();
+            let laid = crate::print::laid_as(&s, s.print_style, &s.page_setup, &s.print_list, crate::print::Links::default()).unwrap();
             let text = laid.printed.pages[0].text();
             let lines: Vec<&str> = text.lines().collect();
             assert_eq!(lines[..4], ["Alex Morgan", "Inbox", "9 items, 3 unread; by Date", "FromSubjectReceivedSizeNotes"], "{text}");
@@ -1963,7 +1967,7 @@ fn a_folders_list_is_printed_as_a_table() {
             run(&mut s, "search.query", json!({"text": "rota"}));
             let found = s.rows.len();
             assert!(found > 0 && found < 9);
-            let laid = crate::print::laid_as(&s, s.print_style, &s.page_setup, crate::print::Links::default()).unwrap();
+            let laid = crate::print::laid_as(&s, s.print_style, &s.page_setup, &s.print_list, crate::print::Links::default()).unwrap();
             let text = laid.printed.pages[0].text();
             assert!(text.contains("search: rota") && !text.contains("Budget numbers"), "{text}");
             // To a file, with the style kept; a call may still ask for the other.
@@ -2668,4 +2672,103 @@ fn a_mailbox_is_exported_as_an_ansi_file_and_such_a_file_stays_one() {
     assert_eq!(folder(&fourth, "Inbox").0, total - 1);
     drop((other, third, fourth));
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn table_style_prints_the_columns_the_headings_and_the_rows_asked_for() {
+    use crate::print::{Field, Listing, Rows};
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 2}));
+    let chosen = s.rows[2].clone();
+    // What is asked for is kept by the setup, told back, and refused when it is not known.
+    let told = run(&mut s, "file.pageSetup", json!({"style": "table", "columns": ["Subject", "from", "received", "subject", "categories"]}));
+    assert_eq!(told["columns"], json!(["subject", "from", "date", "categories"]), "a column named twice is there once");
+    assert_eq!(s.print_list.columns, [Field::Subject, Field::From, Field::Date, Field::Categories]);
+    for bad in [
+        json!({"columns": []}),
+        json!({"columns": ["colour"]}),
+        json!({"columns": "all"}),
+        json!({"columns": [7]}),
+        json!({"groups": "yes"}),
+        json!({"rows": "some"}),
+        json!({"rows": 2}),
+    ] {
+        assert!(matches!(s.run("file.pageSetup", &bad), Err(EngineError::BadParams(_))), "{bad}");
+        assert!(matches!(s.run("file.printPreview", &bad), Err(EngineError::BadParams(_)) | Err(EngineError::Format(_))), "{bad}");
+    }
+    assert!(s.run("file.pageSetup", &json!({"columns": vec!["size"; 65]})).is_err());
+    assert_eq!(s.print_list.columns.len(), 4, "a setup that is refused changes nothing");
+    assert_eq!(Field::ALL.map(|f| Field::named(f.name())), Field::ALL.map(Some));
+
+    // In the installed fonts, or the word that none is installed.
+    let text_of = |s: &Session, listing: &Listing| {
+        crate::print::laid_as(s, crate::print::Style::Table, &s.page_setup, listing, crate::print::Links::default())
+            .map(|laid| laid.printed.pages.iter().map(|page| page.text()).collect::<Vec<_>>().join("\n"))
+    };
+    let kept = s.print_list.clone();
+    match text_of(&s, &kept) {
+        Ok(text) => {
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines[3], "SubjectFromReceivedCategories", "{text}");
+            // A heading stands over each group of the list as it is arranged, before its
+            // first row and after the last of the group before it.
+            let groups = s.groups();
+            assert!(groups.len() > 1);
+            let mut from = 0;
+            for group in &groups {
+                let mut says = format!("{}: {} item{}", group.label, group.count, if group.count == 1 { "" } else { "s" });
+                if group.unread > 0 {
+                    says.push_str(&format!(", {} unread", group.unread));
+                }
+                let at = text[from..].find(&says).unwrap_or_else(|| panic!("{says} after {from} in {text}"));
+                let first = text[from + at..].find(&s.rows[group.start].subject).unwrap();
+                from += at + first;
+            }
+            // Arranged another way, the headings are those of that arrangement.
+            run(&mut s, "view.sortBy", json!({"key": "from"}));
+            let by_name = text_of(&s, &kept).unwrap();
+            assert!(by_name.contains(&format!("{}: ", s.groups()[0].label)) && !by_name.contains("Today: "), "{by_name}");
+            run(&mut s, "view.sortBy", json!({"key": "date", "descending": true}));
+            // Without them, the rows alone.
+            let plain = text_of(&s, &Listing { groups: false, ..kept.clone() }).unwrap();
+            assert!(!plain.contains(&format!("{}: ", groups[0].label)) && plain.lines().count() < lines.len(), "{plain}");
+            // The selected message alone: its row, no heading, and the page says which it is.
+            let one = text_of(&s, &Listing { rows: Rows::Selected, ..kept.clone() }).unwrap();
+            assert!(one.contains(&chosen.subject) && one.contains("The selected message, 3 of 9"), "{one}");
+            assert!(s.rows.iter().filter(|row| one.contains(&row.subject)).count() == 1 && !one.contains(" items"), "{one}");
+            // Every column there is, at once, on a sheet with room for them: none is lost.
+            let all = Listing { columns: Field::ALL.to_vec(), ..Listing::default() };
+            run(&mut s, "file.pageSetup", json!({"paper": "a3", "orientation": "landscape"}));
+            let wide = text_of(&s, &all).unwrap();
+            assert!(
+                wide.replace(
+                    "
+", ""
+                )
+                .contains("FromFromToSubjectReceivedSizeNotesCategoriesImportanceFlagAttachmentPreview"),
+                "{wide}"
+            );
+            run(&mut s, "file.pageSetup", json!({"paper": "a4", "orientation": "portrait"}));
+            // Through the commands: for one print, and kept.
+            let told = run(&mut s, "file.printPreview", json!({"rows": "selected", "columns": ["subject"], "groups": false}));
+            assert_eq!((told["pages"].as_u64(), told["style"].as_str()), (Some(1), Some("table")));
+            assert_eq!(s.print_list, kept, "a look keeps nothing");
+        }
+        Err(e) => assert!(matches!(e, EngineError::Format(_)), "{e}"),
+    }
+    // With no message selected there is no selected row to print, and it says so.
+    run(&mut s, "file.pageSetup", json!({"rows": "selected"}));
+    assert_eq!(s.print_list.rows, Rows::Selected);
+    s.selected = None;
+    assert!(matches!(text_of(&s, &s.print_list), Err(EngineError::BadParams(_))));
+    // The columns and the headings are kept with the settings; which rows is of the moment.
+    run(&mut s, "file.pageSetup", json!({"groups": false}));
+    let settings = crate::cmd::settings::current(&s, None);
+    assert_eq!(
+        (&settings["pageSetup"]["columns"], &settings["pageSetup"]["groups"]),
+        (&json!(["subject", "from", "date", "categories"]), &json!(false))
+    );
+    assert!(settings["pageSetup"].get("rows").is_none());
+    assert_eq!(run(&mut s, "file.pageSetup", json!({"reset": true}))["columns"], json!(["who", "subject", "date", "size", "notes"]));
+    assert_eq!(s.print_list, Listing::default());
 }

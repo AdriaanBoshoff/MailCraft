@@ -55,6 +55,9 @@ fn json_path(p: &Value) -> Result<&Path, EngineError> {
 pub fn current(s: &Session, ui: Option<&Value>) -> Value {
     let mut setup = crate::print::setup_json(&s.page_setup);
     setup["style"] = json!(s.print_style.name());
+    // Which rows are printed is of the moment, and is not kept.
+    setup["columns"] = json!(s.print_list.columns.iter().map(|f| f.name()).collect::<Vec<_>>());
+    setup["groups"] = json!(s.print_list.groups);
     let files: Vec<String> = s.stores.iter().filter_map(|st| st.path()).take(MAX_DATA_FILES).map(|p| p.display().to_string()).collect();
     let mut out = json!({
         "version": VERSION,
@@ -130,6 +133,15 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
             took(style.is_ok());
             if let Ok(style) = style {
                 s.print_style = style;
+            }
+        }
+        for key in ["columns", "groups"] {
+            if let Some(v) = setup.get(key) {
+                let listing = crate::print::listing_with(&s.print_list, &json!({ key: v }));
+                took(listing.is_ok());
+                if let Ok(listing) = listing {
+                    s.print_list = listing;
+                }
             }
         }
     }

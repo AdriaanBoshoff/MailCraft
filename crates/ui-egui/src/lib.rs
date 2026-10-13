@@ -92,7 +92,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.printPreview",
         label: "Print…",
-        params: r#"{"page": which page to show, from 1 (default 1), "close": true to close the window}; shows the pages as they will be printed, with the page setup"#,
+        params: r#"{"page": which page to show, from 1 (default 1, or the page that is shown), "zoom": "fit" for the whole page (as it is at first), "in" or "out" for a step, or hundredths of the page's size on paper from 25 to 400, "close": true to close the window}; shows the pages as they will be printed, with the page setup"#,
     },
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
     UiCommand { id: "ui.saveAllAttachmentsDialog", label: "Save All Attachments…", params: "" },
@@ -610,11 +610,15 @@ impl MailUi {
                     return Err("There is nothing to print".to_string());
                 } else {
                     self.menu = None;
-                    let page = number("page").and_then(|n| usize::try_from(n).ok()).unwrap_or(1).saturating_sub(1);
-                    match self.preview.as_mut() {
-                        Some(preview) => preview.page = page,
-                        None => self.preview = Some(preview::Preview::at(page)),
+                    let page = number("page").and_then(|n| usize::try_from(n).ok()).map(|n| n.saturating_sub(1));
+                    let mut preview = self.preview.take().unwrap_or_default();
+                    // The page that is shown stays when only its size is asked for.
+                    if page.is_some() || params.get("zoom").is_none() {
+                        preview.page = page.unwrap_or(0);
                     }
+                    let sized = params.get("zoom").map_or(Ok(()), |zoom| preview.zoom_to(zoom));
+                    self.preview = Some(preview);
+                    sized?;
                 }
             }
             "ui.saveAttachmentDialog" => {

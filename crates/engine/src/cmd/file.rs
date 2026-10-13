@@ -109,7 +109,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "Ctrl+P",
-            params: r#"{"path": target ending in .pdf, "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page); returns {"path", "pages", "truncated", "links", "style"}"#,
+            params: r#"{"path": target ending in .pdf, "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page, and with "columns", "groups" and "rows" as file.pageSetup takes them); returns {"path", "pages", "truncated", "links", "style"}"#,
             enabled: printable,
             run: print,
         },
@@ -129,7 +129,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "",
-            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
+            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "style": "memo" or "table"; for Table Style "columns": "default" or the columns from the left, of who (From, or To in a folder of outgoing mail), from, to, subject, date, size, notes, categories, importance, flag, attachment, preview; "groups": false to leave out the heading over each group of the list as it is arranged; "rows": "all" or "selected" for the selected message alone (not kept between runs); "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
             enabled: always,
             run: page_setup,
         },
@@ -507,8 +507,9 @@ fn print_preview(s: &mut Session, p: &Value) -> CmdResult {
     };
     let setup = crate::print::setup_with(&s.page_setup, p)?;
     let style = crate::print::style_with(s.print_style, p)?;
+    let listing = crate::print::listing_with(&s.print_list, p)?;
     let links = print_links(p)?;
-    let laid = crate::print::laid_as(s, style, &setup, links)?;
+    let laid = crate::print::laid_as(s, style, &setup, &listing, links)?;
     let pages = laid.printed.pages.len();
     if page > pages {
         return Err(EngineError::BadParams(format!("there is no page {page}: there are {pages}")));
@@ -534,8 +535,9 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
     }
     let setup = crate::print::setup_with(&s.page_setup, p)?;
     let style = crate::print::style_with(s.print_style, p)?;
+    let listing = crate::print::listing_with(&s.print_list, p)?;
     let links = print_links(p)?;
-    let printed = crate::print::pdf_as(s, style, &setup, links)?;
+    let printed = crate::print::pdf_as(s, style, &setup, &listing, links)?;
     io::write_atomic(path, &printed.file)?;
     s.status = format!("Printed {} page{} to {}", printed.pages, if printed.pages == 1 { "" } else { "s" }, path.display());
     Ok(
@@ -549,13 +551,16 @@ fn page_setup(s: &mut Session, p: &Value) -> CmdResult {
     let from = if reset { openmailclient_layout::Setup::default() } else { s.page_setup.clone() };
     let setup = crate::print::setup_with(&from, p)?;
     let style = crate::print::style_with(if reset { crate::print::Style::default() } else { s.print_style }, p)?;
-    if setup != s.page_setup || style != s.print_style {
+    let listing = crate::print::listing_with(&if reset { crate::print::Listing::default() } else { s.print_list.clone() }, p)?;
+    if setup != s.page_setup || style != s.print_style || listing != s.print_list {
         s.page_setup = setup;
         s.print_style = style;
+        s.print_list = listing;
         s.status = "Page setup changed".to_string();
     }
     let mut out = crate::print::setup_json(&s.page_setup);
     out["style"] = json!(s.print_style.name());
+    crate::print::listing_json(&s.print_list, &mut out);
     Ok(out)
 }
 

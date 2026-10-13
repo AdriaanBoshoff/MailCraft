@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 73 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 74 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 300, all passing |
+| Tests | 302, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -108,7 +108,8 @@
 57. Done: an export of any mailbox runs on a thread of its own: the sample, an `.ost`, an ANSI `.pst` and a 4K-page file as well (M3b.19).
 58. Done: the structure check covers ANSI data files and files with 4K pages (M3b.20).
 59. Done: ANSI data files are written, and a re-saved one keeps its kind (M3b.21).
-60. Next: M3b.22: Table Style prints the selected rows only, the view's own columns and group headings; a zoom in print preview.
+60. Done: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom (M3b.22).
+61. Next: M3b.23: SVG, WebP and TIFF pictures; GIF animation.
 
 ## Do later (from M2)
 
@@ -170,8 +171,10 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Writing ANSI data files (a re-saved file keeps its kind)~~ | done: M3b.21 |
 | Writing 4K-page data files | when the owner allows a file of ours to be opened in Outlook, or with a public description of the 4K layout: it is in no specification, and a guess cannot be proved without one of the two |
 | What Outlook makes of Unicode text in an ANSI file of ours, and of wVer 14 where a file had 15 | M1 checks against Outlook, with the owner's say |
-| The selected rows only, the view's own columns and group headings in Table Style | M3b, the batch after M3 |
-| A zoom in the print preview | M3b |
+| ~~The selected row only, chosen columns and group headings in Table Style~~ | done: M3b.22 |
+| Several messages selected at once (Table Style's selected rows then follow the selection) | M5, with interaction parity |
+| Columns of the message list chosen in the window (Table Style then follows them) | M5, with interaction parity |
+| ~~A zoom in the print preview~~ | done: M3b.22 |
 | SVG, WebP and TIFF pictures; GIF animation | M3b |
 | A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph | M3b |
 | Boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners | M3b |
@@ -1199,3 +1202,23 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   wVer is always 14 (a file that had 15 is saved with 14); a 4K-page file is not written
   (its layout is in no specification), so it stays read-only and its export goes through
   the model, as an `.ost` does.
+- **2026-10-13** - M3b.22: Table Style prints what is asked of it, and the print window has a zoom. The
+  columns of the table are chosen (`"columns"` of `file.pageSetup`, `file.print` and
+  `file.printPreview`: who, from, to, subject, date, size, notes, categories, importance,
+  flag, attachment, preview; `print::Field`), a heading stands over each group of the list
+  as it is arranged, across every column (`"groups"`; `Row::heading` in
+  `crates/layout/src/list.rs`), and `"rows": "selected"` prints the selected message's row
+  alone. The print window has these beside the style, and shows the page at 25 to 400
+  hundredths of its size on paper: steps, Ctrl and the wheel or a pinch over the page, and
+  "Whole page"; a page larger than its room is moved about under it (`ui.printPreview` with
+  `"zoom"`). Made better on the way: a heading says how many items its group has and how
+  many are unread; the columns and the headings are kept with the settings, which rows is
+  of the moment; the page says which message of how many it is when one is printed. Found
+  and fixed: a page drawn larger than the graphics card's largest texture stopped the
+  window, so a page is never drawn wider or taller than that. 2 tests: the columns, the
+  headings in two arrangements, the selected row, twelve columns at once and what is
+  refused; a heading across every column with its fill; the print window's test goes
+  through the sizes, the refused ones and the changes to the table. Not done: one message
+  is selected at a time, so "selected" is one row until there is a selection of several;
+  the window's list has no columns of its own to follow, so the columns are the print's;
+  a narrow column may break a word in two; Outlook's Table Style was not observed.
