@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 69 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 70 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 286, all passing |
+| Tests | 289, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -104,7 +104,8 @@
 53. Done: an exported file names the Calendar, Contacts, Tasks, Notes, Journal and Drafts folders by id on its root and its Inbox (M3b.15).
 54. Done: the small things left in the writer: values keep their kind, a rewritten file goes on from the header's counters, and the file as it was need not be kept (M3b.16).
 55. Done: a file attached again with other contents keeps what is stored on it, and an attachment that cannot be read stays where it is (M3b.17).
-56. Next: M3b.18: table cells whose type differs from the column's kept in a saved file's tables; the structure check hearing Stop and comparing a heap's fill levels with its free space.
+56. Done: a value of another type than its column's is shown as the column holds it; the structure check hears Stop and compares a heap's fill levels with its blocks (M3b.18).
+57. Next: M3b.19: an export of a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file) on a thread of its own.
 
 ## Do later (from M2)
 
@@ -150,11 +151,13 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~A choice not to keep the file as it was beside a data file on its first save~~ | done: M3b.16 (`file.keepOriginal`) |
 | ~~The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`~~ | done: M3b.15 |
 | ~~Export off the UI thread, with progress and a way to stop~~ | done: M3b.14, for a Unicode `.pst` copied as stored |
-| Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file); the structure check hearing Stop | M3b |
-| Table cells whose type differs from the column's kept in a saved `.pst`'s tables (the item keeps them; the list does not show them) | M3b |
+| Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file) | M3b |
+| ~~The structure check hearing Stop~~ | done: M3b.18 |
+| ~~Table cells whose type differs from the column's kept in a saved `.pst`'s tables~~ | done: M3b.18, where nothing is lost by it; otherwise the cell is empty and the item keeps the value |
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
 | ~~The structure check reaching into heaps, property lists and tables~~ | done: M3b.13 |
-| The structure check comparing a heap's fill levels with its free space; the check run on a 512-byte-page `.pst` written by Outlook | M3b |
+| ~~The structure check comparing a heap's fill levels with its free space~~ | done: M3b.18 |
+| The structure check run on a 512-byte-page `.pst` written by Outlook | with the first such file we may read |
 | ~~32-bit floats, currency and error values keeping their type when an item is written from the model~~ | done: M3b.16 |
 | A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
@@ -1083,3 +1086,30 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   under another name, an attachment that cannot be read through two saves). Not done: an
   attachment that cannot be read is carried, not mended; its row keeps the place it is
   given after the readable ones and not the one it had among them.
+- **2026-10-13** - M3b.18: three things left over in the data file's tables and its check. (1) A value
+  of another type than its column's. A table's column has one type ([MS-PST] 2.3.4.2); a
+  message that had the value as another type (a 16-bit number where the column is 32-bit,
+  8-bit text where the column is Unicode) got no cell for it. Now the value goes in as the
+  column's type when nothing is lost by that: whole numbers into a wider one or a narrower
+  one with room, a 32-bit float as a 64-bit one and back when it comes back the same, text
+  of 7-bit characters as the other kind of string. This holds for a changed message's row
+  in its folder's table and in search folders' tables, for a message or folder that came
+  from elsewhere, and for a mailbox written from the model. The item keeps the value as it
+  was given in every case. Made better on the way: a value that cannot go in (a number too
+  large, a kind that is no number) used to leave the cell saying what the message said
+  before the change; the cell is now empty, so a list never shows what is no longer true.
+  (2) The structure check hears Stop: `check_until` looks at the progress before each block
+  and each node and gives `PstError::Stopped`; a save stopped while its new file is checked
+  says it was stopped, and an export on a thread of its own stops in the check as it does in
+  the copy. (3) Fill levels: the check reads the four bits a block that say how full each
+  block of a heap is (the header's eight and each later map's 128, [MS-PST] 2.3.1.2 and
+  2.3.1.4), and says when a block is said to be fuller than it is, to have more room than
+  it has (unless it has given allocations up, which leave room its length does not show),
+  or when a level is given to a block the heap does not have. A level may be one step off,
+  for how another program counts the edge of a level is not known. Which half of a byte
+  comes first was a guess; heaps of one block in Outlook-written files read locally have
+  the level in the low half of the first byte, as we write it (counts only were looked at).
+  3 tests. Not done: a heap of several blocks written by Outlook has not been seen, so the
+  second block's half of the byte rests on the first; text beyond 7 bits is not converted
+  between the kinds of string (it depends on a code page); the check is still not run on a
+  512-byte-page `.pst` written by Outlook, there being none here.

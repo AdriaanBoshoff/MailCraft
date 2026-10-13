@@ -760,3 +760,59 @@ fn a_copy_of_a_data_file_has_what_this_program_does_not_understand() {
     assert!(!dir.join("no.pst").exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_value_of_another_type_than_its_column_is_shown_as_the_column_holds_it() {
+    use crate::store_write::{as_type, cell_for};
+    let mut store = open();
+    let inbox = folder(&mut store, "Inbox");
+    let id = ItemId(store.list(inbox.id).unwrap()[0].id);
+    let table = (inbox.id.0 as u32 & !0x1F) | 0x0E;
+    // A column of 32-bit numbers ([MS-PST] 2.4.4.5.1), and a message that has the value as
+    // a number of another width.
+    const COLUMN: u16 = 0x1097;
+    let put = |store: &mut PstStore, v: PropValue| -> (PstStore, Option<(u16, Vec<u8>)>) {
+        let mut item = store.load(inbox.id, id).unwrap();
+        item.props.0.insert(COLUMN, v.clone());
+        store.update(inbox.id, id, item).unwrap();
+        let mut next = saved(store);
+        // The message has the value as it was given, whatever the list can show of it.
+        assert_eq!(next.load(inbox.id, id).unwrap().props.0.get(&COLUMN), Some(&v));
+        let (columns, rows) = next.table_of(table).unwrap();
+        assert_eq!(columns.iter().filter(|c| c.0 == COLUMN).collect::<Vec<_>>(), [&(COLUMN, ptype::INT32)], "one column, of the type it had");
+        let cell = rows.into_iter().find(|r| u64::from(r.id) == id.0).unwrap().cells.into_iter().find(|c| c.id == COLUMN);
+        (next, cell.map(|c| (c.ty, c.data)))
+    };
+    let (mut store, cell) = put(&mut store, PropValue::Int32(5));
+    assert_eq!(cell, Some((ptype::INT32, 5i32.to_le_bytes().to_vec())));
+    // Narrower and wider numbers go in as the column's kind.
+    let (mut store, cell) = put(&mut store, PropValue::Int16(-7));
+    assert_eq!(cell, Some((ptype::INT32, (-7i32).to_le_bytes().to_vec())));
+    let (mut store, cell) = put(&mut store, PropValue::Int64(9));
+    assert_eq!(cell, Some((ptype::INT32, 9i32.to_le_bytes().to_vec())));
+    // One the column has no room for leaves the cell empty: not the 9 it said before.
+    let (mut store, cell) = put(&mut store, PropValue::Int64(1 << 40));
+    assert_eq!(cell, None);
+    // Nor is a value of a kind that is no number made into one.
+    let (_, cell) = put(&mut store, PropValue::Binary(vec![1, 2, 3, 4]));
+    assert_eq!(cell, None);
+
+    let raw = |ty: u16, data: &[u8]| Raw { id: 1, ty, data: data.to_vec() };
+    let made = |r: Raw, ty: u16| as_type(&r, ty).map(|c| (c.ty, c.data));
+    assert_eq!(made(raw(ptype::STRING8, b"Ab"), ptype::STRING), Some((ptype::STRING, vec![0x41, 0, 0x62, 0])));
+    assert_eq!(made(raw(ptype::STRING, &[0x41, 0, 0x62, 0]), ptype::STRING8), Some((ptype::STRING8, b"Ab".to_vec())));
+    // Text beyond 7 bits depends on a code page, and is not guessed at.
+    assert_eq!(made(raw(ptype::STRING8, &[0x41, 0xE9]), ptype::STRING), None);
+    assert_eq!(made(raw(ptype::STRING, &[0xE9, 0, 0x41, 0]), ptype::STRING8), None);
+    assert_eq!(made(raw(ptype::STRING, &[0x41, 0, 0x62]), ptype::STRING8), None);
+    assert_eq!(made(raw(ptype::FLOAT32, &1.5f32.to_le_bytes()), ptype::FLOAT64), Some((ptype::FLOAT64, 1.5f64.to_le_bytes().to_vec())));
+    assert_eq!(made(raw(ptype::FLOAT64, &1.5f64.to_le_bytes()), ptype::FLOAT32), Some((ptype::FLOAT32, 1.5f32.to_le_bytes().to_vec())));
+    assert_eq!(made(raw(ptype::FLOAT64, &0.1f64.to_le_bytes()), ptype::FLOAT32), None);
+    assert_eq!(made(raw(ptype::INT32, &70_000i32.to_le_bytes()), ptype::INT16), None);
+    // Values cut short, as a damaged file may have them, are no value.
+    assert_eq!(made(raw(ptype::INT32, &[1, 2]), ptype::INT64), None);
+    assert_eq!(made(raw(ptype::FLOAT64, &[1, 2, 3]), ptype::FLOAT32), None);
+    // A table without a column of that id gets no cell for it.
+    assert!(cell_for(&[(2, ptype::INT32)], &raw(ptype::INT16, &[1, 0])).is_none());
+    assert!(cell_for(&[(1, ptype::INT32)], &raw(ptype::INT16, &[1, 0])).is_some());
+}

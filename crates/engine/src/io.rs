@@ -201,7 +201,8 @@ pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<
     let Some(work) = store.copy_begin(&tmp, id)? else { return Ok(None) };
     let beside = tmp.clone();
     let work: ExportWork = Box::new(move |progress| {
-        let saved = work(progress).map_err(EngineError::from).and_then(|done| copied(&beside, done));
+        let hears = progress.clone();
+        let saved = work(progress).map_err(EngineError::from).and_then(|done| copied(&beside, done, Some(&hears)));
         if saved.is_err() {
             let _ = std::fs::remove_file(&beside);
         }
@@ -271,15 +272,15 @@ fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Save
 
 fn copy_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Option<Saved>, EngineError> {
     let Some(done) = store.copy_to(tmp, id)? else { return Ok(None) };
-    copied(tmp, done).map(Some)
+    copied(tmp, done, None).map(Some)
 }
 
 /// Hold a copy that was written to `tmp` against the structure check.
-fn copied(tmp: &Path, done: openmailclient_model::Copied) -> Result<Saved, EngineError> {
+fn copied(tmp: &Path, done: openmailclient_model::Copied, stop: Option<&openmailclient_model::Progress>) -> Result<Saved, EngineError> {
     let mut file = std::fs::File::open(tmp)?;
     let bytes = file.seek(SeekFrom::End(0))?;
     file.seek(SeekFrom::Start(0))?;
-    let found = openmailclient_pst::check(&mut std::io::BufReader::new(&mut file)).map_err(pst_error)?;
+    let found = openmailclient_pst::check_until(&mut std::io::BufReader::new(&mut file), stop).map_err(pst_error)?;
     if !found.sound() {
         let first = found.problems.first().or(found.inside.first()).map(String::as_str).unwrap_or("no detail");
         return Err(EngineError::Format(format!("the copy did not pass its own check ({first})")));

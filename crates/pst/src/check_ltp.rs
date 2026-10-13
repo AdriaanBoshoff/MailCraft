@@ -15,6 +15,16 @@ const MAX_DEPTH: u8 = 8;
 const MAX_RECORDS: usize = 1 << 20;
 const MAX_ROWS: usize = 4_000_000;
 
+/// The bytes a data block of a Unicode file with 512-byte pages holds ([MS-PST] 2.2.2.8.3.1).
+const BLOCK: usize = 8176;
+
+/// How full a block with `free` bytes left is said to be ([MS-PST] 2.3.1.2, rgbFillLevel):
+/// 0 with at least 3584 bytes free, and so on to 15 with fewer than 8.
+fn level(free: usize) -> u8 {
+    const AT_LEAST: [usize; 15] = [3584, 2560, 2048, 1792, 1536, 1280, 1024, 768, 512, 256, 128, 64, 32, 16, 8];
+    AT_LEAST.iter().position(|least| free >= *least).unwrap_or(15) as u8
+}
+
 const SIG_HEAP: u8 = 0xEC;
 const SIG_PC: u8 = 0xBC;
 const SIG_TC: u8 = 0x7C;
@@ -81,6 +91,36 @@ impl Heap {
                     return Err(format!("block {i} of its heap has allocation {} out of order or outside the block", n + 1));
                 }
                 before = at;
+            }
+        }
+        // Fill levels: four bits a block, the earlier block in the low half of a byte. The
+        // first eight are in the header (2.3.1.2); every 128 from the eighth on are in the
+        // first of them (2.3.1.4). A block that is not there has level 0.
+        let said = |i: usize| -> Option<u8> {
+            let (holder, at) = if i < 8 { (0, 8) } else { (8 + (i - 8) / 128 * 128, 2) };
+            let byte = *blocks.get(holder)?.get(at + (i - holder) / 2)?;
+            Some(if (i - holder).is_multiple_of(2) { byte & 15 } else { byte >> 4 })
+        };
+        let last = if blocks.len() <= 8 { 8 } else { 8 + (blocks.len() - 8).div_ceil(128) * 128 };
+        for i in 0..last {
+            let Some(said) = said(i) else { continue };
+            let Some(b) = blocks.get(i) else {
+                if said != 0 {
+                    return Err(format!("its heap gives a fill level to block {i}, which it does not have"));
+                }
+                continue;
+            };
+            // What is free after the page map; allocations given up leave more inside, and
+            // the map counts those. How the edges of a level are counted by other programs
+            // is not known, so a level may be one off; further off it misleads whoever
+            // looks for room.
+            let is = level(BLOCK.saturating_sub(b.len()));
+            let given_up = u16_at(b, usize::from(u16_at(b, 0).unwrap_or(0)) + 2).unwrap_or(0);
+            if said > is + 1 {
+                return Err(format!("block {i} of its heap is said to be fuller than it is (level {said}, and it is at {is})"));
+            }
+            if given_up == 0 && said + 1 < is {
+                return Err(format!("block {i} of its heap is said to have more room than it has (level {said}, and it is at {is})"));
             }
         }
         Ok(Self { blocks, client, root })
@@ -371,14 +411,17 @@ impl Inside<'_, '_> {
 
 /// Look inside every node of a file. Gives the problems found, at most `limit` of them spelled
 /// out, and how many more there were.
-pub(crate) fn inside(ndb: &mut Ndb, limit: usize) -> (Vec<String>, u64) {
+pub(crate) fn inside(ndb: &mut Ndb, limit: usize, stopped: &dyn Fn() -> bool) -> Result<(Vec<String>, u64), crate::PstError> {
     let mut nodes: Vec<(u32, u64, u64)> = ndb.nbt.iter().map(|(nid, e)| (*nid, e.data, e.sub)).collect();
     nodes.sort_unstable();
     let mut c = Inside { ndb, seen: 0, problems: Vec::new(), limit, more: 0 };
     for (nid, data, sub) in nodes {
+        if stopped() {
+            return Err(crate::PstError::Stopped);
+        }
         c.node(nid, data, sub, 0, &format!("the node {nid:#x}"));
     }
-    (c.problems, c.more)
+    Ok((c.problems, c.more))
 }
 
 #[cfg(test)]

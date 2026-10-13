@@ -292,12 +292,20 @@ impl<R: Read + Seek> Checker<'_, R> {
 /// Check the structure of a Unicode data file with 512-byte pages (what Outlook 2003 to 2010
 /// write as `.pst`, and what this crate writes). Other kinds are not checked yet and say so.
 pub fn check<R: Read + Seek + Send>(src: &mut R) -> Result<Check, PstError> {
-    let mut out = structure(src)?;
+    check_until(src, None)
+}
+
+/// `check`, for a caller that may ask it to stop: it looks at `stop` before each block and
+/// each node, and gives `PstError::Stopped` when it is told to. A check that was stopped
+/// says nothing of the file.
+pub fn check_until<R: Read + Seek + Send>(src: &mut R, stop: Option<&openmailclient_model::Progress>) -> Result<Check, PstError> {
+    let stopped = || stop.is_some_and(openmailclient_model::Progress::stopped);
+    let mut out = structure(src, &stopped)?;
     if out.problems.is_empty() {
         src.seek(SeekFrom::Start(0))?;
         match crate::ndb::Ndb::open(Box::new(&mut *src)) {
             Ok(mut ndb) => {
-                let (inside, more) = crate::check_ltp::inside(&mut ndb, MAX_PROBLEMS);
+                let (inside, more) = crate::check_ltp::inside(&mut ndb, MAX_PROBLEMS, &stopped)?;
                 out.inside = inside;
                 out.more = out.more.saturating_add(more);
             }
@@ -307,7 +315,7 @@ pub fn check<R: Read + Seek + Send>(src: &mut R) -> Result<Check, PstError> {
     Ok(out)
 }
 
-fn structure<R: Read + Seek>(src: &mut R) -> Result<Check, PstError> {
+fn structure<R: Read + Seek>(src: &mut R, stopped: &dyn Fn() -> bool) -> Result<Check, PstError> {
     let len = src.seek(SeekFrom::End(0))?;
     let mut c = Checker {
         src,
@@ -388,6 +396,9 @@ fn structure<R: Read + Seek>(src: &mut R) -> Result<Check, PstError> {
     let mut bodies: HashMap<u64, Vec<u8>> = HashMap::new();
     let mut end = 0u64;
     for (ib, bid) in order {
+        if stopped() {
+            return Err(PstError::Stopped);
+        }
         let Some(b) = c.blocks.get(&bid).copied() else { continue };
         if ib < end {
             c.out.problem(format!("the block {bid:#x} at {ib:#x} overlaps the block before it"));
@@ -407,6 +418,9 @@ fn structure<R: Read + Seek>(src: &mut R) -> Result<Check, PstError> {
 
     // NBTENTRY ([MS-PST] 2.2.2.7.7.4).
     for e in nodes {
+        if stopped() {
+            return Err(PstError::Stopped);
+        }
         let (Some(nid), Some(data), Some(sub)) = (u64_at(&e, 0), u64_at(&e, 8), u64_at(&e, 16)) else { continue };
         c.out.nodes += 1;
         let from = format!("the node {nid:#x}");

@@ -21,7 +21,7 @@ mod ndb;
 mod store_write;
 mod write;
 
-pub use check::{Check, check};
+pub use check::{Check, check, check_until};
 pub use edit::original_beside;
 pub use journal::{journal_beside, journal_elsewhere, set_aside};
 pub use store_write::{Written, write_store};
@@ -48,6 +48,8 @@ pub enum PstError {
     Write(String),
     #[error("the mailbox being saved could not be read: {0}")]
     Source(String),
+    #[error("it was stopped before it was done")]
+    Stopped,
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }

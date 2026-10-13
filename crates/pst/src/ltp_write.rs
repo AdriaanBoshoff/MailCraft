@@ -93,7 +93,9 @@ impl Heap {
         let levels: Vec<u8> = self.blocks.iter().enumerate().map(|(i, b)| Self::level(MAX_DATA.saturating_sub(Self::size(i, b, None)))).collect();
         // Fill levels are four bits a block. The specification does not say which half of a
         // byte comes first; the earlier block is put in the low half, as bit fields are laid
-        // out elsewhere in the format. Not compared with a file Outlook wrote.
+        // out elsewhere in the format. Heaps of one block in files Outlook wrote have the
+        // level of that block in the low half of the first byte; a heap of several blocks
+        // from Outlook has not been seen.
         let fill = |from: usize, bytes: usize| -> Vec<u8> {
             (0..bytes).map(|i| levels.get(from + 2 * i).copied().unwrap_or(0) | levels.get(from + 2 * i + 1).copied().unwrap_or(0) << 4).collect()
         };

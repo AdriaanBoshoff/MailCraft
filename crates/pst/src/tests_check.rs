@@ -216,3 +216,52 @@ fn a_save_is_stopped_by_what_it_did_wrong_and_not_by_what_was_wrong_before() {
     assert_eq!(inside(&std::fs::read(&path).unwrap()), was);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_heap_says_how_full_each_of_its_blocks_is() {
+    // Two blocks: the first nearly three quarters full, the second with one value in it.
+    let mut heap = crate::ltp_write::Heap::new(0xBC);
+    let mut root = 0;
+    for _ in 0..3 {
+        root = heap.alloc(&[7u8; 3000]).unwrap();
+    }
+    let blocks = heap.finish(root);
+    assert_eq!(blocks.len(), 2);
+    assert!(Heap::new(blocks.clone()).is_ok());
+    // rgbFillLevel ([MS-PST] 2.3.1.2): the first block in the low half of the first byte.
+    assert_eq!(blocks[0][8..12], [0x02, 0, 0, 0]);
+
+    let wrong = |at: usize, value: u8| {
+        let mut bad = blocks.clone();
+        bad[0][at] = value;
+        Heap::new(bad).err().unwrap()
+    };
+    // The two halves the other way round: each block is said to be what the other is.
+    assert!(wrong(8, 0x20).contains("more room than it has"), "{}", wrong(8, 0x20));
+    assert!(wrong(8, 0x0F).contains("fuller than it is"));
+    assert!(wrong(8, 0x52).contains("block 1") && wrong(8, 0x52).contains("fuller than it is"));
+    // A level for a block the heap does not have.
+    assert!(wrong(9, 0x01).contains("block 2, which it does not have"));
+    assert!(wrong(11, 0x10).contains("block 7, which it does not have"));
+    // One step off is how another program may count the edge of a level.
+    let mut near = blocks.clone();
+    near[0][8] = 0x13;
+    assert!(Heap::new(near).is_ok());
+    // A block that has given allocations up may have more room than its length shows.
+    let mut freed = blocks.clone();
+    let map = usize::from(u16_at(&freed[0], 0).unwrap());
+    freed[0][map + 2] = 1;
+    freed[0][8] = 0x00;
+    assert!(Heap::new(freed).is_ok());
+}
+
+#[test]
+fn a_check_that_is_told_to_stop_says_nothing_of_the_file() {
+    let bytes = save(&mut mailbox()).0;
+    let progress = openmailclient_model::Progress::default();
+    assert!(crate::check_until(&mut Cursor::new(&bytes), Some(&progress)).unwrap().sound());
+    progress.stop();
+    assert!(matches!(crate::check_until(&mut Cursor::new(&bytes), Some(&progress)), Err(crate::PstError::Stopped)));
+    // Asked without anyone to stop it, it runs to the end as before.
+    assert!(check(&mut Cursor::new(&bytes)).unwrap().sound());
+}

@@ -12,8 +12,8 @@ use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Subs, encode, write_pc};
 use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver, u32_at};
 use crate::store_write::{
-    ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, copy, count, flag,
-    int, text,
+    ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, cell_for, copy,
+    count, flag, int, text,
 };
 use crate::write::{MAX_DATA, NdbWriter, Sub};
 use crate::{LTP_INTERNAL, MAX_CHILDREN, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore, code_page};
@@ -732,7 +732,6 @@ impl PstStore {
             let table = f.nid & !0x1F | TYPE_CONTENTS;
             let (columns, rows) = self.table_of(table).unwrap_or_else(|| (CONTENTS.iter().chain(CONTENTS_MORE).copied().collect(), Vec::new()));
             let mut by: HashMap<u32, Vec<Raw>> = rows.into_iter().map(|r| (r.id, r.cells)).collect();
-            let fits = |r: &Raw| columns.iter().any(|(id, ty)| *id == r.id && *ty == r.ty);
             let mut rows = Vec::new();
             for entry in f.items.iter().flatten() {
                 let cells = match (shown.get(&entry.nid), by.remove(&entry.nid)) {
@@ -740,14 +739,14 @@ impl PstStore {
                     (Some((now, removed)), was) => {
                         let mut cells: BTreeMap<u16, Raw> =
                             was.unwrap_or_default().into_iter().filter(|c| !removed.contains(&c.id)).map(|c| (c.id, c)).collect();
-                        cells.extend(now.iter().filter(|r| fits(r)).map(|r| (r.id, copy(r))));
+                        show(&mut cells, &columns, now);
                         cells.into_values().collect()
                     }
                     (None, Some(was)) => was,
                     // A message that came from another folder: what its own properties give.
                     (None, None) => {
                         let stored = self.ndb.nbt.get(&entry.nid).copied().and_then(|e| self.open_pc(e).ok()).map(|p| p.0).unwrap_or_default();
-                        stored.into_values().filter(|r| r.data.len() <= MAX_CELL && fits(r)).collect()
+                        stored.values().filter_map(|r| cell_for(&columns, r)).collect()
                     }
                 };
                 rows.push(Row { id: entry.nid, cells });
@@ -766,10 +765,7 @@ impl PstStore {
                     Some(was) => was,
                     None => {
                         let stored = self.ndb.nbt.get(&f.nid).copied().and_then(|e| self.open_pc(e).ok()).map(|p| p.0).unwrap_or_default();
-                        stored
-                            .into_values()
-                            .filter(|r| r.data.len() <= MAX_CELL && columns.iter().any(|(id, ty)| *id == r.id && *ty == r.ty))
-                            .collect()
+                        stored.values().filter_map(|r| cell_for(&columns, r)).collect()
                     }
                 };
                 let mut cells: BTreeMap<u16, Raw> = was.into_iter().map(|c| (c.id, c)).collect();
@@ -803,7 +799,26 @@ impl PstStore {
         };
         Ok((o.w.finish()?, done))
     }
+}
 
+/// Put what a message has now into its row of a table with these columns. A value of
+/// another type than its column's goes in as the column's type when nothing is lost by
+/// that; one that cannot leaves its cell empty, and not saying what the message said before.
+fn show(cells: &mut BTreeMap<u16, Raw>, columns: &[(u16, u16)], now: &[Raw]) {
+    for r in now {
+        match cell_for(columns, r) {
+            Some(cell) => {
+                cells.insert(r.id, cell);
+            }
+            None if columns.iter().any(|(id, _)| *id == r.id) => {
+                cells.remove(&r.id);
+            }
+            None => {}
+        }
+    }
+}
+
+impl PstStore {
     /// A table's columns and rows, the table's own bookkeeping left out; `None` when the
     /// file has no such table or it cannot be read.
     pub(crate) fn table_of(&mut self, nid: u32) -> Option<(Vec<(u16, u16)>, Vec<Row>)> {
@@ -842,7 +857,7 @@ impl PstStore {
             let Some((now, removed)) = shown.get(&row.id) else { continue };
             let mut cells: BTreeMap<u16, Raw> =
                 std::mem::take(&mut row.cells).into_iter().filter(|c| !removed.contains(&c.id)).map(|c| (c.id, c)).collect();
-            cells.extend(now.iter().filter(|r| columns.iter().any(|(id, ty)| *id == r.id && *ty == r.ty)).map(|r| (r.id, copy(r))));
+            show(&mut cells, &columns, now);
             row.cells = cells.into_values().collect();
         }
         let mut subs = Subs::new(1);
@@ -1236,7 +1251,11 @@ impl PstStore {
         let (mut file, done) = self.save_to(file, seed)?;
         file.sync_all()?;
         file.seek(SeekFrom::Start(0))?;
-        let found = crate::check(&mut std::io::BufReader::new(&mut file))?;
+        // The check hears a stop as the writing does.
+        let found = match crate::check_until(&mut std::io::BufReader::new(&mut file), self.progress.as_deref()) {
+            Err(PstError::Stopped) => return Err(PstError::Write(STOPPED.to_string())),
+            found => found?,
+        };
         if let Some(problem) = found.problems.first() {
             return Err(PstError::Write(format!("the new file did not pass its own check ({problem}); nothing was replaced")));
         }

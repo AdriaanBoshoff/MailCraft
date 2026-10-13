@@ -175,6 +175,52 @@ pub(crate) fn copy(raw: &Raw) -> Raw {
     Raw { id: raw.id, ty: raw.ty, data: raw.data.clone() }
 }
 
+/// A value as a column of another type holds it, when nothing is lost by that: a whole
+/// number in a wider one or in a narrower one that has room for it, a 32-bit float as a
+/// 64-bit one (and back when it comes back the same), text of 7-bit characters as the
+/// other kind of string. A column has one type ([MS-PST] 2.3.4.2), and a list is sorted
+/// and shown by it.
+pub(crate) fn as_type(r: &Raw, ty: u16) -> Option<Raw> {
+    let whole = |r: &Raw| -> Option<i64> {
+        Some(match r.ty {
+            ptype::INT16 => i64::from(i16::from_le_bytes(r.data.get(..2)?.try_into().ok()?)),
+            ptype::INT32 => i64::from(i32::from_le_bytes(r.data.get(..4)?.try_into().ok()?)),
+            ptype::INT64 => i64::from_le_bytes(r.data.get(..8)?.try_into().ok()?),
+            _ => return None,
+        })
+    };
+    let data = match (r.ty, ty) {
+        (ptype::INT16 | ptype::INT32 | ptype::INT64, ptype::INT16) => i16::try_from(whole(r)?).ok()?.to_le_bytes().to_vec(),
+        (ptype::INT16 | ptype::INT32 | ptype::INT64, ptype::INT32) => i32::try_from(whole(r)?).ok()?.to_le_bytes().to_vec(),
+        (ptype::INT16 | ptype::INT32 | ptype::INT64, ptype::INT64) => whole(r)?.to_le_bytes().to_vec(),
+        (ptype::FLOAT32, ptype::FLOAT64) => f64::from(f32::from_le_bytes(r.data.get(..4)?.try_into().ok()?)).to_le_bytes().to_vec(),
+        (ptype::FLOAT64, ptype::FLOAT32) => {
+            let wide = f64::from_le_bytes(r.data.get(..8)?.try_into().ok()?);
+            let narrow = wide as f32;
+            if f64::from(narrow).to_bits() != wide.to_bits() {
+                return None;
+            }
+            narrow.to_le_bytes().to_vec()
+        }
+        (ptype::STRING8, ptype::STRING) if r.data.is_ascii() => r.data.iter().flat_map(|b| [*b, 0]).collect(),
+        (ptype::STRING, ptype::STRING8) if r.data.len().is_multiple_of(2) && r.data.chunks_exact(2).all(|c| matches!(c, [low, 0] if *low < 0x80)) => {
+            r.data.iter().step_by(2).copied().collect()
+        }
+        _ => return None,
+    };
+    Some(Raw { id: r.id, ty, data })
+}
+
+/// The cell a value gets in a table with these columns: itself under a column of its
+/// type, else what `as_type` makes of it for a column of its id. `None` when the table
+/// has no column that holds it; the item keeps the value all the same.
+pub(crate) fn cell_for(columns: &[(u16, u16)], r: &Raw) -> Option<Raw> {
+    if columns.contains(&(r.id, r.ty)) {
+        return Some(copy(r)).filter(|c| c.data.len() <= MAX_CELL);
+    }
+    columns.iter().filter(|(id, _)| *id == r.id).find_map(|(_, ty)| as_type(r, *ty)).filter(|c| c.data.len() <= MAX_CELL)
+}
+
 pub(crate) fn int(id: u16, v: i32) -> Raw {
     encode(id, &PropValue::Int32(v))
 }
@@ -658,7 +704,8 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
             let message = index << 5 | TYPE_MESSAGE;
             let (data, sub, cells) = o.message(&item, 0)?;
             o.w.node(message, nid, data, sub);
-            let cells = cells.into_iter().filter(|c| CONTENTS.iter().chain(CONTENTS_MORE).any(|(id, ty)| *id == c.id && *ty == c.ty)).collect();
+            let columns: Vec<(u16, u16)> = CONTENTS.iter().chain(CONTENTS_MORE).copied().collect();
+            let cells = cells.iter().filter_map(|c| cell_for(&columns, c)).collect();
             rows.push(Row { id: message, cells });
             total += 1;
             unread += u64::from(item.flags() & MSGFLAG_READ == 0);
