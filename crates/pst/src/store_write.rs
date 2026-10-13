@@ -608,8 +608,23 @@ thread_local! {
 /// The source is only read. An item it cannot give is left out and counted, so a mailbox with
 /// damage is saved as far as it can be read.
 pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [u8; 16]) -> Result<(W, Written), PstError> {
+    write_store_until(out, store, uid, None)
+}
+
+/// `write_store`, saying how far it is and stopping when asked: half of the progress is the
+/// items written, the other half is left to whoever checks the file afterwards. A write
+/// that was stopped gives `PstError::Stopped`, and what it wrote is no data file.
+pub fn write_store_until<W: Read + Write + Seek>(
+    out: W,
+    store: &mut dyn Store,
+    uid: [u8; 16],
+    progress: Option<&openmailclient_model::Progress>,
+) -> Result<(W, Written), PstError> {
     let source = |e: openmailclient_model::StoreError| PstError::Source(e.to_string());
     let listed = store.folders().map_err(source)?;
+    if let Some(p) = progress {
+        p.begin(listed.iter().map(|f| u64::from(f.total)).sum::<u64>().saturating_mul(2));
+    }
     // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
     let mut o = Out { w: NdbWriter::new(out, 1)?, names: Names::default(), uid, serial: 0 };
     let mut done = Written::default();
@@ -695,6 +710,12 @@ pub fn write_store<W: Read + Write + Seek>(out: W, store: &mut dyn Store, uid: [
         let mut rows = Vec::with_capacity(summaries.len());
         let (mut total, mut unread) = (0u64, 0u64);
         for s in summaries {
+            if let Some(p) = progress {
+                if p.stopped() {
+                    return Err(PstError::Stopped);
+                }
+                p.step();
+            }
             let Ok(item) = store.load(*id, ItemId(s.id)) else {
                 done.unreadable += 1;
                 continue;

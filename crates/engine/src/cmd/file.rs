@@ -79,7 +79,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "",
-            params: r#"{"path": target ending in .pst, "store": index (default: the current one), "wait": false to come back at once ({"started": true}) and copy a data file on a thread of its own, from the mailbox as it stands when asked; file.stopSave stops it}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
+            params: r#"{"path": target ending in .pst, "store": index (default: the current one), "wait": false to come back at once ({"started": true}) and write the new file on a thread of its own, from the mailbox as it stands when asked; file.stopSave stops it}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
             enabled: has_store,
             run: export,
         },
@@ -394,7 +394,7 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
             }
         });
         if spawned.is_ok() {
-            s.exports.push(crate::Exporting::new(idx, path.to_path_buf(), tmp, id, progress, done));
+            s.exports.push(crate::Exporting::new(idx, path.to_path_buf(), tmp, progress, done));
             s.status = String::new();
             return Ok(json!({"started": true, "untrusted_content": {"path": path.display().to_string()}}));
         }

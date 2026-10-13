@@ -92,6 +92,11 @@ impl Store for MemStore {
         true
     }
 
+    fn apart(&mut self) -> Result<Option<crate::Apart>, StoreError> {
+        let copy = self.clone();
+        Ok(Some(Box::new(move |_| Ok(Box::new(copy) as Box<dyn Store>))))
+    }
+
     fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError> {
         Ok(self.folders.iter().map(|f| f.info.clone()).collect())
     }

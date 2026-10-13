@@ -175,16 +175,18 @@ pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Sa
         return Err(EngineError::BadParams("a data file cannot be saved over itself; choose another name".into()));
     }
     let tmp = tmp_beside(path)?;
-    let saved = write_checked(store, &tmp, id).and_then(|saved| Ok(std::fs::rename(&tmp, path).map(|()| saved)?));
+    let saved = write_checked(store, &tmp, id, None).and_then(|saved| Ok(std::fs::rename(&tmp, path).map(|()| saved)?));
     if saved.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     saved
 }
 
-/// The long part of `save_store` for a store that can be copied away from the caller: the
-/// work, and the file beside the target it writes. The work copies and checks; what it gives
-/// goes to `export_end`. `None` for a store that cannot: `save_store` is for those.
+/// The long part of `save_store` for a store that can be had apart from the caller: the
+/// work, and the file beside the target it writes. The work takes the mailbox as it stood
+/// when this was asked, writes it as `save_store` does (copied as it is stored when it can
+/// be, from what is read otherwise) and checks it; what it gives goes to `export_end`.
+/// `None` for a store that cannot: `save_store` is for those.
 pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Option<(ExportWork, PathBuf)>, EngineError> {
     if cfg!(target_arch = "wasm32") {
         return Ok(None);
@@ -198,11 +200,11 @@ pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<
         return Err(EngineError::BadParams("a data file cannot be saved over itself; choose another name".into()));
     }
     let tmp = tmp_beside(path)?;
-    let Some(work) = store.copy_begin(&tmp, id)? else { return Ok(None) };
+    let Some(apart) = store.apart()? else { return Ok(None) };
     let beside = tmp.clone();
     let work: ExportWork = Box::new(move |progress| {
-        let hears = progress.clone();
-        let saved = work(progress).map_err(EngineError::from).and_then(|done| copied(&beside, done, Some(&hears)));
+        let saved =
+            apart(progress.clone()).map_err(EngineError::from).and_then(|mut store| write_checked(store.as_mut(), &beside, id, Some(&progress)));
         if saved.is_err() {
             let _ = std::fs::remove_file(&beside);
         }
@@ -248,21 +250,26 @@ impl Saved {
     }
 }
 
-fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Saved, EngineError> {
+fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16], progress: Option<&openmailclient_model::Progress>) -> Result<Saved, EngineError> {
     // A data file is copied node for node when it can be. When that fails, or what comes of
     // it does not pass the check (the source has damage), the model's way is taken: it
     // leaves out what cannot be read and says how much.
-    let not_copied = match copy_checked(store, tmp, id) {
+    let not_copied = match copy_checked(store, tmp, id, progress) {
         Ok(Some(saved)) => return Ok(saved),
         Ok(None) => None,
+        // A copy that was stopped is not tried another way.
+        Err(e) if progress.is_some_and(|p| p.stopped()) => return Err(e),
         Err(e) => Some(e.to_string()),
     };
     let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
-    let (mut file, done) = openmailclient_pst::write_store(file, store, id).map_err(pst_error)?;
+    let (mut file, done) = openmailclient_pst::write_store_until(file, store, id, progress).map_err(pst_error)?;
     file.sync_all()?;
     let bytes = file.seek(SeekFrom::End(0))?;
     file.seek(SeekFrom::Start(0))?;
-    let found = openmailclient_pst::check(&mut std::io::BufReader::new(&mut file)).map_err(pst_error)?;
+    let found = openmailclient_pst::check_until(&mut std::io::BufReader::new(&mut file), progress).map_err(pst_error)?;
+    if let Some(p) = progress {
+        p.part(2);
+    }
     if !found.sound() {
         let first = found.problems.first().or(found.inside.first()).map(String::as_str).unwrap_or("no detail");
         return Err(EngineError::Format(format!("the data file that was written did not pass its own check ({first}); nothing was replaced")));
@@ -270,9 +277,14 @@ fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Save
     Ok(Saved { folders: done.folders, items: done.items, unreadable: done.unreadable, bytes, copied: false, not_copied })
 }
 
-fn copy_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Option<Saved>, EngineError> {
+fn copy_checked(
+    store: &mut dyn Store,
+    tmp: &Path,
+    id: [u8; 16],
+    stop: Option<&openmailclient_model::Progress>,
+) -> Result<Option<Saved>, EngineError> {
     let Some(done) = store.copy_to(tmp, id)? else { return Ok(None) };
-    copied(tmp, done, None).map(Some)
+    copied(tmp, done, stop).map(Some)
 }
 
 /// Hold a copy that was written to `tmp` against the structure check.

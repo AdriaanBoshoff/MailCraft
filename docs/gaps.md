@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 60 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 61 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 61 · 2026-10-13 — M3b.19: `file.export` with `"wait": false` runs on a thread of its own for every kind of mailbox, the writing from what is read included.
 - 60 · 2026-10-13 — M3b.18: values of another type than their column's are shown as the column holds them; the structure check hears Stop and compares fill levels.
 - 59 · 2026-10-13 — M3b.17: a file attached again with other contents keeps its stored properties; attachments that cannot be read are carried through a save.
 - 58 · 2026-10-13 — M3b.16: 32-bit floats, currency, times as days and error codes keep their kind; a saved file goes on from the header's counters; `file.keepOriginal`.

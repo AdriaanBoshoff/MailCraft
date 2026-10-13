@@ -1,6 +1,6 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 70 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 71 · 2026-10-12
 
 ## Headline numbers
 
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -105,7 +105,8 @@
 54. Done: the small things left in the writer: values keep their kind, a rewritten file goes on from the header's counters, and the file as it was need not be kept (M3b.16).
 55. Done: a file attached again with other contents keeps what is stored on it, and an attachment that cannot be read stays where it is (M3b.17).
 56. Done: a value of another type than its column's is shown as the column holds it; the structure check hears Stop and compares a heap's fill levels with its blocks (M3b.18).
-57. Next: M3b.19: an export of a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file) on a thread of its own.
+57. Done: an export of any mailbox runs on a thread of its own: the sample, an `.ost`, an ANSI `.pst` and a 4K-page file as well (M3b.19).
+58. Next: M3b.20: the structure check for ANSI data files and for files with 4K pages.
 
 ## Do later (from M2)
 
@@ -151,7 +152,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~A choice not to keep the file as it was beside a data file on its first save~~ | done: M3b.16 (`file.keepOriginal`) |
 | ~~The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`~~ | done: M3b.15 |
 | ~~Export off the UI thread, with progress and a way to stop~~ | done: M3b.14, for a Unicode `.pst` copied as stored |
-| Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file) | M3b |
+| ~~Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file)~~ | done: M3b.19 |
 | ~~The structure check hearing Stop~~ | done: M3b.18 |
 | ~~Table cells whose type differs from the column's kept in a saved `.pst`'s tables~~ | done: M3b.18, where nothing is lost by it; otherwise the cell is empty and the item keeps the value |
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
@@ -1113,3 +1114,22 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   second block's half of the byte rests on the first; text beyond 7 bits is not converted
   between the kinds of string (it depends on a code page); the check is still not run on a
   512-byte-page `.pst` written by Outlook, there being none here.
+- **2026-10-13** - M3b.19: an export that does not hold the window, for every kind of mailbox. A store
+  gives itself apart (`Store::apart`): the mailbox as it stands when asked, to be had on
+  another thread. A mailbox in memory hands over a copy of itself; a data file of any kind
+  is opened there through a handle of its own, with the unsaved changes as they are, after
+  a look that no other program changed the file meanwhile. `file.export` with
+  `"wait": false` now starts for the sample mailbox, an `.ost`, an ANSI `.pst` and a
+  4K-page file too, and the whole of the writing runs there: the copy of a Unicode `.pst`
+  as it is stored, and the writing from what is read where that cannot be done.
+  `write_store_until` says how far it is, an item a step, and stops when asked; the check
+  after it hears the stop as well. This takes the place of `Store::copy_begin`, which could
+  only copy. Made better on the way: when a copy as stored failed (a source with damage),
+  the mailbox was written from what is read on the caller's thread, holding the window for
+  as long as that took; that part runs on the export's thread now, so nothing of an export
+  asked for this way holds the caller. A copy that was stopped is not tried the other way.
+  1 test extended (the sample exported while a message is deleted, which the new file still
+  has; an `.ost` exported and left byte for byte as it was; one stopped). Not done: an ANSI
+  `.pst` and a 4K-page file were not exported this way in a test, there being no writer for
+  them yet (they take the same path as the `.ost` in the test); a data file that was opened
+  from bytes and is in no file is exported on the caller's thread.

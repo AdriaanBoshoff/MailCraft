@@ -175,7 +175,6 @@ pub struct Exporting {
     pub to: std::path::PathBuf,
     /// The file beside it that is written first.
     tmp: std::path::PathBuf,
-    id: [u8; 16],
     pub progress: std::sync::Arc<openmailclient_model::Progress>,
     done: std::sync::mpsc::Receiver<Result<io::Saved, EngineError>>,
 }
@@ -185,11 +184,10 @@ impl Exporting {
         store: usize,
         to: std::path::PathBuf,
         tmp: std::path::PathBuf,
-        id: [u8; 16],
         progress: std::sync::Arc<openmailclient_model::Progress>,
         done: std::sync::mpsc::Receiver<Result<io::Saved, EngineError>>,
     ) -> Self {
-        Self { store, to, tmp, id, progress, done }
+        Self { store, to, tmp, progress, done }
     }
 }
 
@@ -616,12 +614,8 @@ impl Session {
                     Err(EngineError::BadParams("that data file was opened here meanwhile".into()))
                 }
                 Ok(saved) => io::export_end(&export.tmp, &to).map(|()| saved),
-                Err(e) if export.progress.stopped() => Err(e),
-                // What cannot be copied as it is stored is written from what is read, here.
-                Err(_) => match self.stores.get_mut(export.store) {
-                    Some(store) => io::save_store(store.as_mut(), &to, export.id),
-                    None => lost(),
-                },
+                // The work tried both ways of writing the mailbox: what it says is how it is.
+                Err(e) => Err(e),
             };
             self.status = match done {
                 Ok(saved) => saved.says(&to),

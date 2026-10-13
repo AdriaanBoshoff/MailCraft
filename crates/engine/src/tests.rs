@@ -2201,11 +2201,46 @@ fn an_export_that_is_not_waited_for_copies_the_mailbox_as_it_stood() {
     }
     assert!(no_tmp(&dir) && !left.exists());
 
-    // A mailbox that is in no file is exported the plain way whatever is asked.
+    // A mailbox that is in no file is written from what is read, on a thread of its own as
+    // well, and as it stood when the export was asked for.
     let plain = dir.join("plain.pst");
     let mut sample = session();
-    assert_eq!(run(&mut sample, "file.export", json!({"path": plain, "wait": false}))["started"], false);
-    assert!(sample.exports.is_empty() && plain.exists());
+    let (all, _) = folder(&sample, "Inbox");
+    assert_eq!(run(&mut sample, "file.export", json!({"path": plain, "wait": false}))["started"], true);
+    assert!(sample.working().is_some_and(|(what, _)| what == "Exporting to plain.pst"));
+    run(&mut sample, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut sample, "mail.delete", Value::Null);
+    until_ended(&mut sample);
+    assert!(sample.status.starts_with("Exported ") && !sample.status.contains("as it is stored"), "{}", sample.status);
+    assert_eq!(folder(&sample, "Inbox").0, all - 1);
+    assert_eq!(inbox_of(&plain), all);
+    assert!(crate::io::check_structure(&plain).unwrap().unwrap().problems.is_empty());
+
+    // So is a data file that is only read (an `.ost`), through a handle of its own.
+    let ost = dir.join("box.ost");
+    std::fs::write(&ost, &first).unwrap();
+    let mut s = Session::new();
+    s.now = now();
+    run(&mut s, "file.open", json!({"path": ost}));
+    let from_ost = dir.join("from-ost.pst");
+    assert_eq!(run(&mut s, "file.export", json!({"path": from_ost, "wait": false}))["started"], true);
+    until_ended(&mut s);
+    assert!(s.status.starts_with("Exported ") && !s.status.contains("as it is stored"), "{}", s.status);
+    assert_eq!(inbox_of(&from_ost), total);
+    assert_eq!(std::fs::read(&ost).unwrap(), first);
+    // One that is told to stop before it has begun writes nothing, and is not tried again
+    // another way.
+    let never = dir.join("never.pst");
+    run(&mut s, "file.export", json!({"path": never, "wait": false}));
+    run(&mut s, "file.stopSave", Value::Null);
+    until_ended(&mut s);
+    if s.status.contains("was stopped") {
+        assert!(!never.exists());
+    } else {
+        assert!(s.status.starts_with("Exported "), "{}", s.status);
+    }
+    assert!(no_tmp(&dir));
+    drop(s);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -43,9 +43,10 @@ pub type SaveWork = Box<dyn FnOnce(std::sync::Arc<Progress>) -> Result<SaveDone,
 /// What the long part of a save gives back to the store that began it.
 pub type SaveDone = Box<dyn std::any::Any + Send>;
 
-/// The long part of `Store::copy_to`, run on a thread of its own with a place to say how
-/// far it is and to hear that it is to stop.
-pub type CopyWork = Box<dyn FnOnce(std::sync::Arc<Progress>) -> Result<Copied, StoreError> + Send>;
+/// The mailbox as it stands, to be had on another thread: run there, it gives a store of
+/// its own that the first one's later changes do not reach. What that store does at
+/// length, it reports to the progress it was given, and stops when that says so.
+pub type Apart = Box<dyn FnOnce(std::sync::Arc<Progress>) -> Result<Box<dyn Store>, StoreError> + Send>;
 
 /// How far a long piece of work is, read by whoever shows it while it runs elsewhere.
 #[derive(Debug, Default)]
@@ -652,10 +653,10 @@ pub trait Store {
     /// Whether the file as it was stays beside a data file the first time a save replaces
     /// it. It does unless this says otherwise; a store that is in no file has nothing to keep.
     fn keep_original(&mut self, _keep: bool) {}
-    /// `copy_to` as work to be done on a thread of its own: it reads the data file through a
-    /// handle of its own and copies the mailbox as it stood when this was asked, so the store
-    /// goes on being read and changed meanwhile. `None` when this store cannot.
-    fn copy_begin(&mut self, _to: &std::path::Path, _seed: [u8; 16]) -> Result<Option<CopyWork>, StoreError> {
+    /// The mailbox as it stands when this is asked, for a thread of its own: a data file is
+    /// read there through a handle of its own, with the changes as they are now, so this
+    /// store goes on being read and changed meanwhile. `None` when this store cannot.
+    fn apart(&mut self) -> Result<Option<Apart>, StoreError> {
         Ok(None)
     }
     /// Every folder under the visible root (the "IPM subtree"), parents before children.

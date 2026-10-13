@@ -1394,14 +1394,12 @@ impl PstStore {
         Ok(Some(openmailclient_model::Copied { folders: listed.len() as u64, items }))
     }
 
-    /// `e_copy_to` as work for another thread: a store of its own on the same file, with the
-    /// changes as they are now.
-    pub(crate) fn e_copy_begin(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::CopyWork>, StoreError> {
-        if !self.can_edit() {
-            return Ok(None);
-        }
+    /// The mailbox for another thread: a store of its own on the same file, with the
+    /// changes as they are now. A data file of any kind can be had so; one that is in no
+    /// file cannot.
+    pub(crate) fn e_apart(&mut self) -> Result<Option<openmailclient_model::Apart>, StoreError> {
         let Some(path) = self.path.clone() else { return Ok(None) };
-        let (edits, was, to) = (self.edits.clone(), self.stamp, to.to_path_buf());
+        let (edits, was) = (self.edits.clone(), self.stamp);
         Ok(Some(Box::new(move |progress: std::sync::Arc<openmailclient_model::Progress>| {
             let mut store = Self::open(&path)?;
             if store.stamp != was {
@@ -1409,7 +1407,7 @@ impl PstStore {
             }
             store.edits = edits;
             store.progress = Some(progress);
-            store.e_copy_to(&to, seed)?.ok_or_else(|| StoreError::Format("the data file cannot be copied as it is stored".to_string()))
+            Ok(Box::new(store) as Box<dyn openmailclient_model::Store>)
         })))
     }
 

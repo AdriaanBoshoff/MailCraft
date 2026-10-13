@@ -24,7 +24,7 @@ mod write;
 pub use check::{Check, check, check_until};
 pub use edit::original_beside;
 pub use journal::{journal_beside, journal_elsewhere, set_aside};
-pub use store_write::{Written, write_store};
+pub use store_write::{Written, write_store, write_store_until};
 
 use ltp::Raw;
 use ndb::{Ndb, Subnodes, u32_at};
@@ -455,8 +455,8 @@ impl Store for PstStore {
         self.keep_before = keep;
     }
 
-    fn copy_begin(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::CopyWork>, StoreError> {
-        self.e_copy_begin(to, seed)
+    fn apart(&mut self) -> Result<Option<openmailclient_model::Apart>, StoreError> {
+        self.e_apart()
     }
 
     fn recover(&mut self) -> Result<openmailclient_model::Recovery, StoreError> {
