@@ -167,10 +167,49 @@ impl Drop for Saving {
     }
 }
 
+/// An export of a data file that is being done on a thread of its own.
+pub struct Exporting {
+    /// Which data file, by its place in `Session::stores`; no data file is closed meanwhile.
+    pub store: usize,
+    /// The file being exported to.
+    pub to: std::path::PathBuf,
+    /// The file beside it that is written first.
+    tmp: std::path::PathBuf,
+    id: [u8; 16],
+    pub progress: std::sync::Arc<openmailclient_model::Progress>,
+    done: std::sync::mpsc::Receiver<Result<io::Saved, EngineError>>,
+}
+
+impl Exporting {
+    pub(crate) fn new(
+        store: usize,
+        to: std::path::PathBuf,
+        tmp: std::path::PathBuf,
+        id: [u8; 16],
+        progress: std::sync::Arc<openmailclient_model::Progress>,
+        done: std::sync::mpsc::Receiver<Result<io::Saved, EngineError>>,
+    ) -> Self {
+        Self { store, to, tmp, id, progress, done }
+    }
+}
+
+impl Drop for Exporting {
+    fn drop(&mut self) {
+        // Nobody is left to end it: it stops, and what it wrote beside the target goes. It is
+        // waited for, so that no file is finished after this has looked.
+        self.progress.stop();
+        if self.done.recv().is_ok_and(|done| done.is_ok()) {
+            let _ = std::fs::remove_file(&self.tmp);
+        }
+    }
+}
+
 pub struct Session {
     /// Saves of data files that are being done away from the caller: `file.save` with
     /// `"wait": false` starts them, `Session::poll` ends them.
     pub saves: Vec<Saving>,
+    /// Exports that are being done away from the caller, likewise (`file.export`).
+    pub exports: Vec<Exporting>,
     pub stores: Vec<Box<dyn Store>>,
     /// Folder lists per store, cached; refreshed after every command that changes a store.
     pub folders: Vec<Vec<FolderInfo>>,
@@ -219,6 +258,7 @@ impl Session {
         let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Self {
             saves: Vec::new(),
+            exports: Vec::new(),
             stores: Vec::new(),
             folders: Vec::new(),
             module: Module::Mail,
@@ -532,12 +572,71 @@ impl Session {
     /// status says why not. The host asks every so often while `saves` is not empty. True
     /// when one ended.
     pub fn poll(&mut self) -> bool {
-        self.end_saves(false)
+        let saved = self.end_saves(false);
+        self.end_exports(false) || saved
     }
 
-    /// Wait for every save that is running, and end it. The host asks before it leaves.
+    /// Wait for every save and export that is running, and end it. The host asks before it
+    /// leaves.
     pub fn finish_saves(&mut self) {
         self.end_saves(true);
+        self.end_exports(true);
+    }
+
+    fn end_exports(&mut self, wait: bool) -> bool {
+        let mut ended = false;
+        let mut at = 0;
+        while let Some(export) = self.exports.get(at) {
+            let lost = || Err(EngineError::Format("the export ended without saying how".to_string()));
+            let done = if wait {
+                export.done.recv().unwrap_or_else(|_| lost())
+            } else {
+                match export.done.try_recv() {
+                    Ok(done) => done,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        at += 1;
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => lost(),
+                }
+            };
+            let export = self.exports.remove(at);
+            ended = true;
+            let to = export.to.clone();
+            // A data file that was opened here meanwhile is not written over.
+            let open_here = std::fs::canonicalize(&to)
+                .is_ok_and(|real| self.stores.iter().any(|st| st.path().and_then(|p| std::fs::canonicalize(p).ok()).is_some_and(|p| p == real)));
+            let done = match done {
+                Ok(_) if open_here => {
+                    let _ = std::fs::remove_file(&export.tmp);
+                    Err(EngineError::BadParams("that data file was opened here meanwhile".into()))
+                }
+                Ok(saved) => io::export_end(&export.tmp, &to).map(|()| saved),
+                Err(e) if export.progress.stopped() => Err(e),
+                // What cannot be copied as it is stored is written from what is read, here.
+                Err(_) => match self.stores.get_mut(export.store) {
+                    Some(store) => io::save_store(store.as_mut(), &to, export.id),
+                    None => lost(),
+                },
+            };
+            self.status = match done {
+                Ok(saved) => saved.says(&to),
+                Err(_) if export.progress.stopped() => format!("The export to {} was stopped; nothing was written there", to.display()),
+                Err(e) => format!("Nothing was exported to {}: {e}", to.display()),
+            };
+        }
+        ended
+    }
+
+    /// What is being saved or exported on a thread of its own, in words, and how far it is
+    /// from 0 to 1; `None` when nothing is.
+    pub fn working(&self) -> Option<(String, f32)> {
+        if let Some(done) = self.saving() {
+            return Some((format!("Saving {}", self.saves.first().map_or("", |s| s.name.as_str())), done));
+        }
+        let export = self.exports.first()?;
+        let name = export.to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        Some((format!("Exporting to {name}"), export.progress.fraction().clamp(0.0, 1.0)))
     }
 
     fn end_saves(&mut self, wait: bool) -> bool {

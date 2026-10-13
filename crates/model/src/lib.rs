@@ -43,6 +43,10 @@ pub type SaveWork = Box<dyn FnOnce(std::sync::Arc<Progress>) -> Result<SaveDone,
 /// What the long part of a save gives back to the store that began it.
 pub type SaveDone = Box<dyn std::any::Any + Send>;
 
+/// The long part of `Store::copy_to`, run on a thread of its own with a place to say how
+/// far it is and to hear that it is to stop.
+pub type CopyWork = Box<dyn FnOnce(std::sync::Arc<Progress>) -> Result<Copied, StoreError> + Send>;
+
 /// How far a long piece of work is, read by whoever shows it while it runs elsewhere.
 #[derive(Debug, Default)]
 pub struct Progress {
@@ -643,6 +647,12 @@ pub trait Store {
     /// properties, properties this program does not know. The store itself is only read.
     /// `None` when this store cannot (the caller then writes what the model gives).
     fn copy_to(&mut self, _to: &std::path::Path, _seed: [u8; 16]) -> Result<Option<Copied>, StoreError> {
+        Ok(None)
+    }
+    /// `copy_to` as work to be done on a thread of its own: it reads the data file through a
+    /// handle of its own and copies the mailbox as it stood when this was asked, so the store
+    /// goes on being read and changed meanwhile. `None` when this store cannot.
+    fn copy_begin(&mut self, _to: &std::path::Path, _seed: [u8; 16]) -> Result<Option<CopyWork>, StoreError> {
         Ok(None)
     }
     /// Every folder under the visible root (the "IPM subtree"), parents before children.

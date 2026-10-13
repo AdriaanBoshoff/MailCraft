@@ -785,7 +785,7 @@ impl MailUi {
         }
         // Saves that run on threads of their own are ended here, and shown while they run.
         self.session.poll();
-        if self.session.saving().is_some() {
+        if self.session.working().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         let t = self.tokens.clone();
@@ -1016,10 +1016,9 @@ impl MailUi {
         };
         let right_w = text_width(&p, right, font(11.5));
         p.text(pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, right, font(11.5), t.bar_text);
-        if let Some(done) = s.saving() {
-            // A save that runs: its name, a bar that fills, and how far it is.
-            let name = s.saves.first().map_or("", |saving| saving.name.as_str());
-            x += clip_text(&p, pos2(x, y), 220.0, &format!("Saving {name}"), font(11.5), t.bar_text) + 8.0;
+        if let Some((what, done)) = s.working() {
+            // A save or an export that runs: what it is, a bar that fills, and how far it is.
+            x += clip_text(&p, pos2(x, y), 220.0, &what, font(11.5), t.bar_text) + 8.0;
             let track = Rect::from_min_size(pos2(x, rect.center().y - 3.0), vec2(120.0, 6.0));
             p.rect_filled(track, 3.0, t.bar_text.gamma_multiply(0.25));
             p.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * done, track.height())), 3.0, t.bar_text);

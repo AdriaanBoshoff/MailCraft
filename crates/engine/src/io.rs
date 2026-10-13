@@ -182,6 +182,71 @@ pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Sa
     saved
 }
 
+/// The long part of `save_store` for a store that can be copied away from the caller: the
+/// work, and the file beside the target it writes. The work copies and checks; what it gives
+/// goes to `export_end`. `None` for a store that cannot: `save_store` is for those.
+pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Option<(ExportWork, PathBuf)>, EngineError> {
+    if cfg!(target_arch = "wasm32") {
+        return Ok(None);
+    }
+    if !path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pst")) {
+        return Err(EngineError::BadParams("a data file is saved under a name ending in .pst".into()));
+    }
+    if let Some(from) = store.path().and_then(|p| std::fs::canonicalize(p).ok())
+        && std::fs::canonicalize(path).is_ok_and(|to| to == from)
+    {
+        return Err(EngineError::BadParams("a data file cannot be saved over itself; choose another name".into()));
+    }
+    let tmp = tmp_beside(path)?;
+    let Some(work) = store.copy_begin(&tmp, id)? else { return Ok(None) };
+    let beside = tmp.clone();
+    let work: ExportWork = Box::new(move |progress| {
+        let saved = work(progress).map_err(EngineError::from).and_then(|done| copied(&beside, done));
+        if saved.is_err() {
+            let _ = std::fs::remove_file(&beside);
+        }
+        saved
+    });
+    Ok(Some((work, tmp)))
+}
+
+/// What `export_begin` gives to be run elsewhere.
+pub type ExportWork = Box<dyn FnOnce(std::sync::Arc<openmailclient_model::Progress>) -> Result<Saved, EngineError> + Send>;
+
+/// The short part: the file the work wrote takes the target's place.
+pub fn export_end(tmp: &Path, path: &Path) -> Result<(), EngineError> {
+    let placed = std::fs::rename(tmp, path);
+    if placed.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    Ok(placed?)
+}
+
+impl Saved {
+    /// What the status says of an export to `path`.
+    pub fn says(&self, path: &Path) -> String {
+        let mut says = if self.unreadable == 0 {
+            format!("Exported {} items in {} folders to {}", self.items, self.folders, path.display())
+        } else {
+            format!(
+                "Exported {} items in {} folders to {}; {} could not be read and are not in the file",
+                self.items,
+                self.folders,
+                path.display(),
+                self.unreadable
+            )
+        };
+        if self.copied {
+            says.push_str(", as it is stored");
+        } else if let Some(why) = &self.not_copied {
+            says.push_str(&format!(
+                "; it could not be copied as it is stored ({why}), so hidden items and what this program does not know of are not in it"
+            ));
+        }
+        says
+    }
+}
+
 fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Saved, EngineError> {
     // A data file is copied node for node when it can be. When that fails, or what comes of
     // it does not pass the check (the source has damage), the model's way is taken: it
@@ -206,6 +271,11 @@ fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Save
 
 fn copy_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Option<Saved>, EngineError> {
     let Some(done) = store.copy_to(tmp, id)? else { return Ok(None) };
+    copied(tmp, done).map(Some)
+}
+
+/// Hold a copy that was written to `tmp` against the structure check.
+fn copied(tmp: &Path, done: openmailclient_model::Copied) -> Result<Saved, EngineError> {
     let mut file = std::fs::File::open(tmp)?;
     let bytes = file.seek(SeekFrom::End(0))?;
     file.seek(SeekFrom::Start(0))?;
@@ -214,7 +284,7 @@ fn copy_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Optio
         let first = found.problems.first().or(found.inside.first()).map(String::as_str).unwrap_or("no detail");
         return Err(EngineError::Format(format!("the copy did not pass its own check ({first})")));
     }
-    Ok(Some(Saved { folders: done.folders, items: done.items, unreadable: 0, bytes, copied: true, not_copied: None }))
+    Ok(Saved { folders: done.folders, items: done.items, unreadable: 0, bytes, copied: true, not_copied: None })
 }
 
 pub fn save_item(item: &Item, path: &Path) -> Result<(), EngineError> {

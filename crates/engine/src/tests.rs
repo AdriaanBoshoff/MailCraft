@@ -2120,6 +2120,96 @@ fn a_save_that_is_not_waited_for_leaves_the_session_to_be_used() {
 }
 
 #[test]
+fn an_export_that_is_not_waited_for_copies_the_mailbox_as_it_stood() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-export-elsewhere-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.pst");
+    run(&mut session(), "file.export", json!({"path": path}));
+    let first = std::fs::read(&path).unwrap();
+    let mut s = Session::new();
+    s.now = now();
+    run(&mut s, "file.open", json!({"path": path}));
+    let (total, _) = folder(&s, "Inbox");
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut s, "mail.delete", Value::Null);
+    let until_ended = |s: &mut Session| {
+        for _ in 0..2000 {
+            if s.poll() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the export did not end");
+    };
+    let no_tmp = |dir: &std::path::Path| std::fs::read_dir(dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp"));
+    let inbox_of = |path: &std::path::Path| {
+        let mut other = Session::new();
+        run(&mut other, "file.open", json!({"path": path}));
+        folder(&other, "Inbox").0
+    };
+
+    // An export that is stopped: nothing is where it was to go.
+    let stopped = dir.join("stopped.pst");
+    assert!(!s.is_enabled("file.stopSave") && s.working().is_none());
+    let done = run(&mut s, "file.export", json!({"path": stopped, "wait": false}));
+    assert_eq!(done["started"], true);
+    assert!(s.is_enabled("file.stopSave") && s.working().is_some_and(|(what, _)| what == "Exporting to stopped.pst"));
+    assert!(s.run("file.export", &json!({"path": stopped, "wait": false})).is_err(), "one export to a file at a time");
+    assert!(s.run("file.closeStore", &json!({"discard": true})).is_err());
+    assert_eq!(run(&mut s, "file.stopSave", Value::Null)["stopping"], 1);
+    until_ended(&mut s);
+    // An export this small may be done before it hears it is to stop.
+    if s.status.contains("was stopped") {
+        assert!(!stopped.exists());
+    } else {
+        assert!(s.status.starts_with("Exported "), "{}", s.status);
+    }
+    assert!(s.exports.is_empty() && s.working().is_none() && no_tmp(&dir));
+
+    // One that runs to its end: the mailbox goes on being changed meanwhile, and the file
+    // holds it as it stood when the export was asked for.
+    let out = dir.join("out.pst");
+    assert_eq!(run(&mut s, "file.export", json!({"path": out, "wait": false}))["started"], true);
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut s, "mail.delete", Value::Null);
+    assert_eq!(folder(&s, "Inbox").0, total - 2);
+    until_ended(&mut s);
+    assert!(s.status.starts_with("Exported ") && s.status.ends_with(", as it is stored"), "{}", s.status);
+    assert!(s.unsaved(), "an export saves nothing");
+    assert_eq!(std::fs::read(&path).unwrap(), first);
+    let found = crate::io::check_structure(&out).unwrap().unwrap();
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
+    assert_eq!(inbox_of(&out), total - 1);
+
+    // Leaving waits for an export that runs.
+    let last = dir.join("last.pst");
+    run(&mut s, "file.export", json!({"path": last, "wait": false}));
+    s.finish_saves();
+    assert!(s.exports.is_empty() && s.status.starts_with("Exported "), "{}", s.status);
+    assert_eq!(inbox_of(&last), total - 2);
+
+    // A session that goes while an export runs leaves no half of a file behind.
+    let left = dir.join("left.pst");
+    run(&mut s, "file.export", json!({"path": left, "wait": false}));
+    drop(s);
+    for _ in 0..2000 {
+        if no_tmp(&dir) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(no_tmp(&dir) && !left.exists());
+
+    // A mailbox that is in no file is exported the plain way whatever is asked.
+    let plain = dir.join("plain.pst");
+    let mut sample = session();
+    assert_eq!(run(&mut sample, "file.export", json!({"path": plain, "wait": false}))["started"], false);
+    assert!(sample.exports.is_empty() && plain.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn changes_to_an_open_pst_are_saved_into_it() {
     let dir = std::env::temp_dir().join(format!("openmailclient-save-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

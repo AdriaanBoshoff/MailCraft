@@ -416,6 +416,10 @@ impl Store for PstStore {
         self.e_copy_to(to, seed)
     }
 
+    fn copy_begin(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::CopyWork>, StoreError> {
+        self.e_copy_begin(to, seed)
+    }
+
     fn recover(&mut self) -> Result<openmailclient_model::Recovery, StoreError> {
         PstStore::recover(self).map_err(StoreError::from)
     }

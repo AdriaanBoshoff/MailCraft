@@ -59,7 +59,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Save",
             shortcut: "",
-            params: r#"{"store": index}; default: every save that is running. The data file stays as it was and the changes stay unsaved; returns {"stopping": how many}"#,
+            params: r#"{"store": index}; default: every save and every export that is running. A data file being saved stays as it was and its changes stay unsaved; a file being exported to is not written; returns {"stopping": how many}"#,
             enabled: is_saving,
             run: stop_save,
         },
@@ -69,7 +69,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "",
-            params: r#"{"path": target ending in .pst, "store": index (default: the current one)}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
+            params: r#"{"path": target ending in .pst, "store": index (default: the current one), "wait": false to come back at once ({"started": true}) and copy a data file on a thread of its own, from the mailbox as it stands when asked; file.stopSave stops it}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
             enabled: has_store,
             run: export,
         },
@@ -145,7 +145,7 @@ fn can_save(s: &Session) -> bool {
 }
 
 fn is_saving(s: &Session) -> bool {
-    !s.saves.is_empty()
+    !s.saves.is_empty() || !s.exports.is_empty()
 }
 
 /// Ask saves that are running to stop. They end when their work notices.
@@ -154,6 +154,10 @@ fn stop_save(s: &mut Session, p: &Value) -> CmdResult {
     let mut stopping = 0;
     for saving in s.saves.iter().filter(|saving| only.is_none_or(|i| i == saving.store)) {
         saving.progress.stop();
+        stopping += 1;
+    }
+    for export in s.exports.iter().filter(|export| only.is_none_or(|i| i == export.store)) {
+        export.progress.stop();
         stopping += 1;
     }
     Ok(json!({ "stopping": stopping }))
@@ -346,28 +350,36 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     {
         return Err(EngineError::BadParams("that data file is open here; close it first or choose another name".into()));
     }
+    if s.exports.iter().any(|e| e.to == path) {
+        return Err(EngineError::BadParams("that data file is being written by an export already".into()));
+    }
     let id = io::new_store_id(s.now);
     let store = s.stores.get_mut(idx).ok_or_else(|| EngineError::BadParams(format!("there is no data file {idx}")))?;
-    let saved = io::save_store(store.as_mut(), path, id)?;
-    s.status = if saved.unreadable == 0 {
-        format!("Exported {} items in {} folders to {}", saved.items, saved.folders, path.display())
-    } else {
-        format!(
-            "Exported {} items in {} folders to {}; {} could not be read and are not in the file",
-            saved.items,
-            saved.folders,
-            path.display(),
-            saved.unreadable
-        )
-    };
-    if saved.copied {
-        s.status.push_str(", as it is stored");
-    } else if let Some(why) = &saved.not_copied {
-        s.status.push_str(&format!(
-            "; it could not be copied as it is stored ({why}), so hidden items and what this program does not know of are not in it"
-        ));
+    if p_bool(p, "wait") == Some(false)
+        && let Some((work, tmp)) = io::export_begin(store.as_mut(), path, id)?
+    {
+        let progress = std::sync::Arc::new(openmailclient_model::Progress::default());
+        let (tx, done) = std::sync::mpsc::channel();
+        let (theirs, beside) = (progress.clone(), tmp.clone());
+        let spawned = std::thread::Builder::new().name("export".to_string()).spawn(move || {
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(theirs)))
+                .unwrap_or_else(|_| Err(EngineError::Format("the export failed inside; nothing was written".to_string())));
+            // Nobody is left to put the file in its place: it goes.
+            if tx.send(done).is_err() {
+                let _ = std::fs::remove_file(&beside);
+            }
+        });
+        if spawned.is_ok() {
+            s.exports.push(crate::Exporting::new(idx, path.to_path_buf(), tmp, id, progress, done));
+            s.status = String::new();
+            return Ok(json!({"started": true, "untrusted_content": {"path": path.display().to_string()}}));
+        }
+        // No thread could be had: the work went with it, and the export is done here.
     }
+    let saved = io::save_store(store.as_mut(), path, id)?;
+    s.status = saved.says(path);
     Ok(json!({
+        "started": false,
         "copied": saved.copied,
         "folders": saved.folders,
         "items": saved.items,
@@ -530,8 +542,8 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
     if idx >= s.stores.len() {
         return Err(EngineError::BadParams(format!("there is no data file {idx}")));
     }
-    if !s.saves.is_empty() {
-        return Err(EngineError::BadParams("a data file is being saved; close when that is done, or stop it with file.stopSave".into()));
+    if !s.saves.is_empty() || !s.exports.is_empty() {
+        return Err(EngineError::BadParams("a data file is being saved or exported; close when that is done, or stop it with file.stopSave".into()));
     }
     // Changes are not thrown away, and a file is not written, without being asked.
     if s.stores.get(idx).is_some_and(|st| st.unsaved()) {

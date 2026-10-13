@@ -93,7 +93,7 @@ impl App {
                         .add_filter("Outlook data file", &["pst"])
                         .save_file();
                     if let Some(path) = picked {
-                        self.run("file.export", json!({ "path": path }));
+                        self.run("file.export", json!({ "path": path, "wait": false }));
                     }
                 }
                 UiRequest::SaveAs => {

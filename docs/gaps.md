@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 55 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 56 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 56 · 2026-10-13 — M3b.14: `file.export` of a Unicode `.pst` runs on a thread of its own, with progress and Stop; the mailbox stays in use meanwhile.
 - 55 · 2026-10-13 — M3b.13: the structure check reaches into heaps, indexes, property lists and tables; a save is stopped only by what it got wrong itself.
 - 54 · 2026-10-13 — M3b.12: a save from the window runs on a thread of its own, with progress and a way to stop it; a save that writes only what changed is still to do.
 - 53 · 2026-10-13 — M3b.11: attachments keep what is stored on them when the list changes; search-folder rows of changed messages are brought up to date.
