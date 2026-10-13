@@ -165,6 +165,45 @@ fn pst_error(e: openmailclient_pst::PstError) -> EngineError {
 /// written beside the target, held against the structure check, and only then put in the
 /// target's place in one step: whatever goes wrong, a file that was there stays as it was.
 pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Saved, EngineError> {
+    save_store_as(store, path, id, PstKind::AsItIs)
+}
+
+/// The kind of `.pst` an export writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PstKind {
+    /// The kind the source is when it is copied as it is stored, a Unicode file otherwise.
+    AsItIs,
+    Unicode,
+    /// The kind older programs read ([MS-PST] 2.2.2.6, wVer 14), of at most 2 GB.
+    Ansi,
+}
+
+impl PstKind {
+    /// What `"kind"` names; nothing named is `AsItIs`.
+    pub fn named(name: Option<&str>) -> Result<PstKind, EngineError> {
+        match name {
+            None => Ok(PstKind::AsItIs),
+            Some("unicode") => Ok(PstKind::Unicode),
+            Some("ansi") => Ok(PstKind::Ansi),
+            Some(other) => Err(EngineError::BadParams(format!("a data file is written as \"unicode\" or \"ansi\", not {other:?}"))),
+        }
+    }
+
+    /// True when a copy of the store as it is stored would be of this kind. A copy keeps the
+    /// kind of its source: its blocks are of that kind's size.
+    fn is_kept_by_a_copy_of(self, store: &dyn Store) -> bool {
+        if self == PstKind::AsItIs {
+            return true;
+        }
+        // HEADER, wVer at 10 ([MS-PST] 2.2.2.6): 14 and 15 are ANSI files.
+        let mut head = [0u8; 12];
+        let read = store.path().and_then(|p| std::fs::File::open(p).ok()).is_some_and(|mut f| f.read_exact(&mut head).is_ok());
+        read && (matches!(u16::from_le_bytes([head[10], head[11]]), 14 | 15) == (self == PstKind::Ansi))
+    }
+}
+
+/// `save_store`, as a data file of the kind asked for.
+pub fn save_store_as(store: &mut dyn Store, path: &Path, id: [u8; 16], kind: PstKind) -> Result<Saved, EngineError> {
     if !path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pst")) {
         return Err(EngineError::BadParams("a data file is saved under a name ending in .pst".into()));
     }
@@ -175,7 +214,7 @@ pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Sa
         return Err(EngineError::BadParams("a data file cannot be saved over itself; choose another name".into()));
     }
     let tmp = tmp_beside(path)?;
-    let saved = write_checked(store, &tmp, id, None).and_then(|saved| Ok(std::fs::rename(&tmp, path).map(|()| saved)?));
+    let saved = write_checked(store, &tmp, id, None, kind).and_then(|saved| Ok(std::fs::rename(&tmp, path).map(|()| saved)?));
     if saved.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -187,7 +226,7 @@ pub fn save_store(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Sa
 /// when this was asked, writes it as `save_store` does (copied as it is stored when it can
 /// be, from what is read otherwise) and checks it; what it gives goes to `export_end`.
 /// `None` for a store that cannot: `save_store` is for those.
-pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<Option<(ExportWork, PathBuf)>, EngineError> {
+pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16], kind: PstKind) -> Result<Option<(ExportWork, PathBuf)>, EngineError> {
     if cfg!(target_arch = "wasm32") {
         return Ok(None);
     }
@@ -203,8 +242,9 @@ pub fn export_begin(store: &mut dyn Store, path: &Path, id: [u8; 16]) -> Result<
     let Some(apart) = store.apart()? else { return Ok(None) };
     let beside = tmp.clone();
     let work: ExportWork = Box::new(move |progress| {
-        let saved =
-            apart(progress.clone()).map_err(EngineError::from).and_then(|mut store| write_checked(store.as_mut(), &beside, id, Some(&progress)));
+        let saved = apart(progress.clone())
+            .map_err(EngineError::from)
+            .and_then(|mut store| write_checked(store.as_mut(), &beside, id, Some(&progress), kind));
         if saved.is_err() {
             let _ = std::fs::remove_file(&beside);
         }
@@ -250,11 +290,19 @@ impl Saved {
     }
 }
 
-fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16], progress: Option<&openmailclient_model::Progress>) -> Result<Saved, EngineError> {
+fn write_checked(
+    store: &mut dyn Store,
+    tmp: &Path,
+    id: [u8; 16],
+    progress: Option<&openmailclient_model::Progress>,
+    kind: PstKind,
+) -> Result<Saved, EngineError> {
     // A data file is copied node for node when it can be. When that fails, or what comes of
     // it does not pass the check (the source has damage), the model's way is taken: it
-    // leaves out what cannot be read and says how much.
-    let not_copied = match copy_checked(store, tmp, id, progress) {
+    // leaves out what cannot be read and says how much. A copy is of the kind its source
+    // is, so a file asked for as the other kind is written the model's way from the start.
+    let copy = if kind.is_kept_by_a_copy_of(store) { copy_checked(store, tmp, id, progress) } else { Ok(None) };
+    let not_copied = match copy {
         Ok(Some(saved)) => return Ok(saved),
         Ok(None) => None,
         // A copy that was stopped is not tried another way.
@@ -262,7 +310,11 @@ fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16], progress: Opti
         Err(e) => Some(e.to_string()),
     };
     let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
-    let (mut file, done) = openmailclient_pst::write_store_until(file, store, id, progress).map_err(pst_error)?;
+    let written = match kind {
+        PstKind::Ansi => openmailclient_pst::write_store_ansi(file, store, id, progress),
+        _ => openmailclient_pst::write_store_until(file, store, id, progress),
+    };
+    let (mut file, done) = written.map_err(pst_error)?;
     file.sync_all()?;
     let bytes = file.seek(SeekFrom::End(0))?;
     file.seek(SeekFrom::Start(0))?;

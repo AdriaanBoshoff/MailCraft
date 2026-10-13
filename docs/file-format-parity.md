@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 21 · 2026-10-13 · the structure check covers ANSI and 4K-page files (M3b.20); an export of any mailbox runs on a thread of its own (M3b.19); values of another type than their column's are shown as the column holds them, the structure check hears Stop and compares fill levels (M3b.18); attachments with new contents keep what is stored on them, unreadable ones are carried (M3b.17); values keep their kind and a saved file goes on from the header's counters (M3b.16); an exported file names the other modules' folders by id (M3b.15); an export of a Unicode `.pst` runs on a thread of its own (M3b.14); the structure check looks inside nodes (M3b.13); an attachment keeps what is stored on it when a message's attachments change, and search-folder rows of changed messages are brought up to date (M3b.11); the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
+**Status:** revision 22 · 2026-10-13 · ANSI data files are written and an open one takes changes and stays ANSI (M3b.21); the structure check covers ANSI and 4K-page files (M3b.20); an export of any mailbox runs on a thread of its own (M3b.19); values of another type than their column's are shown as the column holds them, the structure check hears Stop and compares fill levels (M3b.18); attachments with new contents keep what is stored on them, unreadable ones are carried (M3b.17); values keep their kind and a saved file goes on from the header's counters (M3b.16); an exported file names the other modules' folders by id (M3b.15); an export of a Unicode `.pst` runs on a thread of its own (M3b.14); the structure check looks inside nodes (M3b.13); an attachment keeps what is stored on it when a message's attachments change, and search-folder rows of changed messages are brought up to date (M3b.11); the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -45,7 +45,7 @@ Outlook window (only the automation interface was used).
 
 ## `.pst` and `.ost` ([MS-PST])
 
-Read: ANSI, Unicode and 4K-page files. See [gaps.md](gaps.md) items 2, 7 and 8.
+Read: ANSI, Unicode and 4K-page files. Written: Unicode and ANSI files (M3b.21); in an ANSI file text is 8-bit in the code page it will be read in when those bytes read back the same, and Unicode text otherwise. See [gaps.md](gaps.md) items 2, 7 and 8.
 
 Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 
@@ -70,15 +70,16 @@ Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 | Hidden (associated) items; folder properties beyond name, class and counts | kept by `file.save` and by `file.export` of a Unicode `.pst` (copied as stored); not carried by `file.export` from other sources | a hidden message and a folder property our writer never makes survive a save and a copy |
 | Which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts (ids on the root and the Inbox, [MS-OXOSFLD] 2.2.3) | kept by `file.save` and by `file.export` of a Unicode `.pst`; written by `file.export` from other sources; read from the root | read back |
 | Changing a Unicode `.pst` that is open (`file.save`) | yes: nodes not touched are copied block for block; a changed message keeps every stored property that was not changed, also those under ids no name stands for; when its attachments change, each attachment the file holds stays in its subnode with every stored property (matched by being the same, or by its contents), and only new ones are written from the model; a search folder's table loses the rows of deleted messages and shows changed ones as they are now | read back: messages changed, moved, deleted and added, folders made, renamed, moved and deleted; attachments reordered, renamed, added and removed with a property no name stands for on each; a search table with rows written as another program would; damaged files; three local copies (counts only) |
-| Changing an ANSI `.pst`, a 4K-page file, an `.ost` | no: read-only | M3b (an `.ost` never) |
+| Changing an ANSI `.pst` that is open (`file.save`) | yes, as a Unicode one, and it is saved as an ANSI file (M3b.21) | read back over three saves, each held against the structure check; no Outlook-written ANSI file tried |
+| Changing a 4K-page file, an `.ost` | no: read-only | a 4K-page `.pst` with writing that kind (see ROADMAP, Do later); an `.ost` never |
 
 No file from this writer has been opened in Outlook: that adds a data file to the owner's
 profile and waits for their say. `file.export` writes the new file beside the target, holds it
 against the structure check and only then puts it in the target's place. `file.save` does the
 same for an open file, reads the new file back and compares it with what was shown, refuses
 when another program wrote the file since it was opened or has it open, and on the first save
-keeps the file as it was beside it (`name.before-openmailclient.pst`). Until a save, each change is journalled in a file of our own beside the data file (`name.pst.openmailclient-journal`: our format, not Outlook's, and never read by it) and played back when the file is opened again; when the folder cannot be written the journal is kept in a folder of our own beside the settings instead (M3b.7); the data file is written only by a save. `openmailclient-cli inspect file.pst --check` holds a Unicode file's structure against
-the format (ANSI and 4K-page files are not checked yet).
+keeps the file as it was beside it (`name.before-openmailclient.pst`). Until a save, each change is journalled in a file of our own beside the data file (`name.pst.openmailclient-journal`: our format, not Outlook's, and never read by it) and played back when the file is opened again; when the folder cannot be written the journal is kept in a folder of our own beside the settings instead (M3b.7); the data file is written only by a save. `openmailclient-cli inspect file.pst --check` holds a file's structure against
+the format, for every kind we read (M3b.20).
 
 ## `.eml` (RFC 5322, MIME)
 

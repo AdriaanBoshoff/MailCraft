@@ -261,7 +261,7 @@ pub(crate) fn decode(raw: Raw, cp: u32) -> Option<(u16, PropValue)> {
 }
 
 /// A multi-valued variable-size property ([MS-PST] 2.3.3.4.2): ulCount, one offset per value, data.
-fn multi(data: &[u8]) -> Vec<&[u8]> {
+pub(crate) fn multi(data: &[u8]) -> Vec<&[u8]> {
     let count = u32_at(data, 0).map_or(0, |n| n as usize).min(MAX_VALUES);
     let offset = |i: usize| if i == count { Some(data.len()) } else { u32_at(data, 4 + i * 4).map(|o| o as usize) };
     (0..count).filter_map(|i| data.get(offset(i)?..offset(i + 1)?)).collect()

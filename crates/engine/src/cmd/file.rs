@@ -79,7 +79,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Open & Export",
             shortcut: "",
-            params: r#"{"path": target ending in .pst, "store": index (default: the current one), "wait": false to come back at once ({"started": true}) and write the new file on a thread of its own, from the mailbox as it stands when asked; file.stopSave stops it}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
+            params: r#"{"path": target ending in .pst, "store": index (default: the current one), "kind": "unicode" or "ansi" (the kind older programs read, of at most 2 GB; text is 8-bit where the code page of its message has all of it and Unicode text where it has not, so nothing is lost) (default: the kind the source is when it is copied as stored, Unicode otherwise), "wait": false to come back at once ({"started": true}) and write the new file on a thread of its own, from the mailbox as it stands when asked; file.stopSave stops it}; every folder and item of the data file goes into a new .pst, which is checked before it takes the target's place. A Unicode .pst is copied as it is stored, unsaved changes with it: hidden items, a folder's own properties and properties this program does not know go along ("copied": true); any other source, and one with damage, gives what could be read; returns {"folders", "items", "unreadable", "copied", "bytes", "untrusted_content": {"path"}}"#,
             enabled: has_store,
             run: export,
         },
@@ -377,10 +377,11 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     if s.exports.iter().any(|e| e.to == path) {
         return Err(EngineError::BadParams("that data file is being written by an export already".into()));
     }
+    let kind = io::PstKind::named(p_str(p, "kind"))?;
     let id = io::new_store_id(s.now);
     let store = s.stores.get_mut(idx).ok_or_else(|| EngineError::BadParams(format!("there is no data file {idx}")))?;
     if p_bool(p, "wait") == Some(false)
-        && let Some((work, tmp)) = io::export_begin(store.as_mut(), path, id)?
+        && let Some((work, tmp)) = io::export_begin(store.as_mut(), path, id, kind)?
     {
         let progress = std::sync::Arc::new(openmailclient_model::Progress::default());
         let (tx, done) = std::sync::mpsc::channel();
@@ -400,7 +401,7 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
         }
         // No thread could be had: the work went with it, and the export is done here.
     }
-    let saved = io::save_store(store.as_mut(), path, id)?;
+    let saved = io::save_store_as(store.as_mut(), path, id, kind)?;
     s.status = saved.says(path);
     Ok(json!({
         "started": false,

@@ -220,7 +220,7 @@ fn a_save_is_stopped_by_what_it_did_wrong_and_not_by_what_was_wrong_before() {
 #[test]
 fn a_heap_says_how_full_each_of_its_blocks_is() {
     // Two blocks: the first nearly three quarters full, the second with one value in it.
-    let mut heap = crate::ltp_write::Heap::new(0xBC);
+    let mut heap = crate::ltp_write::Heap::new(0xBC, crate::write::MAX_DATA);
     let mut root = 0;
     for _ in 0..3 {
         root = heap.alloc(&[7u8; 3000]).unwrap();

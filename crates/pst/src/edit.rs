@@ -15,7 +15,7 @@ use crate::store_write::{
     ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, cell_for, copy,
     count, flag, int, text,
 };
-use crate::write::{MAX_DATA, NdbWriter, Sub};
+use crate::write::{NdbWriter, Sub};
 use crate::{LTP_INTERNAL, MAX_CHILDREN, NID_ATTACHMENT_TABLE, NID_NAME_TO_ID_MAP, NID_RECIPIENT_TABLE, PstError, PstStore, code_page};
 use openmailclient_model::{
     Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, NamedKey, PropBag, PropValue, Recovery, StoreError, Summary, pid,
@@ -190,10 +190,11 @@ fn stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
 }
 
 impl PstStore {
-    /// True when changes to this data file can be kept: a Unicode `.pst`. An `.ost` is a copy
-    /// of a mailbox on a server and is only ever read.
+    /// True when changes to this data file can be kept: a `.pst`, Unicode or ANSI, and it is
+    /// saved as the kind it is. A file with 4K pages is in no specification and is not
+    /// written. An `.ost` is a copy of a mailbox on a server and is only ever read.
     pub(crate) fn can_edit(&self) -> bool {
-        self.ndb.ver == Ver::Unicode && !self.path.as_deref().is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ost")))
+        self.ndb.ver != Ver::Unicode4k && !self.path.as_deref().is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ost")))
     }
 
     pub(crate) fn note_stamp(&mut self) {
@@ -567,8 +568,8 @@ impl PstStore {
         seed: [u8; 16],
         put: Vec<(u32, u32, Vec<Raw>)>,
     ) -> Result<(W, Written), PstError> {
-        if self.ndb.ver != Ver::Unicode {
-            return Err(PstError::Write("only a Unicode .pst can be written by this version".to_string()));
+        if self.ndb.ver == Ver::Unicode4k {
+            return Err(PstError::Write("a data file with 4K pages is not written by this version".to_string()));
         }
         let edits = self.edits.take();
         let done = self.write(out, seed, edits.as_ref(), put);
@@ -584,7 +585,9 @@ impl PstStore {
         put: Vec<(u32, u32, Vec<Raw>)>,
     ) -> Result<(W, Written), PstError> {
         // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
-        let mut o = Out { w: NdbWriter::new(out, 1)?, names: Names::seeded(&self.names), uid: seed, serial: 0 };
+        // The file is written as the kind it is: what is copied block for block has blocks
+        // of that kind's size.
+        let mut o = Out { w: NdbWriter::of(out, 1, self.ndb.ver)?, names: Names::seeded(&self.names), uid: seed, serial: 0 };
         o.w.carry(self.ndb.counters);
         let mut budget = self.ndb.block_count().saturating_mul(16).saturating_add(4096);
         let root = self.root;
@@ -993,7 +996,7 @@ impl PstStore {
             let Some(&(data, sub)) = subs.get(&row.id) else { continue };
             list.push(Sub { nid: row.id, data: self.copy_data(&mut o.w, data, budget)?, sub: self.copy_subs(&mut o.w, sub, 1, budget)? });
             // Its row as the table had it, less what the table of a new file has no column for.
-            let cells = row.cells.into_iter().filter(|c| ATTACHMENTS.iter().any(|(id, ty)| *id == c.id && *ty == c.ty)).collect();
+            let cells = row.cells.into_iter().filter_map(|c| cell_for(ATTACHMENTS, &c)).collect();
             rows.push(Row { id: row.id, cells });
         }
         if !rows.is_empty() {
@@ -1047,7 +1050,8 @@ impl PstStore {
                 // PtypObject: the subnode that holds the object, then its size ([MS-PST] 2.3.3.5).
                 let used = kept.keys().filter(|n| *n & 0x1F == TYPE_LTP).map(|n| n >> 5).max().unwrap_or(0);
                 let mut subs = Subs::new(used.saturating_add(1));
-                let nid = subs.value(&mut o.w, new.data.chunks(MAX_DATA))?;
+                let most = o.w.max_data();
+                let nid = subs.value(&mut o.w, new.data.chunks(most))?;
                 more = subs.list;
                 Raw { id: pid::ATTACH_DATA, ty: ptype::OBJECT, data: [nid.to_le_bytes(), size.to_le_bytes()].concat() }
             } else {
@@ -1136,6 +1140,8 @@ impl PstStore {
             }
         }
         let mut more = Vec::new();
+        // The recipients and attachments are read in the message's code page.
+        let outer = o.w.within(Some(code_page(props.values())));
         if old.recipients != new.recipients {
             kept.remove(&NID_RECIPIENT_TABLE);
             more.push(o.recipients(new)?);
@@ -1149,6 +1155,7 @@ impl PstStore {
             props.insert(pid::MESSAGE_FLAGS, int(pid::MESSAGE_FLAGS, flags));
             props.insert(pid::HASATTACH, flag(pid::HASATTACH, has));
         }
+        o.w.within(outer);
         let cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
         let (data, sub) = self.close_pc(o, props, &kept, more, budget)?;
         Ok((data, sub, cells, removed))

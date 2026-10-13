@@ -2593,3 +2593,79 @@ fn unsaved_changes_are_journalled_elsewhere_when_the_folder_cannot_be_written() 
     drop(next);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_mailbox_is_exported_as_an_ansi_file_and_such_a_file_stays_one() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-export-ansi-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // HEADER, wVer ([MS-PST] 2.2.2.6): 14 an ANSI file, 23 a Unicode one.
+    let kind_of = |path: &std::path::Path| {
+        let bytes = std::fs::read(path).unwrap();
+        u16::from_le_bytes([bytes[10], bytes[11]])
+    };
+    let sound = |path: &std::path::Path| {
+        let found = crate::io::check_structure(path).unwrap().unwrap();
+        assert!(found.problems.is_empty(), "{:?}", found.problems);
+    };
+    let mut s = session();
+    let old = dir.join("old.pst");
+    let done = run(&mut s, "file.export", json!({"path": old, "kind": "ansi"}));
+    assert_eq!((&done["copied"], &done["unreadable"]), (&json!(false), &json!(0)));
+    assert_eq!(kind_of(&old), 14);
+    sound(&old);
+    assert!(s.run("file.export", &json!({"path": dir.join("no.pst"), "kind": "4k"})).is_err());
+    assert!(s.run("file.export", &json!({"path": dir.join("no.pst"), "kind": 14})).is_ok_and(|v| v["copied"] == false));
+    assert_eq!(kind_of(&dir.join("no.pst")), 23, "a kind that is not text is no kind named");
+
+    // It opens with what the sample has, takes changes, and is saved as the kind it is.
+    let mut other = Session::new();
+    other.now = now();
+    run(&mut other, "file.open", json!({"path": old}));
+    assert!(other.stores[0].writable());
+    assert_eq!(folder(&other, "Inbox"), folder(&s, "Inbox"));
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    run(&mut other, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    let (a, b) = (s.open.clone().unwrap(), other.open.clone().unwrap());
+    assert_eq!((b.subject(), b.sender_name(), b.body_text(), b.body_html()), (a.subject(), a.sender_name(), a.body_text(), a.body_html()));
+    assert_eq!(
+        b.attachments.iter().map(|x| (x.name(), x.data.clone())).collect::<Vec<_>>(),
+        a.attachments.iter().map(|x| (x.name(), x.data.clone())).collect::<Vec<_>>()
+    );
+    let (total, _) = folder(&other, "Inbox");
+    run(&mut other, "mail.delete", Value::Null);
+    assert_eq!(run(&mut other, "file.save", Value::Null)["saved"], 1);
+    assert_eq!(kind_of(&old), 14);
+    sound(&old);
+    assert_eq!(folder(&other, "Inbox").0, total - 1);
+
+    // Exported with no kind named it is copied as it is stored, and so an ANSI file; named
+    // the other kind it is written from what is read, on a thread of its own as well.
+    let same = dir.join("same.pst");
+    assert_eq!(run(&mut other, "file.export", json!({"path": same}))["copied"], true);
+    assert_eq!(run(&mut other, "file.export", json!({"path": same, "kind": "ansi"}))["copied"], true);
+    assert_eq!(kind_of(&same), 14);
+    sound(&same);
+    let wide = dir.join("wide.pst");
+    assert_eq!(run(&mut other, "file.export", json!({"path": wide, "kind": "unicode"}))["copied"], false);
+    assert_eq!(kind_of(&wide), 23);
+    sound(&wide);
+    let narrow = dir.join("narrow.pst");
+    let mut third = Session::new();
+    run(&mut third, "file.open", json!({"path": wide}));
+    assert_eq!(run(&mut third, "file.export", json!({"path": narrow, "kind": "ansi", "wait": false}))["started"], true);
+    for _ in 0..2000 {
+        if third.poll() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(third.status.starts_with("Exported ") && !third.status.contains("as it is stored"), "{}", third.status);
+    assert_eq!(kind_of(&narrow), 14);
+    sound(&narrow);
+    let mut fourth = Session::new();
+    run(&mut fourth, "file.open", json!({"path": narrow}));
+    assert_eq!(folder(&fourth, "Inbox").0, total - 1);
+    drop((other, third, fourth));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

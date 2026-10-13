@@ -6,7 +6,7 @@
 
 use crate::PstError;
 use crate::ltp::{Raw, Row};
-use crate::write::{MAX_DATA, NdbWriter, Sub};
+use crate::write::{NdbWriter, Sub};
 use openmailclient_model::{PropValue, codepage, ptype};
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
@@ -29,12 +29,14 @@ fn cannot(what: &str) -> PstError {
 /// A heap-on-node being filled ([MS-PST] 2.3.1): allocations, block by block.
 pub(crate) struct Heap {
     sig: u8,
+    /// The most bytes a block of the file holds.
+    max: usize,
     blocks: Vec<Vec<Vec<u8>>>,
 }
 
 impl Heap {
-    pub(crate) fn new(sig: u8) -> Self {
-        Self { sig, blocks: vec![Vec::new()] }
+    pub(crate) fn new(sig: u8, max: usize) -> Self {
+        Self { sig, max, blocks: vec![Vec::new()] }
     }
 
     /// The header of data block `block`: HNHDR in the first, HNBITMAPHDR in the eighth and every
@@ -61,7 +63,7 @@ impl Heap {
             return Err(cannot("a heap allocation of a size the format does not have"));
         }
         let block = self.blocks.len().saturating_sub(1);
-        let fits = self.blocks.last().is_some_and(|b| b.len() < MAX_PER_BLOCK && Self::size(block, b, Some(bytes.len())) <= MAX_DATA);
+        let fits = self.blocks.last().is_some_and(|b| b.len() < MAX_PER_BLOCK && Self::size(block, b, Some(bytes.len())) <= self.max);
         if !fits {
             if self.blocks.len() >= MAX_BLOCKS {
                 return Err(cannot("more values than one heap holds"));
@@ -90,7 +92,7 @@ impl Heap {
 
     /// The data blocks of the node. `root` is the HID the layer above starts from.
     pub(crate) fn finish(self, root: u32) -> Vec<Vec<u8>> {
-        let levels: Vec<u8> = self.blocks.iter().enumerate().map(|(i, b)| Self::level(MAX_DATA.saturating_sub(Self::size(i, b, None)))).collect();
+        let levels: Vec<u8> = self.blocks.iter().enumerate().map(|(i, b)| Self::level(self.max.saturating_sub(Self::size(i, b, None)))).collect();
         // Fill levels are four bits a block. The specification does not say which half of a
         // byte comes first; the earlier block is put in the low half, as bit fields are laid
         // out elsewhere in the format. Heaps of one block in files Outlook wrote have the
@@ -180,7 +182,7 @@ impl Subs {
         Self { next: first, list: Vec::new() }
     }
 
-    /// A subnode of this node holding `blocks`, each at most 8,176 bytes; its id.
+    /// A subnode of this node holding `blocks`, each at most a block of the file; its id.
     pub(crate) fn value<W, I, B>(&mut self, w: &mut NdbWriter<W>, blocks: I) -> Result<u32, PstError>
     where
         W: Read + Write + Seek,
@@ -202,7 +204,7 @@ fn hnid<W: Read + Write + Seek>(w: &mut NdbWriter<W>, heap: &mut Heap, subs: &mu
         0 => Ok(0),
         n if n <= MAX_ALLOC => heap.alloc(bytes),
         _ => {
-            let blocks: Vec<Vec<u8>> = bytes.chunks(MAX_DATA).map(<[u8]>::to_vec).collect();
+            let blocks: Vec<Vec<u8>> = bytes.chunks(w.max_data()).map(<[u8]>::to_vec).collect();
             subs.value(w, &blocks)
         }
     }
@@ -211,12 +213,22 @@ fn hnid<W: Read + Write + Seek>(w: &mut NdbWriter<W>, heap: &mut Heap, subs: &mu
 /// Write a Property Context ([MS-PST] 2.3.3); the block id of the node's data. Large values
 /// are added to `subs`.
 pub(crate) fn write_pc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, props: &[Raw], subs: &mut Subs) -> Result<u64, PstError> {
+    // The text of an ANSI file is 8-bit where its code page has it: the code page of the
+    // message these properties are part of, else their own, as they are read.
+    let narrowed: Vec<Raw>;
+    let props = if w.ansi() {
+        let cp = w.text().unwrap_or_else(|| crate::code_page(props));
+        narrowed = props.iter().map(|p| narrow(cp, p).unwrap_or_else(|| Raw { id: p.id, ty: p.ty, data: p.data.clone() })).collect();
+        narrowed.as_slice()
+    } else {
+        props
+    };
     let mut order: Vec<&Raw> = props.iter().collect();
     order.sort_by_key(|p| p.id);
     if order.windows(2).any(|p| p.first().map(|p| p.id) == p.get(1).map(|p| p.id)) {
         return Err(cannot("one property twice in an item"));
     }
-    let mut heap = Heap::new(0xBC);
+    let mut heap = Heap::new(0xBC, w.max_data());
     let header = heap.alloc(&[0; 8])?;
     let mut records = Vec::with_capacity(order.len());
     for p in order {
@@ -269,6 +281,7 @@ fn cell_size(ty: u16) -> usize {
 /// type) are the columns the table has even when no row fills them; columns the rows bring are
 /// added. Rows keep their order; a row matrix or a value too large for the heap goes to `subs`.
 pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[(u16, u16)], rows: &[Row], subs: &mut Subs) -> Result<u64, PstError> {
+    let (columns, rows) = &one_kind_of_text(w.ansi(), w.text().unwrap_or(1252), columns, rows);
     let mut tags: Vec<u32> = columns.iter().map(|(id, ty)| u32::from(*id) << 16 | u32::from(*ty)).collect();
     tags.extend(rows.iter().flat_map(|r| r.cells.iter().map(|c| u32::from(c.id) << 16 | u32::from(c.ty))));
     tags.extend([ROW_ID, ROW_VER]);
@@ -301,7 +314,7 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
     let ceb = at;
     let row_size = ceb + tags.len().div_ceil(8);
 
-    let mut heap = Heap::new(0x7C);
+    let mut heap = Heap::new(0x7C, w.max_data());
     let info_size = 22 + 8 * tags.len();
     // The header of the row index comes first and the table's own second, as in the files
     // Outlook writes.
@@ -335,23 +348,29 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
         }
         cell(&mut row, ROW_ID, &r.id.to_le_bytes());
         matrix.extend(row);
-        // TCROWID, Unicode: dwRowID, dwRowIndex ([MS-PST] 2.3.4.3.1).
-        index.push((r.id.to_le_bytes().to_vec(), n.to_le_bytes().to_vec()));
+        // TCROWID: dwRowID, dwRowIndex, which is two bytes in an ANSI file ([MS-PST] 2.3.4.3.1).
+        let place = if w.ansi() {
+            u16::try_from(n).map_err(|_| cannot("a table with more rows than an ANSI data file holds"))?.to_le_bytes().to_vec()
+        } else {
+            n.to_le_bytes().to_vec()
+        };
+        index.push((r.id.to_le_bytes().to_vec(), place));
     }
     index.sort_by_key(|(k, _)| k.first_chunk::<4>().map_or(0, |k| u32::from_le_bytes(*k)));
     if index.windows(2).any(|p| p.first().map(|p| &p.0) == p.get(1).map(|p| &p.0)) {
         return Err(cannot("two rows with one id in a table"));
     }
-    bth(&mut heap, index_hid, 4, 4, &index)?;
+    bth(&mut heap, index_hid, 4, if w.ansi() { 2 } else { 4 }, &index)?;
 
     // The row matrix: in the heap when it fits, else a subnode whose blocks each hold whole
-    // rows; every block but the last is a full 8 KB one ([MS-PST] 2.3.4.4).
+    // rows; every block but the last is a full one ([MS-PST] 2.3.4.4).
     let rows_hnid = if matrix.is_empty() {
         0
     } else if matrix.len() <= MAX_ALLOC {
         heap.alloc(&matrix)?
     } else {
-        let per = (MAX_DATA / row_size).max(1) * row_size;
+        let full = w.max_data();
+        let per = (full / row_size).max(1) * row_size;
         let count = matrix.len().div_ceil(per);
         let blocks: Vec<Vec<u8>> = matrix
             .chunks(per)
@@ -359,7 +378,7 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
             .map(|(i, rows)| {
                 let mut block = rows.to_vec();
                 if i + 1 < count {
-                    block.resize(MAX_DATA, 0);
+                    block.resize(full, 0);
                 }
                 block
             })
@@ -385,19 +404,105 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
     w.data(heap.finish(info_hid))
 }
 
+/// Text as an ANSI data file holds it: 8-bit in the code page `cp`, when every character is
+/// in that code page and reads back as it was. `None` for a value that is not Unicode text or
+/// cannot be had so; it then stays as it is, and nothing is lost.
+pub(crate) fn narrow(cp: u32, r: &Raw) -> Option<Raw> {
+    let one = |data: &[u8]| -> Option<Vec<u8>> {
+        let s = codepage::utf16le(data);
+        // Text that is not sound UTF-16 is not the same again once read.
+        (codepage::to_utf16le(&s) == data).then(|| codepage::encode(cp, &s)).flatten()
+    };
+    match r.ty {
+        ptype::STRING => Some(Raw { id: r.id, ty: ptype::STRING8, data: one(&r.data)? }),
+        ptype::MULTI_STRING => {
+            let values = crate::ltp::multi(&r.data);
+            let made = several(values.iter().map(|v| v.to_vec()).collect());
+            // A list that is not laid out as this code would lay it out is left alone.
+            if made != r.data {
+                return None;
+            }
+            let narrow: Option<Vec<Vec<u8>>> = values.into_iter().map(one).collect();
+            Some(Raw { id: r.id, ty: ptype::MULTI_STRING8, data: several(narrow?) })
+        }
+        _ => None,
+    }
+}
+
+/// 8-bit text as Unicode text, read in the code page `cp` as the reader reads it.
+fn widen(cp: u32, r: &Raw) -> Option<Raw> {
+    (r.ty == ptype::STRING8).then(|| Raw { id: r.id, ty: ptype::STRING, data: codepage::to_utf16le(&codepage::decode(cp, &r.data)) })
+}
+
+/// A table's columns and rows with one kind of text in each column: a column has one type
+/// ([MS-PST] 2.3.4.2). In an ANSI file a column of text is 8-bit when every cell of it can
+/// be, in the code page the table is read in; where one cannot, and in any file where both
+/// kinds have come together under one id, the column is Unicode text and the 8-bit cells are
+/// read into it.
+fn one_kind_of_text(ansi: bool, cp: u32, columns: &[(u16, u16)], rows: &[Row]) -> (Vec<(u16, u16)>, Vec<Row>) {
+    let text = |ty: u16| ty == ptype::STRING || ty == ptype::STRING8;
+    // For each id with text: is there Unicode text, is there 8-bit text, can all be 8-bit.
+    let mut ids: HashMap<u16, (bool, bool, bool)> = HashMap::new();
+    for (id, ty) in columns.iter().filter(|c| text(c.1)) {
+        let e = ids.entry(*id).or_insert((false, false, true));
+        e.0 |= *ty == ptype::STRING;
+        e.1 |= *ty == ptype::STRING8;
+    }
+    for c in rows.iter().flat_map(|r| &r.cells).filter(|c| text(c.ty)) {
+        let e = ids.entry(c.id).or_insert((false, false, true));
+        e.0 |= c.ty == ptype::STRING;
+        e.1 |= c.ty == ptype::STRING8;
+        if ansi && c.ty == ptype::STRING && e.2 {
+            e.2 = narrow(cp, c).is_some();
+        }
+    }
+    let kind = |id: u16| -> Option<u16> {
+        let (wide, small, can) = ids.get(&id).copied()?;
+        match (ansi, wide, small) {
+            (true, true, _) => Some(if can { ptype::STRING8 } else { ptype::STRING }),
+            (false, true, true) => Some(ptype::STRING),
+            _ => None,
+        }
+    };
+    let mut shape: Vec<(u16, u16)> = columns.iter().map(|(id, ty)| (*id, if text(*ty) { kind(*id).unwrap_or(*ty) } else { *ty })).collect();
+    shape.dedup();
+    let rows = rows
+        .iter()
+        .map(|r| Row {
+            id: r.id,
+            cells: r
+                .cells
+                .iter()
+                .map(|c| {
+                    let same = || Raw { id: c.id, ty: c.ty, data: c.data.clone() };
+                    match kind(c.id).filter(|_| text(c.ty)) {
+                        Some(ty) if ty == c.ty => same(),
+                        Some(ptype::STRING8) => narrow(cp, c).unwrap_or_else(same),
+                        Some(_) => widen(cp, c).unwrap_or_else(same),
+                        None => same(),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    (shape, rows)
+}
+
+/// ulCount, an offset for each value, then the values ([MS-PST] 2.3.3.4.2).
+fn several(values: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut out = (values.len() as u32).to_le_bytes().to_vec();
+    let mut at = 4 + values.len() * 4;
+    for v in &values {
+        out.extend((at as u32).to_le_bytes());
+        at += v.len();
+    }
+    out.extend(values.concat());
+    out
+}
+
 /// A value as a Unicode data file stores it: the other way of `ltp::decode`.
 pub(crate) fn encode(id: u16, value: &PropValue) -> Raw {
-    let multi = |values: Vec<Vec<u8>>| -> Vec<u8> {
-        // ulCount, an offset for each value, then the values ([MS-PST] 2.3.3.4.2).
-        let mut out = (values.len() as u32).to_le_bytes().to_vec();
-        let mut at = 4 + values.len() * 4;
-        for v in &values {
-            out.extend((at as u32).to_le_bytes());
-            at += v.len();
-        }
-        out.extend(values.concat());
-        out
-    };
+    let multi = several;
     let data = match value {
         PropValue::String(s) => codepage::to_utf16le(s),
         PropValue::Binary(b) => b.clone(),

@@ -62,6 +62,27 @@ pub fn to_utf16le(s: &str) -> Vec<u8> {
     s.encode_utf16().flat_map(u16::to_le_bytes).collect()
 }
 
+/// Text as bytes in a code page, when `decode` gives the same text back from them: `None` for
+/// text the code page does not have, and for a code page that is not one of bytes (UTF-16).
+/// Nothing is ever replaced by a look-alike or a question mark.
+pub fn encode(cp: u32, s: &str) -> Option<Vec<u8>> {
+    if matches!(cp, 1200 | 1201) {
+        return None;
+    }
+    let bytes = match label(cp).and_then(|l| encoding_rs::Encoding::for_label(l.as_bytes())) {
+        Some(e) => {
+            let (bytes, _, lost) = e.encode(s);
+            if lost {
+                return None;
+            }
+            bytes.into_owned()
+        }
+        // What `decode` takes bytes of an unknown code page for.
+        None => s.as_bytes().to_vec(),
+    };
+    (decode(cp, &bytes) == s).then_some(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +95,22 @@ mod tests {
         assert_eq!(decode(424_242, &[0xE9]), "é");
         assert_eq!(utf16le(&[0x41, 0, 0x42]), "A");
         assert_eq!(utf16le(&to_utf16le("Zöe ✓")), "Zöe ✓");
+    }
+
+    #[test]
+    fn encodes_only_what_comes_back_the_same() {
+        assert_eq!(encode(1252, "\u{201c}é\u{201d}"), Some(vec![0x93, 0xE9, 0x94]));
+        assert_eq!(encode(1251, "При"), Some(vec![0xCF, 0xF0, 0xE8]));
+        assert_eq!(encode(1252, "При"), None);
+        assert_eq!(encode(1252, "Zöe ✓"), None);
+        assert_eq!(encode(1200, "A"), None);
+        assert_eq!(encode(932, "日本語").map(|b| decode(932, &b)), Some("日本語".to_string()));
+        assert_eq!(encode(424_242, "é").map(|b| decode(424_242, &b)), Some("é".to_string()));
+        // A code page with states: whatever comes of it has to read back as it was.
+        for text in ["日本語 abc", "abc", "\u{1b}(B"] {
+            if let Some(bytes) = encode(50220, text) {
+                assert_eq!(decode(50220, &bytes), text);
+            }
+        }
     }
 }

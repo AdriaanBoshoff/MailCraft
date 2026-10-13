@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 72 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 73 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 292, all passing |
+| Tests | 300, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -107,7 +107,8 @@
 56. Done: a value of another type than its column's is shown as the column holds it; the structure check hears Stop and compares a heap's fill levels with its blocks (M3b.18).
 57. Done: an export of any mailbox runs on a thread of its own: the sample, an `.ost`, an ANSI `.pst` and a 4K-page file as well (M3b.19).
 58. Done: the structure check covers ANSI data files and files with 4K pages (M3b.20).
-59. Next: M3b.21: ANSI data files are written, and a re-saved one keeps its kind.
+59. Done: ANSI data files are written, and a re-saved one keeps its kind (M3b.21).
+60. Next: M3b.22: Table Style prints the selected rows only, the view's own columns and group headings; a zoom in print preview.
 
 ## Do later (from M2)
 
@@ -138,7 +139,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | A `.pst` from our writer opened in Outlook Classic (needs the owner's say: it adds a data file to the profile); with it, where a message attached to a message is kept and the bucket of a named property, both written from the specification alone | when the owner says so |
 | ~~Hidden (associated) items and a folder's own properties beyond name, class and counts kept when an open `.pst` is saved~~ | done: M3.4 |
 | ~~Hidden (associated) items and a folder's own properties carried by `file.export` when the source is a Unicode `.pst`~~ | done: M3b.2 |
-| Hidden items and a folder's own properties carried by `file.export` from an `.ost`, an ANSI `.pst` and a 4K-page file (read through the model still) | M3b, with writing those kinds |
+| ~~Hidden items and a folder's own properties carried by `file.export` from an ANSI `.pst`~~ | done: M3b.21 |
+| Hidden items and a folder's own properties carried by `file.export` from an `.ost` and a 4K-page file (read through the model still) | with writing 4K-page files |
 | ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
 | ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
 | Unsaved changes saved on their own after a while (waits for the writer to be proved in Outlook: nothing writes a data file unasked until then) | when the owner says so, with the Outlook check |
@@ -148,7 +150,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Unknown properties of an attachment whose contents were changed too, and stored attachments that cannot be read~~ | done: M3b.17 |
 | ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
 | Working out again which search folders a changed message belongs to (its rows are brought up to date; a row is not added or taken away) | M5 |
-| Changes to an ANSI `.pst` and a 4K-page file kept; an `.ost` stays read-only for good (it is a server's copy) | M3b, with writing those kinds |
+| ~~Changes to an ANSI `.pst` kept~~ (an `.ost` stays read-only for good: it is a server's copy) | done: M3b.21 |
+| Changes to a 4K-page `.pst` kept | with writing 4K-page files |
 | ~~The node-id counters of a file's header carried into the rewritten file~~ | done: M3b.16 |
 | ~~A choice not to keep the file as it was beside a data file on its first save~~ | done: M3b.16 (`file.keepOriginal`) |
 | ~~The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`~~ | done: M3b.15 |
@@ -164,7 +167,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~32-bit floats, currency and error values keeping their type when an item is written from the model~~ | done: M3b.16 |
 | A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
-| Writing ANSI and 4K-page data files (a re-saved file keeps its kind) | M3b |
+| ~~Writing ANSI data files (a re-saved file keeps its kind)~~ | done: M3b.21 |
+| Writing 4K-page data files | when the owner allows a file of ours to be opened in Outlook, or with a public description of the 4K layout: it is in no specification, and a guess cannot be proved without one of the two |
+| What Outlook makes of Unicode text in an ANSI file of ours, and of wVer 14 where a file had 15 | M1 checks against Outlook, with the owner's say |
 | The selected rows only, the view's own columns and group headings in Table Style | M3b, the batch after M3 |
 | A zoom in the print preview | M3b |
 | SVG, WebP and TIFF pictures; GIF animation | M3b |
@@ -1164,3 +1169,33 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   after its trailers are not held against anything; a 4K-page file with a second section
   was not seen, so whether one has more map pages is not known; where an ANSI file has its
   free maps is worked out as for a Unicode file; no Outlook-written ANSI file was tried.
+- **2026-10-13** - M3b.21: ANSI data files are written. The writer of the lower layer is given the kind
+  of file it writes (`NdbWriter::of` in `crates/pst/src/write.rs`) and lays an ANSI file
+  out as [MS-PST] has it: the header with wVer 14, its root at 164 and its one checksum;
+  page trailers of twelve bytes; map pages with four bytes before their bits; tree entries
+  of twelve and sixteen bytes; blocks of up to 8180 bytes with a trailer of twelve; ids of
+  four bytes in the blocks that name blocks and subnodes; a table's row index with places
+  of two bytes. A file past 2 GB is refused with a reason, not cut. An ANSI `.pst` that is
+  open now takes changes and is saved as the kind it is (`file.save`): what is copied block
+  for block has blocks of that kind's size, so it could be nothing else. `file.export`
+  copies an ANSI `.pst` as it is stored, hidden items and unknown properties with it, and
+  takes `"kind": "ansi"` or `"unicode"` to write the other kind from what is read. Made
+  better on the way: text is never replaced by a question mark. It is written as 8-bit
+  text in the code page the reader will use for that place (a message's own, its
+  recipients and attachments by the message's, an embedded message by its own, folders
+  and tables by Windows-1252) only when those bytes read back as the same text
+  (`codepage::encode`), and is left as Unicode text when they would not; and a table now
+  has one kind of text in a column in any file we write, where a value of the other kind
+  was before written under a column of its own. 8 tests: a mailbox written as an ANSI file
+  is the same mailbox as its Unicode twin, to the last property; text goes by the code
+  page of its message (Cyrillic under 1251, a name 1251 has not, an embedded message
+  under 1252); changes of every kind kept over three saves, each an ANSI file; an ANSI
+  file on disk saved in place and copied; a file with more blocks than one block names
+  and more subnodes than one block holds; cut short and smashed 150 times without a panic;
+  the code pages encode only what comes back the same; the export by kind, waited for and
+  not. Every file written in them passes the structure check of M3b.20. Not done: no
+  ANSI file written by Outlook was tried, and none of ours was opened in Outlook; what a
+  program that knows only 8-bit text makes of Unicode text in an ANSI file is not known;
+  wVer is always 14 (a file that had 15 is saved with 14); a 4K-page file is not written
+  (its layout is in no specification), so it stays read-only and its export goes through
+  the model, as an `.ost` does.

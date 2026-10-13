@@ -8,7 +8,7 @@
 use crate::PstError;
 use crate::ltp::{Raw, Row};
 use crate::ltp_write::{Subs, encode, write_pc, write_tc};
-use crate::write::{MAX_DATA, NdbWriter, Sub, crc};
+use crate::write::{NdbWriter, Sub, crc};
 use openmailclient_model::{
     Attachment, FolderId, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, MSGFLAG_READ, NameId, NamedKey, PropBag, PropValue, Store, codepage, pid,
     pset, ptype,
@@ -218,7 +218,15 @@ pub(crate) fn cell_for(columns: &[(u16, u16)], r: &Raw) -> Option<Raw> {
     if columns.contains(&(r.id, r.ty)) {
         return Some(copy(r)).filter(|c| c.data.len() <= MAX_CELL);
     }
-    columns.iter().filter(|(id, _)| *id == r.id).find_map(|(_, ty)| as_type(r, *ty)).filter(|c| c.data.len() <= MAX_CELL)
+    columns
+        .iter()
+        .filter(|(id, _)| *id == r.id)
+        .find_map(|(_, ty)| as_type(r, *ty))
+        // Unicode text that is not 7-bit goes under a column of 8-bit text as it is: the
+        // table is then written with that column as Unicode text, or, in an ANSI file, as
+        // 8-bit text when all of it can be (`ltp_write::write_tc`).
+        .or_else(|| (r.ty == ptype::STRING && columns.contains(&(r.id, ptype::STRING8))).then(|| copy(r)))
+        .filter(|c| c.data.len() <= MAX_CELL)
 }
 
 pub(crate) fn int(id: u16, v: i32) -> Raw {
@@ -494,11 +502,17 @@ impl<W: Read + Write + Seek> Out<W> {
 
         let props: Vec<Raw> = props.into_values().collect();
         let mut subs = Subs::new(1);
+        // A message's own text is read in its own code page, and so are its recipients and
+        // attachments; a message inside it has its own again.
+        let cp = crate::code_page(&props);
+        let outer = self.w.within(None);
         let data = write_pc(&mut self.w, &props, &mut subs)?;
         drop(props);
 
+        self.w.within(Some(cp));
         subs.list.push(self.recipients(item)?);
         subs.list.extend(self.attachments(item, depth)?);
+        self.w.within(outer);
         let sub = self.w.subnodes(subs.list)?;
         Ok((data, sub, cells))
     }
@@ -573,7 +587,8 @@ impl<W: Read + Write + Seek> Out<W> {
             size
         } else if a.props.i32(pid::ATTACH_METHOD) == Some(6) && !a.data.is_empty() {
             // An object of another program is kept as an object too, its storage as bytes.
-            let nid = subs.value(&mut self.w, a.data.chunks(MAX_DATA))?;
+            let most = self.w.max_data();
+            let nid = subs.value(&mut self.w, a.data.chunks(most))?;
             props.insert(pid::ATTACH_DATA, object(nid, a.data.len()));
             a.data.len()
         } else {
@@ -620,13 +635,37 @@ pub fn write_store_until<W: Read + Write + Seek>(
     uid: [u8; 16],
     progress: Option<&openmailclient_model::Progress>,
 ) -> Result<(W, Written), PstError> {
+    write_store_of(out, store, uid, progress, crate::ndb::Ver::Unicode)
+}
+
+/// `write_store_until` for an ANSI data file ([MS-PST] 2.2.2.6, wVer 14): the kind older
+/// programs read, of at most 2 GB. Text is 8-bit in the code page of its message where that
+/// code page has all of it, and Unicode text where it has not, so that nothing is replaced
+/// by a question mark; what a program that only knows 8-bit text makes of the latter has not
+/// been tried.
+pub fn write_store_ansi<W: Read + Write + Seek>(
+    out: W,
+    store: &mut dyn Store,
+    uid: [u8; 16],
+    progress: Option<&openmailclient_model::Progress>,
+) -> Result<(W, Written), PstError> {
+    write_store_of(out, store, uid, progress, crate::ndb::Ver::Ansi)
+}
+
+fn write_store_of<W: Read + Write + Seek>(
+    out: W,
+    store: &mut dyn Store,
+    uid: [u8; 16],
+    progress: Option<&openmailclient_model::Progress>,
+    ver: crate::ndb::Ver,
+) -> Result<(W, Written), PstError> {
     let source = |e: openmailclient_model::StoreError| PstError::Source(e.to_string());
     let listed = store.folders().map_err(source)?;
     if let Some(p) = progress {
         p.begin(listed.iter().map(|f| u64::from(f.total)).sum::<u64>().saturating_mul(2));
     }
     // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
-    let mut o = Out { w: NdbWriter::new(out, 1)?, names: Names::default(), uid, serial: 0 };
+    let mut o = Out { w: NdbWriter::of(out, 1, ver)?, names: Names::default(), uid, serial: 0 };
     let mut done = Written::default();
 
     // 0: the top of the visible tree; 1…: the source's folders in its order.

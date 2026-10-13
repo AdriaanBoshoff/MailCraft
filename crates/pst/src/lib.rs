@@ -24,7 +24,7 @@ mod write;
 pub use check::{Check, check, check_until};
 pub use edit::original_beside;
 pub use journal::{journal_beside, journal_elsewhere, set_aside};
-pub use store_write::{Written, write_store, write_store_until};
+pub use store_write::{Written, write_store, write_store_ansi, write_store_until};
 
 use ltp::Raw;
 use ndb::{Ndb, Subnodes, u32_at};
@@ -397,9 +397,17 @@ impl PstStore {
 }
 
 /// The code page of an object's 8-bit strings: its own, else Windows-1252.
-fn code_page(raws: &[Raw]) -> u32 {
-    let own = |want: u16| raws.iter().find(|r| r.id == want && r.ty == ptype::INT32).and_then(|r| u32_at(&r.data, 0)).filter(|c| *c != 0);
-    own(pid::MESSAGE_CODEPAGE).or_else(|| own(pid::INTERNET_CODEPAGE)).unwrap_or(1252)
+fn code_page<'a>(raws: impl IntoIterator<Item = &'a Raw>) -> u32 {
+    let (mut message, mut internet) = (None, None);
+    for r in raws.into_iter().filter(|r| r.ty == ptype::INT32) {
+        let named = u32_at(&r.data, 0).filter(|c| *c != 0);
+        match r.id {
+            pid::MESSAGE_CODEPAGE if message.is_none() => message = named,
+            pid::INTERNET_CODEPAGE if internet.is_none() => internet = named,
+            _ => {}
+        }
+    }
+    message.or(internet).unwrap_or(1252)
 }
 
 impl Store for PstStore {
@@ -510,6 +518,8 @@ impl Store for PstStore {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_ansi;
 #[cfg(test)]
 mod tests_edit;
 #[cfg(test)]

@@ -1,5 +1,5 @@
-//! Writing the Node Database layer ([MS-PST] 2.2): a whole Unicode data file from its blocks and
-//! nodes, front to back.
+//! Writing the Node Database layer ([MS-PST] 2.2): a whole data file from its blocks and nodes,
+//! front to back, Unicode or ANSI (ids and offsets of four bytes, and what follows from that).
 //!
 //! A file is always written whole, to a place of the caller's choosing (a temporary file that is
 //! swapped in when it is complete); nothing here changes a file in place. Space is handed out in
@@ -14,6 +14,7 @@
 //! into one node or one subnode entry. For a second place, ask again with the same bytes; the
 //! writer finds the blocks and counts the reference.
 
+use crate::ndb::Ver;
 use crate::{PstError, crypt};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -29,6 +30,7 @@ pub(crate) const PAGE_BODY: usize = PAGE - TRAILER;
 /// Blocks are multiples of 64 bytes, at most 8 KB with their trailer ([MS-PST] 2.2.2.8).
 pub(crate) const SLOT: usize = 64;
 pub(crate) const TRAILER: usize = 16;
+#[cfg(test)]
 pub(crate) const MAX_DATA: usize = 8192 - TRAILER;
 /// The entry area of a B-tree page ([MS-PST] 2.2.2.7.7.1).
 pub(crate) const BT_AREA: usize = 488;
@@ -42,11 +44,9 @@ pub(crate) const PT_AMAP: u8 = 0x84;
 pub(crate) const PT_FPMAP: u8 = 0x85;
 pub(crate) const PT_DLIST: u8 = 0x86;
 
-/// How many block ids fit an XBLOCK, and how many entries a subnode leaf and a subnode index
-/// block ([MS-PST] 2.2.2.8.3.2.1, 2.2.2.8.3.3.1.2, 2.2.2.8.3.3.2.2).
-const PER_X: usize = (MAX_DATA - 8) / 8;
-const PER_SL: usize = (MAX_DATA - 8) / 24;
-const PER_SI: usize = (MAX_DATA - 8) / 16;
+/// An ANSI data file is addressed with 32 bits, and the programs that made such files stop
+/// at 2 GB.
+const ANSI_END: u64 = 1 << 31;
 /// A block's reference count is 16 bits; past this a new copy is written instead.
 const MAX_REFS: u16 = 0xFFF0;
 
@@ -117,6 +117,23 @@ fn put(buf: &mut [u8], at: usize, bytes: &[u8]) {
 
 /// A 512-byte page: its body, then the trailer ([MS-PST] 2.2.2.7.1).
 pub(crate) fn page(body: &[u8], ptype: u8, wsig: u16, bid: u64) -> Vec<u8> {
+    page_of(false, body, ptype, wsig, bid)
+}
+
+/// A page of either kind. An ANSI page has 500 bytes before a trailer of twelve, in which the
+/// id (four bytes) comes before the checksum.
+fn page_of(ansi: bool, body: &[u8], ptype: u8, wsig: u16, bid: u64) -> Vec<u8> {
+    if ansi {
+        const BODY: usize = PAGE - 12;
+        let mut out = vec![0u8; PAGE];
+        put(&mut out, 0, body.get(..BODY.min(body.len())).unwrap_or_default());
+        let sum = crc(out.get(..BODY).unwrap_or_default());
+        put(&mut out, BODY, &[ptype, ptype]);
+        put(&mut out, BODY + 2, &wsig.to_le_bytes());
+        put(&mut out, BODY + 4, &(bid as u32).to_le_bytes());
+        put(&mut out, BODY + 8, &sum.to_le_bytes());
+        return out;
+    }
     let mut out = vec![0u8; PAGE];
     put(&mut out, 0, body.get(..PAGE_BODY.min(body.len())).unwrap_or_default());
     let sum = crc(out.get(..PAGE_BODY).unwrap_or_default());
@@ -127,9 +144,16 @@ pub(crate) fn page(body: &[u8], ptype: u8, wsig: u16, bid: u64) -> Vec<u8> {
     out
 }
 
-/// A map page: its id is its own offset and it carries no signature ([MS-PST] 2.2.2.7.1).
-fn map_page(body: &[u8], ptype: u8, ib: u64) -> Vec<u8> {
-    page(body, ptype, 0, ib)
+/// A map page over 496 bytes of `bits`: its id is its own offset and it carries no signature
+/// ([MS-PST] 2.2.2.7.1). In an ANSI file four bytes of padding come before the bits
+/// ([MS-PST] 2.2.2.7.2.1).
+fn map_page(ansi: bool, bits: &[u8], ptype: u8, ib: u64) -> Vec<u8> {
+    if ansi {
+        let mut body = vec![0u8; 4];
+        body.extend(bits.get(..PAGE_BODY.min(bits.len())).unwrap_or_default());
+        return page_of(true, &body, ptype, 0, ib);
+    }
+    page(bits, ptype, 0, ib)
 }
 
 fn hash(data: &[u8], internal: bool) -> u64 {
@@ -159,6 +183,11 @@ pub(crate) struct Sub {
 pub(crate) struct NdbWriter<W: Read + Write + Seek> {
     out: W,
     crypt: u8,
+    /// An ANSI file: ids and offsets of four bytes.
+    ansi: bool,
+    /// The code page of the message whose parts are being written, for the text of an ANSI
+    /// file; none outside a message.
+    text: Option<u32>,
     /// The section being filled, from its allocation map on, and its number.
     section: Vec<u8>,
     index: u64,
@@ -182,13 +211,25 @@ pub(crate) struct NdbWriter<W: Read + Write + Seek> {
 impl<W: Read + Write + Seek> NdbWriter<W> {
     /// `crypt` is how data blocks are encoded: 0 not at all, 1 permuted, 2 cyclic
     /// ([MS-PST] 2.2.2.6 bCryptMethod).
+    #[cfg(test)]
     pub(crate) fn new(out: W, crypt: u8) -> Result<Self, PstError> {
+        Self::of(out, crypt, Ver::Unicode)
+    }
+
+    /// A writer of a file of the kind `ver`. A file with 4K pages is in no specification and
+    /// is not written.
+    pub(crate) fn of(out: W, crypt: u8, ver: Ver) -> Result<Self, PstError> {
         if crypt > 2 {
             return Err(cannot("an encoding this version does not write"));
+        }
+        if ver == Ver::Unicode4k {
+            return Err(cannot("a data file with 4K pages is not written by this version"));
         }
         let mut w = Self {
             out,
             crypt,
+            ansi: ver == Ver::Ansi,
+            text: None,
             section: Vec::with_capacity(SECTION),
             index: 0,
             free: Vec::new(),
@@ -209,6 +250,58 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         section_base(self.index)
     }
 
+    pub(crate) fn ansi(&self) -> bool {
+        self.ansi
+    }
+
+    /// Say whose parts are written from here on: a message with this code page, or none.
+    /// Gives what was said before, to be put back.
+    pub(crate) fn within(&mut self, text: Option<u32>) -> Option<u32> {
+        std::mem::replace(&mut self.text, text)
+    }
+
+    pub(crate) fn text(&self) -> Option<u32> {
+        self.text
+    }
+
+    /// A block's trailer: sixteen bytes, twelve in an ANSI file ([MS-PST] 2.2.2.8.1).
+    fn trailer(&self) -> usize {
+        if self.ansi { 12 } else { TRAILER }
+    }
+
+    /// The most bytes one block holds.
+    pub(crate) fn max_data(&self) -> usize {
+        8192 - self.trailer()
+    }
+
+    /// The bytes of an id in a block that names others.
+    fn id(&self) -> usize {
+        if self.ansi { 4 } else { 8 }
+    }
+
+    /// How many block ids fit an XBLOCK, and how many entries a subnode leaf and a subnode
+    /// index block ([MS-PST] 2.2.2.8.3.2.1, 2.2.2.8.3.3.1.2, 2.2.2.8.3.3.2.2). The entries of
+    /// a subnode block begin after eight bytes, after four in an ANSI file.
+    fn per_x(&self) -> usize {
+        (self.max_data() - 8) / self.id()
+    }
+
+    fn per_sl(&self) -> usize {
+        (self.max_data() - self.id()) / (3 * self.id())
+    }
+
+    fn per_si(&self) -> usize {
+        (self.max_data() - self.id()) / (2 * self.id())
+    }
+
+    fn push_id(&self, body: &mut Vec<u8>, id: u64) {
+        if self.ansi {
+            body.extend((id as u32).to_le_bytes());
+        } else {
+            body.extend(id.to_le_bytes());
+        }
+    }
+
     fn open_section(&mut self) {
         self.section.clear();
         // The allocation map is filled in when the section is full.
@@ -218,7 +311,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         // ([MS-PST] 2.2.2.7.3.1, 2.2.2.7.6.1).
         if pmap {
             let ib = self.base() + self.section.len() as u64;
-            self.section.extend(map_page(&[0xFF; PAGE_BODY], PT_PMAP, ib));
+            self.section.extend(map_page(self.ansi, &[0xFF; PAGE_BODY], PT_PMAP, ib));
         }
         if fmap {
             self.fmaps.push(self.index);
@@ -226,7 +319,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         }
         if fpmap {
             let ib = self.base() + self.section.len() as u64;
-            self.section.extend(map_page(&[0xFF; PAGE_BODY], PT_FPMAP, ib));
+            self.section.extend(map_page(self.ansi, &[0xFF; PAGE_BODY], PT_FPMAP, ib));
         }
     }
 
@@ -240,7 +333,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             *b = 0xFF;
         }
         let base = self.base();
-        let amap = map_page(&bits, PT_AMAP, base);
+        let amap = map_page(self.ansi, &bits, PT_AMAP, base);
         put(&mut self.section, 0, &amap);
         self.section.resize(SECTION, 0);
         self.out.seek(SeekFrom::Start(base))?;
@@ -255,6 +348,9 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         if at.saturating_add(size) > SECTION {
             self.flush()?;
             self.index = self.index.checked_add(1).ok_or_else(|| cannot("the file would be too large"))?;
+            if self.ansi && self.base().saturating_add(SECTION as u64) > ANSI_END {
+                return Err(cannot("the mailbox is too large for an ANSI data file (2 GB)"));
+            }
             self.open_section();
             at = self.section.len().next_multiple_of(align);
             if at.saturating_add(size) > SECTION {
@@ -280,7 +376,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
 
     /// One block ([MS-PST] 2.2.2.8): its id, and whether it was there already.
     fn block(&mut self, data: &[u8], internal: bool) -> Result<(u64, bool), PstError> {
-        if data.is_empty() || data.len() > MAX_DATA {
+        if data.is_empty() || data.len() > self.max_data() {
             return Err(cannot("a block of a size the format does not have"));
         }
         let key = hash(data, internal);
@@ -307,8 +403,10 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         }
         // Block ids go up by four; bit 1 marks an internal block ([MS-PST] 2.2.2.2).
         let bid = self.next_block << 2 | if internal { 2 } else { 0 };
-        self.next_block = self.next_block.checked_add(1).filter(|n| *n < 1 << 61).ok_or_else(|| cannot("too many blocks"))?;
-        let size = (data.len() + TRAILER).next_multiple_of(SLOT);
+        let most: u64 = if self.ansi { 1 << 30 } else { 1 << 61 };
+        self.next_block = self.next_block.checked_add(1).filter(|n| *n < most).ok_or_else(|| cannot("too many blocks"))?;
+        let tail = self.trailer();
+        let size = (data.len() + tail).next_multiple_of(SLOT);
         let at = self.room(size, SLOT)?;
         let ib = self.base() + at as u64;
         let mut body = data.to_vec();
@@ -322,13 +420,19 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         }
         let cb = body.len() as u16;
         // BLOCKTRAILER ([MS-PST] 2.2.2.8.1): cb, wSig, dwCRC of the cb bytes as stored, bid.
+        // In an ANSI file the id, four bytes, comes before the checksum.
         let mut trailer = [0u8; TRAILER];
         put(&mut trailer, 0, &cb.to_le_bytes());
         put(&mut trailer, 2, &sig(ib, bid).to_le_bytes());
-        put(&mut trailer, 4, &crc(&body).to_le_bytes());
-        put(&mut trailer, 8, &bid.to_le_bytes());
+        if self.ansi {
+            put(&mut trailer, 4, &(bid as u32).to_le_bytes());
+            put(&mut trailer, 8, &crc(&body).to_le_bytes());
+        } else {
+            put(&mut trailer, 4, &crc(&body).to_le_bytes());
+            put(&mut trailer, 8, &bid.to_le_bytes());
+        }
         put(&mut self.section, at, &body);
-        put(&mut self.section, at + size - TRAILER, &trailer);
+        put(&mut self.section, at + size - tail, trailer.get(..tail).unwrap_or_default());
         // A block starts with two references: its entry in the block tree and whoever asked for it.
         self.seen.insert(key, u32::try_from(self.blocks.len()).map_err(|_| cannot("too many blocks"))?);
         self.blocks.push(Block { bid, ib, cb, refs: 2 });
@@ -370,25 +474,26 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         body.extend((kids.len() as u16).to_le_bytes());
         body.extend(total.to_le_bytes());
         for (bid, _) in kids {
-            body.extend(bid.to_le_bytes());
+            self.push_id(&mut body, *bid);
         }
         self.internal(&body, kids.iter().map(|k| k.0))
     }
 
-    /// A node's data from its blocks, each at most 8,176 bytes: one block, or a data tree over
+    /// A node's data from its blocks, each at most `max_data` bytes: one block, or a data tree over
     /// them ([MS-PST] 2.2.2.8.3.2). No data at all is block id 0.
     pub(crate) fn data<I, B>(&mut self, chunks: I) -> Result<u64, PstError>
     where
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
     {
+        let per_x = self.per_x();
         let mut leaves: Vec<(u64, u64)> = Vec::new();
         for chunk in chunks {
             let chunk = chunk.as_ref();
             if chunk.is_empty() {
                 continue;
             }
-            if leaves.len() >= PER_X * PER_X {
+            if leaves.len() >= per_x * per_x {
                 return Err(cannot("an item with more blocks than a data tree holds"));
             }
             let (bid, _) = self.block(chunk, false)?;
@@ -397,10 +502,10 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         match leaves.as_slice() {
             [] => Ok(0),
             [(bid, _)] => Ok(*bid),
-            all if all.len() <= PER_X => self.xblock(1, all),
+            all if all.len() <= per_x => self.xblock(1, all),
             all => {
-                let mut tops = Vec::with_capacity(all.len() / PER_X + 1);
-                for group in all.chunks(PER_X) {
+                let mut tops = Vec::with_capacity(all.len() / per_x + 1);
+                for group in all.chunks(per_x) {
                     tops.push((self.xblock(1, group)?, group.iter().map(|k| k.1).sum()));
                 }
                 self.xblock(2, &tops)
@@ -411,7 +516,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
     /// A node's data from one run of bytes, cut where blocks end.
     #[cfg(test)]
     pub(crate) fn stream(&mut self, bytes: &[u8]) -> Result<u64, PstError> {
-        self.data(bytes.chunks(MAX_DATA))
+        self.data(bytes.chunks(self.max_data()))
     }
 
     /// The subnode tree over `subs`: one SLBLOCK, or an SIBLOCK over several
@@ -421,21 +526,23 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         if subs.windows(2).any(|w| w.first().map(|s| s.nid) == w.get(1).map(|s| s.nid)) {
             return Err(cannot("two subnodes with one id"));
         }
-        if subs.len() > PER_SL * PER_SI {
+        if subs.len() > self.per_sl() * self.per_si() {
             return Err(cannot("more subnodes than a subnode tree holds"));
         }
+        // The four bytes of padding after cEnt are not there in an ANSI file.
+        let padding: &[u8] = if self.ansi { &[] } else { &[0; 4] };
         let mut leaves: Vec<(u32, u64)> = Vec::new();
-        for group in subs.chunks(PER_SL) {
-            // btype 2, cLevel 0, cEnt, padding; then SLENTRY: nid (in 8 bytes), bidData, bidSub.
+        for group in subs.chunks(self.per_sl()) {
+            // btype 2, cLevel 0, cEnt, padding; then SLENTRY: nid (as wide as an id), bidData, bidSub.
             let mut body = Vec::with_capacity(8 + group.len() * 24);
             body.extend([2, 0]);
             body.extend((group.len() as u16).to_le_bytes());
-            body.extend([0; 4]);
+            body.extend(padding);
             for s in group {
                 self.note(s.nid);
-                body.extend(u64::from(s.nid).to_le_bytes());
-                body.extend(s.data.to_le_bytes());
-                body.extend(s.sub.to_le_bytes());
+                self.push_id(&mut body, u64::from(s.nid));
+                self.push_id(&mut body, s.data);
+                self.push_id(&mut body, s.sub);
             }
             let bid = self.internal(&body, group.iter().flat_map(|s| [s.data, s.sub]))?;
             leaves.push((group.first().map_or(0, |s| s.nid), bid));
@@ -444,14 +551,14 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             [] => Ok(0),
             [(_, bid)] => Ok(*bid),
             all => {
-                // btype 2, cLevel 1, cEnt, padding; then SIENTRY: nid (in 8 bytes), bid.
+                // btype 2, cLevel 1, cEnt, padding; then SIENTRY: nid (as wide as an id), bid.
                 let mut body = Vec::with_capacity(8 + all.len() * 16);
                 body.extend([2, 1]);
                 body.extend((all.len() as u16).to_le_bytes());
-                body.extend([0; 4]);
+                body.extend(padding);
                 for (nid, bid) in all {
-                    body.extend(u64::from(*nid).to_le_bytes());
-                    body.extend(bid.to_le_bytes());
+                    self.push_id(&mut body, u64::from(*nid));
+                    self.push_id(&mut body, *bid);
                 }
                 self.internal(&body, all.iter().map(|l| l.1))
             }
@@ -487,7 +594,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         // Pages take their ids from a counter of their own ([MS-PST] 2.2.2.6 bidNextP).
         let bid = self.next_page;
         self.next_page += 1;
-        let bytes = page(body, ptype, sig(ib, bid), bid);
+        let bytes = page_of(self.ansi, body, ptype, sig(ib, bid), bid);
         put(&mut self.section, at, &bytes);
         Ok((bid, ib))
     }
@@ -498,36 +605,45 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         let mut items = leaves;
         let mut width = width;
         let mut level = 0u8;
+        // An ANSI page has 496 bytes of entries and its counts straight after them, 500 bytes
+        // before the trailer; its BTENTRY is three times four bytes.
+        let (area, body_size) = if self.ansi { (496, PAGE - 12) } else { (BT_AREA, PAGE_BODY) };
         loop {
-            let per = BT_AREA / width;
+            let per = area / width;
             let mut up: Vec<(u64, [u8; 32])> = Vec::with_capacity(items.len() / per + 1);
+            let mut last = (0u64, 0u64);
             let mut groups: Vec<&[(u64, [u8; 32])]> = items.chunks(per).collect();
             if groups.is_empty() {
                 groups.push(&[]);
             }
             for group in groups {
-                let mut body = vec![0u8; PAGE_BODY];
+                let mut body = vec![0u8; body_size];
                 for (i, (_, entry)) in group.iter().enumerate() {
                     put(&mut body, i * width, entry.get(..width).unwrap_or_default());
                 }
-                // cEnt, cEntMax, cbEnt, cLevel, then four bytes of padding.
-                put(&mut body, BT_AREA, &[group.len() as u8, per as u8, width as u8, level]);
+                // cEnt, cEntMax, cbEnt, cLevel (then four bytes of padding in a Unicode file).
+                put(&mut body, area, &[group.len() as u8, per as u8, width as u8, level]);
                 let (bid, ib) = self.put_page(ptype, &body)?;
+                last = (bid, ib);
                 // BTENTRY ([MS-PST] 2.2.2.7.7.2): the first key below, then the page's BREF.
                 let key = group.first().map_or(0, |g| g.0);
                 let mut entry = [0u8; 32];
-                put(&mut entry, 0, &key.to_le_bytes());
-                put(&mut entry, 8, &bid.to_le_bytes());
-                put(&mut entry, 16, &ib.to_le_bytes());
+                if self.ansi {
+                    put(&mut entry, 0, &(key as u32).to_le_bytes());
+                    put(&mut entry, 4, &(bid as u32).to_le_bytes());
+                    put(&mut entry, 8, &(ib as u32).to_le_bytes());
+                } else {
+                    put(&mut entry, 0, &key.to_le_bytes());
+                    put(&mut entry, 8, &bid.to_le_bytes());
+                    put(&mut entry, 16, &ib.to_le_bytes());
+                }
                 up.push((key, entry));
             }
-            if let [(_, root)] = up.as_slice() {
-                let bid = u64::from_le_bytes(root.get(8..16).and_then(|b| b.try_into().ok()).unwrap_or_default());
-                let ib = u64::from_le_bytes(root.get(16..24).and_then(|b| b.try_into().ok()).unwrap_or_default());
-                return Ok((bid, ib));
+            if up.len() == 1 {
+                return Ok(last);
             }
             items = up;
-            width = 24;
+            width = if self.ansi { 12 } else { 24 };
             level = level.checked_add(1).ok_or_else(|| cannot("an index that is too deep"))?;
         }
     }
@@ -538,37 +654,57 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         if self.nodes.windows(2).any(|w| w.first().map(|n| n.0) == w.get(1).map(|n| n.0)) {
             return Err(cannot("two nodes with one id"));
         }
-        // BBTENTRY ([MS-PST] 2.2.2.7.7.3): BREF, cb, cRef, padding.
+        let ansi = self.ansi;
+        // BBTENTRY ([MS-PST] 2.2.2.7.7.3): BREF, cb, cRef, padding; twelve bytes without
+        // padding in an ANSI file.
         let blocks: Vec<(u64, [u8; 32])> = self
             .blocks
             .iter()
             .map(|b| {
                 let mut e = [0u8; 32];
-                put(&mut e, 0, &b.bid.to_le_bytes());
-                put(&mut e, 8, &b.ib.to_le_bytes());
-                put(&mut e, 16, &b.cb.to_le_bytes());
-                put(&mut e, 18, &b.refs.to_le_bytes());
+                if ansi {
+                    put(&mut e, 0, &(b.bid as u32).to_le_bytes());
+                    put(&mut e, 4, &(b.ib as u32).to_le_bytes());
+                    put(&mut e, 8, &b.cb.to_le_bytes());
+                    put(&mut e, 10, &b.refs.to_le_bytes());
+                } else {
+                    put(&mut e, 0, &b.bid.to_le_bytes());
+                    put(&mut e, 8, &b.ib.to_le_bytes());
+                    put(&mut e, 16, &b.cb.to_le_bytes());
+                    put(&mut e, 18, &b.refs.to_le_bytes());
+                }
                 (b.bid, e)
             })
             .collect();
-        let (bbt_bid, bbt_ib) = self.tree(PT_BBT, 24, blocks)?;
-        // NBTENTRY ([MS-PST] 2.2.2.7.7.4): nid (in 8 bytes), bidData, bidSub, nidParent, padding.
+        let (bbt_bid, bbt_ib) = self.tree(PT_BBT, if ansi { 12 } else { 24 }, blocks)?;
+        // NBTENTRY ([MS-PST] 2.2.2.7.7.4): nid (in 8 bytes), bidData, bidSub, nidParent, padding;
+        // four times four bytes in an ANSI file.
         let nodes: Vec<(u64, [u8; 32])> = self
             .nodes
             .iter()
             .map(|(nid, data, sub, parent)| {
                 let mut e = [0u8; 32];
-                put(&mut e, 0, &u64::from(*nid).to_le_bytes());
-                put(&mut e, 8, &data.to_le_bytes());
-                put(&mut e, 16, &sub.to_le_bytes());
-                put(&mut e, 24, &parent.to_le_bytes());
+                if ansi {
+                    put(&mut e, 0, &nid.to_le_bytes());
+                    put(&mut e, 4, &(*data as u32).to_le_bytes());
+                    put(&mut e, 8, &(*sub as u32).to_le_bytes());
+                    put(&mut e, 12, &parent.to_le_bytes());
+                } else {
+                    put(&mut e, 0, &u64::from(*nid).to_le_bytes());
+                    put(&mut e, 8, &data.to_le_bytes());
+                    put(&mut e, 16, &sub.to_le_bytes());
+                    put(&mut e, 24, &parent.to_le_bytes());
+                }
                 (u64::from(*nid), e)
             })
             .collect();
-        let (nbt_bid, nbt_ib) = self.tree(PT_NBT, 32, nodes)?;
+        let (nbt_bid, nbt_ib) = self.tree(PT_NBT, if ansi { 16 } else { 32 }, nodes)?;
         self.flush()?;
         let last_amap = self.base();
         let eof = last_amap + SECTION as u64;
+        if ansi && eof > ANSI_END {
+            return Err(cannot("the mailbox is too large for an ANSI data file (2 GB)"));
+        }
 
         // Free maps: one byte for each allocation map from this section on, the longest run of
         // free slots there, at most 255 ([MS-PST] 2.2.2.7.5.1).
@@ -580,10 +716,13 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             }
             let ib = section_base(at) + if maps(at).0 { 2 * PAGE as u64 } else { PAGE as u64 };
             self.out.seek(SeekFrom::Start(ib))?;
-            self.out.write_all(&map_page(&body, PT_FMAP, ib))?;
+            self.out.write_all(&map_page(ansi, &body, PT_FMAP, ib))?;
         }
 
         let mut head = vec![0u8; FIRST_AMAP as usize];
+        if ansi {
+            return self.finish_ansi(head, eof, last_amap, (nbt_bid, nbt_ib), (bbt_bid, bbt_ib));
+        }
         // Density list ([MS-PST] 2.2.2.7.4.2): the allocation maps with room, the emptiest first.
         // An entry is the map's number in 20 bits and its free slots in 12.
         let mut roomy: Vec<(usize, u16)> = self.free.iter().copied().enumerate().filter(|(i, f)| *f > 0 && *i < 1 << 20).collect();
@@ -639,6 +778,50 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         put(&mut head, 4, &partial.to_le_bytes());
         let full = crc(head.get(8..524).unwrap_or_default());
         put(&mut head, 524, &full.to_le_bytes());
+        self.out.seek(SeekFrom::Start(0))?;
+        self.out.write_all(&head)?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
+
+    /// HEADER, ANSI ([MS-PST] 2.2.2.6): the ids and offsets are four bytes, ROOT is at 164,
+    /// there is one checksum and no density list.
+    fn finish_ansi(mut self, mut head: Vec<u8>, eof: u64, last_amap: u64, nbt: (u64, u64), bbt: (u64, u64)) -> Result<W, PstError> {
+        let small = |v: u64| u32::try_from(v).map_err(|_| cannot("the mailbox is too large for an ANSI data file (2 GB)"));
+        put(&mut head, 0, b"!BDN");
+        put(&mut head, 8, b"SM");
+        put(&mut head, 10, &14u16.to_le_bytes());
+        put(&mut head, 12, &19u16.to_le_bytes());
+        put(&mut head, 14, &[1, 1]);
+        put(&mut head, 24, &small(self.next_block << 2)?.to_le_bytes());
+        put(&mut head, 28, &small(self.next_page)?.to_le_bytes());
+        put(&mut head, 32, &self.unique.wrapping_add(1).to_le_bytes());
+        for kind in 0..32usize {
+            let start: u32 = match kind {
+                0x03 => 0x4000,
+                0x04 => 0x1_0000,
+                0x08 => 0x8000,
+                _ => 0x400,
+            };
+            let next = self.last.get(kind).copied().unwrap_or(0).saturating_add(1).max(start);
+            put(&mut head, 36 + kind * 4, &next.to_le_bytes());
+        }
+        let free_bytes: u64 = self.free.iter().map(|f| u64::from(*f) * SLOT as u64).sum();
+        put(&mut head, 168, &small(eof)?.to_le_bytes());
+        put(&mut head, 172, &small(last_amap)?.to_le_bytes());
+        put(&mut head, 176, &small(free_bytes)?.to_le_bytes());
+        put(&mut head, 184, &small(nbt.0)?.to_le_bytes());
+        put(&mut head, 188, &small(nbt.1)?.to_le_bytes());
+        put(&mut head, 192, &small(bbt.0)?.to_le_bytes());
+        put(&mut head, 196, &small(bbt.1)?.to_le_bytes());
+        // fAMapValid: VALID_AMAP2.
+        put(&mut head, 200, &[2]);
+        // The two maps kept in the header are no longer used and are all ones.
+        put(&mut head, 204, &[0xFF; 256]);
+        put(&mut head, 460, &[0x80, self.crypt]);
+        // dwCRCPartial: 471 bytes from offset 8.
+        let partial = crc(head.get(8..479).unwrap_or_default());
+        put(&mut head, 4, &partial.to_le_bytes());
         self.out.seek(SeekFrom::Start(0))?;
         self.out.write_all(&head)?;
         self.out.flush()?;

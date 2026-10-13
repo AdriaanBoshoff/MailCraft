@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3%20closed%20%C2%B7%20M3b%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-292%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-300%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -52,7 +52,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 | | Read | Written |
 |---|---|---|
-| `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | a whole mailbox as a new Unicode `.pst`; changes to an open Unicode `.pst` are kept by Save Changes (neither opened in Outlook yet) |
+| `.pst`, `.ost` (ANSI, Unicode, 4K pages) | yes | a whole mailbox as a new Unicode or ANSI `.pst`; changes to an open Unicode or ANSI `.pst` are kept by Save Changes, and the file stays the kind it was (none opened in Outlook yet) |
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
@@ -66,7 +66,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
   it on the first save. Until then each change is journalled beside the file (or in a folder of our own when that
   one cannot be written), so a crash or a
   closed window does not lose it: it comes back, still unsaved, when the file is opened again.
-  `.ost`, ANSI and 4K-page files are read-only.
+  `.ost` and 4K-page files are read-only.
 - An Outlook-Classic-style window: ribbon (simplified and classic), folder pane, message list with
   date groups, reading pane, light and dark themes.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
@@ -85,8 +85,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 ## What does not work yet
 
 - **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
-- **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. ANSI
-  and 4K-page data files cannot be changed.
+- **Proof against Outlook.** No file written here has been opened in Outlook Classic yet. 4K-page
+  data files cannot be changed.
 - **Parts of formatted bodies.** Right-to-left text while it is typed; complex scripts
   on screen beyond what egui shapes; SVG, WebP and
   TIFF pictures; animation; metafiles that draw a part of a bitmap, a run-packed bitmap or a

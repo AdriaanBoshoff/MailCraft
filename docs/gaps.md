@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 62 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 63 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,7 +9,7 @@
 2. **Changes to a data file are kept only for a Unicode `.pst`, and none of it is proved in Outlook.** `file.save`
    (M3.4) rewrites the whole file beside itself and swaps it in; nothing we write has been opened in
    Outlook. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
-   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An `.ost`, an ANSI `.pst` and a 4K-page file are read-only. `file.export` copies a
+   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21); an `.ost` and a 4K-page file are read-only. `file.export` copies a
    Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
    (associated) items and folder properties beyond name, class and counts are not carried then, and
    the new file does not say which folder is the Calendar or Contacts. Changes
@@ -79,6 +79,7 @@
 
 ## Revision history
 
+- 63 · 2026-10-13 — M3b.21: ANSI data files are written (`file.export` with `"kind": "ansi"`), take changes and stay ANSI when saved; 4K-page files stay read-only.
 - 62 · 2026-10-13 — M3b.20: the structure check covers ANSI files (from the specification) and 4K-page files (from measurement); three local Outlook-written 4K-page files pass it.
 - 61 · 2026-10-13 — M3b.19: `file.export` with `"wait": false` runs on a thread of its own for every kind of mailbox, the writing from what is read included.
 - 60 · 2026-10-13 — M3b.18: values of another type than their column's are shown as the column holds them; the structure check hears Stop and compares fill levels.
