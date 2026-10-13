@@ -20,11 +20,12 @@ fn done(w: NdbWriter<Cursor<Vec<u8>>>) -> Vec<u8> {
 
 fn sound(bytes: &[u8]) -> crate::Check {
     let found = check(&mut Cursor::new(bytes)).unwrap();
-    assert!(found.sound(), "{:?}", found.problems);
+    // These files hold nodes of plain bytes: only the structure around them is meant.
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
     found
 }
 
-fn open(bytes: &[u8]) -> Ndb {
+fn open(bytes: &[u8]) -> Ndb<'static> {
     Ndb::open(Box::new(Cursor::new(bytes.to_vec()))).unwrap()
 }
 

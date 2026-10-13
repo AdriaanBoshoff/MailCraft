@@ -46,8 +46,8 @@ struct BbtEntry {
 /// (data block id, subnode block id) of one subnode.
 pub(crate) type Subnodes = HashMap<u32, (u64, u64)>;
 
-pub(crate) struct Ndb {
-    src: Box<dyn Source>,
+pub(crate) struct Ndb<'a> {
+    src: Box<dyn Source + 'a>,
     len: u64,
     pub ver: Ver,
     crypt: u8,
@@ -71,8 +71,8 @@ fn damaged(what: &str) -> PstError {
     PstError::Damaged(what.to_string())
 }
 
-impl Ndb {
-    pub(crate) fn open(mut src: Box<dyn Source>) -> Result<Self, PstError> {
+impl<'a> Ndb<'a> {
+    pub(crate) fn open(mut src: Box<dyn Source + 'a>) -> Result<Self, PstError> {
         let len = src.seek(SeekFrom::End(0))?;
         let mut ndb = Self { src, len, ver: Ver::Unicode, crypt: 0, nbt: HashMap::new(), bbt: HashMap::new() };
         let head = ndb.read_at(0, 564.min(usize::try_from(len).unwrap_or(564)))?;

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 64 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 65 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 278, all passing |
+| Tests | 281, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -99,7 +99,8 @@
 48. Done: text copied out of our PDFs was tried in a reader (xpdf's `pdftotext` 4.06) and what it found was put right: text written from the right is given as it is seen, as readers expect it, and only glyphs that are not one letter each say what they stand for (M3b.10).
 49. Done: when a message's list of attachments changes, each attachment the file already holds keeps what is stored on it; a search folder's table shows a changed message as it is now (M3b.11).
 50. Done: a save asked for in the window is done on a thread of its own, with a bar that fills in the status bar and a way to stop it (M3b.12).
-51. Next: M3b.13: the next of the do-later list for data files (writing ANSI and 4K files, the structure check into heaps and tables).
+51. Done: the structure check looks inside the nodes: every heap, index, property list and table is held against the specification (M3b.13).
+52. Next: M3b.14: export off the UI thread with progress and a way to stop, as saving is; then the special-folder ids for an exported file.
 
 ## Do later (from M2)
 
@@ -147,7 +148,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Export off the UI thread, with progress and a way to stop | M3b |
 | Table cells whose type differs from the column's kept in a saved `.pst`'s tables (the item keeps them; the list does not show them) | M3b |
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
-| The structure check reaching into heaps, property lists and tables (it stops at blocks and nodes) | M3b |
+| ~~The structure check reaching into heaps, property lists and tables~~ | done: M3b.13 |
+| The structure check comparing a heap's fill levels with its free space; the check run on a 512-byte-page `.pst` written by Outlook | M3b |
 | 32-bit floats, currency and error values keeping their type when an item is written from the model (a value that was not changed keeps it since M3.4) | M3b |
 | A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
@@ -972,3 +974,33 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   changed means writing into the file that holds the mail, which the rule that a failed
   write leaves the file byte for byte as it was forbids unless such writes are journalled
   themselves; that stays in Do later. Export still holds the window.
+- **2026-10-13** - M3b.13: the structure check looks inside the nodes. Until now it stopped at blocks and
+  nodes: checksums, maps, the two trees and the reference counts. A file could pass it and
+  still hold a property list no other program can read. Now, in a file sound that far, every
+  node that is to hold properties or a table (folders, messages, attachments, hidden items,
+  the store, the name map, the tables of folders, attachments and recipients, and the same
+  among the subnodes, to eight deep) is held against [MS-PST] 2.3: the heap's signature and
+  kind, each block's page map (inside the block, after its header, allocations in order);
+  an index's header, the sizes of its keys and entries, its levels, keys ascending; a
+  property's value where its record says (an allocation that is there, or a subnode that is
+  there), at the size its kind has, text of two bytes a letter with an even length, a list
+  of values with its starts in order, an object naming a subnode that is there; a table's
+  header at the size its columns need, the row laid out as four, two and one bytes and a
+  bit for each column, columns in the order of their tags, each where a value of its size
+  belongs and with a bit of its own, the row's id and version where they belong, the rows
+  filling their allocation, the row index naming rows that are there, once each, with the
+  id the row has, and each cell kept elsewhere being there. One line names the first thing
+  wrong with a node. `Check::inside` has them; `openmailclient-cli inspect` lists them with
+  the rest. What it found in our own writer on the first run: an item carrying a value
+  typed as an object, with bytes that name no subnode, was written as it came; such a value
+  is now left out (there is nothing it could be read from), and a value of a kind with a
+  size of its own is written at that size whatever came. Made better on the way: a save is
+  stopped by what it did wrong and not by what was wrong before. When the new file has
+  something wrong inside a node, the file as it was is checked too, and only what is new
+  stops the save: a file from another program with an oddity of its own is still changed
+  and saved, its nodes going across as stored. 3 tests: 27 kinds of damage each named, some
+  10,000 changed bytes and cut-short heaps without a panic, and a save refused for its own
+  mistake and not for an old one. Not done: fill levels of a heap are not compared with the
+  space that is free; the check covers Unicode files with 512-byte pages only, as before;
+  no file written by Outlook of that kind is at hand to run it on (the profile here has
+  `.ost` files with 4K pages), so what it says of such a file is not yet known.

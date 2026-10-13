@@ -22,7 +22,7 @@ fn saved(store: &mut PstStore) -> PstStore {
     let (out, _) = store.save_to(Cursor::new(Vec::new()), UID).unwrap();
     let bytes = out.into_inner();
     let found = check(&mut Cursor::new(&bytes)).unwrap();
-    assert!(found.sound(), "{:?}", found.problems);
+    assert!(found.sound(), "{:?} {:?}", found.problems, found.inside);
     PstStore::from_bytes(bytes).unwrap()
 }
 
@@ -628,7 +628,7 @@ fn a_copy_of_a_data_file_has_what_this_program_does_not_understand() {
     assert_eq!(std::fs::read(&from).unwrap(), first);
 
     let found = check(&mut Cursor::new(std::fs::read(&to).unwrap())).unwrap();
-    assert!(found.sound(), "{:?}", found.problems);
+    assert!(found.sound(), "{:?} {:?}", found.problems, found.inside);
     let mut back = PstStore::open(&to).unwrap();
     assert!(!back.unsaved());
     same_mailbox(&want, &whole(&mut back));

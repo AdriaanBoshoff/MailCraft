@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 13 · 2026-10-13 · an attachment keeps what is stored on it when a message's attachments change, and search-folder rows of changed messages are brought up to date (M3b.11); the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
+**Status:** revision 14 · 2026-10-13 · the structure check looks inside nodes (M3b.13); an attachment keeps what is stored on it when a message's attachments change, and search-folder rows of changed messages are brought up to date (M3b.11); the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -58,10 +58,10 @@ Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 | Data trees, one and two levels (2.2.2.8.3.2) | yes | read back, 33 MB item |
 | Subnode trees with an index block (2.2.2.8.3.3) | yes | read back, 800 subnodes |
 | Block and node B-trees (2.2.2.7.7) | yes | read back, 1,000 nodes |
-| Heaps over many blocks, with fill levels (2.3.1) | yes; which half of a byte holds the earlier block's level is our reading | read back, more than eight blocks |
-| Index in a heap, any depth (2.3.2) | yes | read back, 3,000 records |
-| Property list; large values in subnodes (2.3.3) | yes | read back, every value type of the model |
-| Table; rows in the heap or in a subnode (2.3.4) | yes | read back, 6,000 rows |
+| Heaps over many blocks, with fill levels (2.3.1) | yes; which half of a byte holds the earlier block's level is our reading | read back, more than eight blocks; our structure check (page maps; not the fill levels) |
+| Index in a heap, any depth (2.3.2) | yes | read back, 3,000 records; our structure check |
+| Property list; large values in subnodes (2.3.3) | yes; a value typed as an object that names no subnode is left out | read back, every value type of the model; our structure check |
+| Table; rows in the heap or in a subnode (2.3.4) | yes | read back, 6,000 rows; our structure check |
 | The nodes every file must have: message store, name-to-id map, root, search folders, table templates (2.7.1) | yes | read back; structure check clean |
 | Folders with their hierarchy, contents and associated-contents tables (2.4.4) | name, class, counts; the associated table is written empty | read back, 1,500 messages in a folder |
 | Messages with recipients and attachments (2.4.5, 2.4.6) | yes; properties we do not understand go out as they were read | read back, sample mailbox and three local files (counts only) |

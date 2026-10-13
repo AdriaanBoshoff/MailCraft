@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 54 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 55 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -77,6 +77,7 @@
 
 ## Revision history
 
+- 55 · 2026-10-13 — M3b.13: the structure check reaches into heaps, indexes, property lists and tables; a save is stopped only by what it got wrong itself.
 - 54 · 2026-10-13 — M3b.12: a save from the window runs on a thread of its own, with progress and a way to stop it; a save that writes only what changed is still to do.
 - 53 · 2026-10-13 — M3b.11: attachments keep what is stored on them when the list changes; search-folder rows of changed messages are brought up to date.
 - 52 · 2026-10-13 — M3b.10: text copied out of a printed PDF was tried in one reader; right-to-left text is given as it is seen and only ligatures and clusters say what they stand for.

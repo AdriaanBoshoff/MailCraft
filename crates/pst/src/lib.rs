@@ -10,6 +10,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod check;
+mod check_ltp;
 mod crypt;
 mod crypt_table;
 mod edit;
@@ -81,7 +82,7 @@ const MAX_DEPTH: usize = 8;
 
 /// An open `.pst` / `.ost`.
 pub struct PstStore {
-    ndb: Ndb,
+    ndb: Ndb<'static>,
     path: Option<PathBuf>,
     name: String,
     names: Vec<Option<NamedKey>>,

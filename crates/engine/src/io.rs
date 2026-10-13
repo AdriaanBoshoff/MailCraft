@@ -49,7 +49,10 @@ pub struct Structure {
 pub fn check_structure(path: &Path) -> Result<Option<Structure>, EngineError> {
     let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
     match openmailclient_pst::check(&mut file) {
-        Ok(c) => Ok(Some(Structure { pages: c.pages, blocks: c.blocks, nodes: c.nodes, free: c.free, problems: c.problems, more: c.more })),
+        Ok(mut c) => {
+            c.problems.append(&mut c.inside);
+            Ok(Some(Structure { pages: c.pages, blocks: c.blocks, nodes: c.nodes, free: c.free, problems: c.problems, more: c.more }))
+        }
         Err(openmailclient_pst::PstError::Unsupported(_)) => Ok(None),
         Err(openmailclient_pst::PstError::Io(e)) => Err(EngineError::Io(e)),
         Err(e) => Err(EngineError::Format(e.to_string())),
@@ -195,7 +198,7 @@ fn write_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Save
     file.seek(SeekFrom::Start(0))?;
     let found = openmailclient_pst::check(&mut std::io::BufReader::new(&mut file)).map_err(pst_error)?;
     if !found.sound() {
-        let first = found.problems.first().map(String::as_str).unwrap_or("no detail");
+        let first = found.problems.first().or(found.inside.first()).map(String::as_str).unwrap_or("no detail");
         return Err(EngineError::Format(format!("the data file that was written did not pass its own check ({first}); nothing was replaced")));
     }
     Ok(Saved { folders: done.folders, items: done.items, unreadable: done.unreadable, bytes, copied: false, not_copied })
@@ -208,7 +211,7 @@ fn copy_checked(store: &mut dyn Store, tmp: &Path, id: [u8; 16]) -> Result<Optio
     file.seek(SeekFrom::Start(0))?;
     let found = openmailclient_pst::check(&mut std::io::BufReader::new(&mut file)).map_err(pst_error)?;
     if !found.sound() {
-        let first = found.problems.first().map(String::as_str).unwrap_or("no detail");
+        let first = found.problems.first().or(found.inside.first()).map(String::as_str).unwrap_or("no detail");
         return Err(EngineError::Format(format!("the copy did not pass its own check ({first})")));
     }
     Ok(Some(Saved { folders: done.folders, items: done.items, unreadable: 0, bytes, copied: true, not_copied: None }))

@@ -218,6 +218,23 @@ pub(crate) fn write_pc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, props: &[Ra
     let header = heap.alloc(&[0; 8])?;
     let mut records = Vec::with_capacity(order.len());
     for p in order {
+        // An object is eight bytes that name a subnode of this node ([MS-PST] 2.3.3.5). One
+        // that names none has nothing to be read from, and another program would look for
+        // it: it is left out.
+        if p.ty == ptype::OBJECT && !crate::ndb::u32_at(&p.data, 0).is_some_and(|nid| p.data.len() == 8 && subs.list.iter().any(|s| s.nid == nid)) {
+            continue;
+        }
+        // A kind with a size of its own is written at that size, whatever came.
+        let sized;
+        let p = match ptype::fixed_size(p.ty) {
+            Some(n) if n > 4 && p.data.len() != n => {
+                let mut data = p.data.clone();
+                data.resize(n, 0);
+                sized = Raw { id: p.id, ty: p.ty, data };
+                &sized
+            }
+            _ => p,
+        };
         // A fixed size of up to four bytes sits in the record; the rest is an HNID.
         let value = if ptype::fixed_size(p.ty).is_some_and(|n| n <= 4) {
             let mut v = [0u8; 4];

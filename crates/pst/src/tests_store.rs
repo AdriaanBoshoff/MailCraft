@@ -16,7 +16,7 @@ pub(super) fn save(store: &mut dyn Store) -> (Vec<u8>, Written) {
     let (out, done) = write_store(Cursor::new(Vec::new()), store, UID).unwrap();
     let bytes = out.into_inner();
     let found = check(&mut Cursor::new(&bytes)).unwrap();
-    assert!(found.sound(), "{:?}", found.problems);
+    assert!(found.sound(), "{:?} {:?}", found.problems, found.inside);
     (bytes, done)
 }
 

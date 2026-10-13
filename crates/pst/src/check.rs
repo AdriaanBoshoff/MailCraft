@@ -1,6 +1,7 @@
 //! Checking a data file's structure without opening it as a mailbox: the header and its
 //! checksums, the allocation maps, every page of the two B-trees, every block's trailer and
-//! checksum, and the reference counts ([MS-PST] 2.2.2). It only reads.
+//! checksum, and the reference counts ([MS-PST] 2.2.2); then, in a file sound that far, every
+//! heap, property list and table inside the nodes ([MS-PST] 2.3, `check_ltp`). It only reads.
 //!
 //! Reading a mailbox follows the two B-trees and trusts what it finds; this looks at all of it,
 //! so a file we wrote can be held against the specification, and a damaged file says where.
@@ -32,15 +33,18 @@ pub struct Check {
     pub nodes: u64,
     /// Bytes the allocation maps call free.
     pub free: u64,
-    /// What is wrong, in the order it was found; empty for a sound file.
+    /// What is wrong with the file's structure, in the order it was found.
     pub problems: Vec<String>,
+    /// What is wrong inside nodes (a heap, a property list, a table), one line for a node.
+    /// Looked for only when `problems` is empty.
+    pub inside: Vec<String>,
     /// Problems found beyond the ones listed.
     pub more: u64,
 }
 
 impl Check {
     pub fn sound(&self) -> bool {
-        self.problems.is_empty()
+        self.problems.is_empty() && self.inside.is_empty()
     }
 
     fn problem(&mut self, what: String) {
@@ -287,7 +291,23 @@ impl<R: Read + Seek> Checker<'_, R> {
 
 /// Check the structure of a Unicode data file with 512-byte pages (what Outlook 2003 to 2010
 /// write as `.pst`, and what this crate writes). Other kinds are not checked yet and say so.
-pub fn check<R: Read + Seek>(src: &mut R) -> Result<Check, PstError> {
+pub fn check<R: Read + Seek + Send>(src: &mut R) -> Result<Check, PstError> {
+    let mut out = structure(src)?;
+    if out.problems.is_empty() {
+        src.seek(SeekFrom::Start(0))?;
+        match crate::ndb::Ndb::open(Box::new(&mut *src)) {
+            Ok(mut ndb) => {
+                let (inside, more) = crate::check_ltp::inside(&mut ndb, MAX_PROBLEMS);
+                out.inside = inside;
+                out.more = out.more.saturating_add(more);
+            }
+            Err(e) => out.inside.push(format!("the file cannot be opened as a mailbox: {e}")),
+        }
+    }
+    Ok(out)
+}
+
+fn structure<R: Read + Seek>(src: &mut R) -> Result<Check, PstError> {
     let len = src.seek(SeekFrom::End(0))?;
     let mut c = Checker {
         src,

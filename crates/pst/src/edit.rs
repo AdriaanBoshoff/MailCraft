@@ -1180,6 +1180,19 @@ impl PstStore {
             return Err(PstError::Write(format!("the new file did not pass its own check ({problem}); nothing was replaced")));
         }
         drop(file);
+        // Inside the nodes, what was wrong in the file as it was is not this save's doing:
+        // such a node went across as stored. Anything else stops the save.
+        if !found.inside.is_empty() {
+            let was: HashSet<String> = match &self.path {
+                Some(path) => {
+                    crate::check(&mut std::io::BufReader::new(std::fs::File::open(path)?)).map(|c| c.inside.into_iter().collect()).unwrap_or_default()
+                }
+                None => HashSet::new(),
+            };
+            if let Some(problem) = found.inside.iter().find(|p| !was.contains(*p)) {
+                return Err(PstError::Write(format!("the new file did not pass its own check ({problem}); nothing was replaced")));
+            }
+        }
         if let Some(p) = &self.progress {
             p.part(4);
         }
