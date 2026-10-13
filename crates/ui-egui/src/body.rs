@@ -277,10 +277,83 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, place: (usize
     }
     let rect = Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(inside.top()) + far.y));
     ui.allocate_rect(rect, Sense::hover());
+    let round = corners(&frame.edges, frame.radius, rect);
     if let Some(fill) = fill {
-        ui.painter().set(behind, egui::Shape::rect_filled(rect, 0.0, fill));
+        ui.painter().set(behind, egui::Shape::rect_filled(rect, round, fill));
     }
-    edges(ui, rect, &frame.edges, look, look.text());
+    border(ui, rect, &frame.edges, round, look, look.text());
+}
+
+/// How far the corners of a box are rounded: by what it asks for, by no more than half its
+/// shorter side, and not at all when its border is not one unbroken line all the way round
+/// (sides that differ, dashes and double lines keep square corners).
+pub(crate) fn corners(list: &Edges, radius: u16, rect: Rect) -> f32 {
+    let whole = !any_edge(list) || rich::one_edge(list).is_some_and(|e| e.line == Line::Solid);
+    if !whole || !rect.is_positive() {
+        return 0.0;
+    }
+    f32::from(radius.min(rich::MAX_RADIUS)).min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0)
+}
+
+/// A border just inside `rect`: one line with rounded corners when `round` is more than
+/// nothing, and the four sides each on their own otherwise.
+fn border(ui: &Ui, rect: Rect, list: &Edges, round: f32, look: Look, unset: Color32) {
+    match rich::one_edge(list) {
+        Some(edge) if round > 0.0 => {
+            if !ui.is_rect_visible(rect) {
+                return;
+            }
+            let w = f32::from(edge.width.min(MAX_EDGE)).min(rect.width() / 2.0).min(rect.height() / 2.0);
+            let color = edge.color.map(|c| Color32::from_rgb(c[0], c[1], c[2])).filter(|c| contrast(*c, look.on) >= EDGE_CONTRAST).unwrap_or(unset);
+            ui.painter().rect_stroke(rect, round, (w, color), egui::StrokeKind::Inside);
+        }
+        _ => edges(ui, rect, list, look, unset),
+    }
+}
+
+/// Where the borders round text within a line are drawn (`Style::edge`): one box for each
+/// stretch of a line with the same border. A box is open at the side where its text goes on
+/// in the line before or the line after. `pos` is the text's own corner.
+pub(crate) fn outlines(galley: &egui::Galley, runs: &[Run], ends: &[usize], pos: egui::Pos2) -> Vec<(Rect, Edges)> {
+    let mut out: Vec<(Rect, Edges)> = Vec::new();
+    if !runs.iter().any(|r| r.style.edge.is_some()) {
+        return out;
+    }
+    // Each glyph's border, in the order the text is stored.
+    let mut marks: Vec<(usize, f32, f32, Option<Edge>)> = Vec::new();
+    let mut chars = 0usize;
+    for (n, row) in galley.rows.iter().enumerate() {
+        for glyph in &row.glyphs {
+            let run = ends.partition_point(|end| *end <= chars);
+            let edge = runs.get(run).filter(|r| r.picture.is_none()).and_then(|r| r.style.edge).filter(|e| e.width > 0);
+            let left = row.pos.x + glyph.pos.x;
+            marks.push((n, left, left + glyph.advance_width, edge));
+            chars = chars.saturating_add(1);
+        }
+        chars = chars.saturating_add(usize::from(row.ends_with_newline));
+    }
+    let none = Edge::default();
+    let mut i = 0usize;
+    while let Some(&(n, left, _, edge)) = marks.get(i) {
+        let mut j = i + 1;
+        let mut right = marks.get(i).map_or(left, |m| m.2);
+        while let Some(&(m, _, to, other)) = marks.get(j) {
+            if m != n || other != edge {
+                break;
+            }
+            right = right.max(to);
+            j += 1;
+        }
+        if let (Some(edge), Some(row)) = (edge, galley.rows.get(n)) {
+            // Open where the same border goes on in another line.
+            let before = i.checked_sub(1).and_then(|k| marks.get(k)).is_some_and(|m| m.3 == Some(edge));
+            let after = marks.get(j).is_some_and(|m| m.3 == Some(edge));
+            let rect = Rect::from_min_max(pos2(left.floor(), row.pos.y), pos2(right.ceil(), row.pos.y + row.size.y)).translate(pos.to_vec2());
+            out.push((rect, [edge, if after { none } else { edge }, edge, if before { none } else { edge }]));
+        }
+        i = j.max(i + 1);
+    }
+    out
 }
 
 /// The lines of a border, drawn just inside `rect`. A side that names no colour, or one that
@@ -1356,6 +1429,13 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
             }
         }
     }
+    if turned.is_none() {
+        // Borders round text within a line. Text drawn in another order than it is stored has
+        // none yet.
+        for (at, sides) in outlines(&galley, runs, &ends, pos) {
+            edges(ui, at, &sides, look, look.text());
+        }
+    }
     if let Some(turned) = &turned {
         draw_leaders(ui, &galley, &leaders, Some(&turned.tabs), pos, look.text());
         // Selecting would copy the letters in the order they are drawn: not offered yet.
@@ -1723,8 +1803,10 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
                 continue;
             }
             let within = Look { on: on(slot.cell), ..look };
+            let own = slot.cell.edges.unwrap_or_default();
+            let round = corners(&own, slot.cell.radius, rect);
             if slot.cell.background.is_some() {
-                ui.painter().rect_filled(rect, 0.0, within.on);
+                ui.painter().rect_filled(rect, round, within.on);
             }
             let spare = (rect.height() - slot.tall).max(0.0);
             let down = match slot.cell.valign {
@@ -1736,9 +1818,9 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
             child.spacing_mut().item_spacing = vec2(0.0, 0.0);
             blocks(&mut child, &slot.cell.blocks, within, depth + 1);
             match &slot.cell.edges {
-                Some(own) => edges(ui, rect, own, within, within.text()),
+                Some(own) => border(ui, rect, own, round, within, within.text()),
                 None if table.border => {
-                    ui.painter().rect_stroke(rect, 0.0, (1.0, lines), egui::StrokeKind::Middle);
+                    ui.painter().rect_stroke(rect, round, (1.0, lines), egui::StrokeKind::Middle);
                 }
                 None => {}
             }

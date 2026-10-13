@@ -35,7 +35,7 @@ fn a_page_is_drawn_as_it_was_laid_out() {
     let (x, y) = (body.x, body.y);
     {
         let page = &mut printed.pages[0];
-        page.fills.push(Fill { x: 100.0, y: 100.0, width: 40.0, height: 20.0, color: [200, 30, 30], depth: 0 });
+        page.fills.push(Fill { x: 100.0, y: 100.0, width: 40.0, height: 20.0, color: [200, 30, 30], depth: 0, radius: 0.0, ring: 0.0 });
         page.rules.push(Rule { from: (20.0, 200.0), to: (180.0, 200.0), width: 2.0, color: [0, 0, 255], line: Line::Solid });
         page.rules.push(Rule { from: (20.0, 220.0), to: (180.0, 220.0), width: 2.0, color: [0, 0, 0], line: Line::Dashed });
         page.pictures.push(Placed { x: 100.0, y: 130.0, width: 20.0, height: 10.0, picture: Picture::Attached("p".into()) });
@@ -116,8 +116,8 @@ fn hostile_pages_are_drawn_within_bounds() {
         for b in wild {
             let mut odd = base.clone();
             let page_ = &mut odd.pages[0];
-            page_.fills.push(Fill { x: *a, y: b, width: b, height: *a, color: [1, 2, 3], depth: 0 });
-            page_.fills.push(Fill { x: -1e6, y: -1e6, width: 2e6, height: 2e6, color: [1, 2, 3], depth: 0 });
+            page_.fills.push(Fill { x: *a, y: b, width: b, height: *a, color: [1, 2, 3], depth: 0, radius: 0.0, ring: 0.0 });
+            page_.fills.push(Fill { x: -1e6, y: -1e6, width: 2e6, height: 2e6, color: [1, 2, 3], depth: 0, radius: 0.0, ring: 0.0 });
             for line in [Line::Solid, Line::Dashed, Line::Dotted, Line::Double] {
                 page_.rules.push(Rule { from: (*a, b), to: (b, *a), width: *a, color: [0, 0, 0], line });
                 page_.rules.push(Rule { from: (-1e7, 10.0), to: (1e7, 10.0), width: 1e-4, color: [0, 0, 0], line });
@@ -154,4 +154,44 @@ fn hostile_pages_are_drawn_within_bounds() {
         assert!(page(&printed, 0, 1.0, &none).is_some());
     }
     assert_eq!(glyph_shapes(&boxes::font(CHARS), 0, true, &[0, 1, 60_000]).unwrap().iter().map(Vec::len).collect::<Vec<_>>(), [0, 1, 0]);
+}
+
+#[test]
+fn fills_with_rounded_corners_and_bands_are_drawn_as_they_are_laid_out() {
+    let mut printed = printed("a");
+    {
+        let page = &mut printed.pages[0];
+        page.fills.clear();
+        // A filled box with rounded corners, and a border round another as a band.
+        page.fills.push(Fill { x: 20.0, y: 100.0, width: 80.0, height: 40.0, color: [200, 30, 30], depth: 0, radius: 12.0, ring: 0.0 });
+        page.fills.push(Fill { x: 110.0, y: 100.0, width: 60.0, height: 40.0, color: [0, 0, 255], depth: 0, radius: 12.0, ring: 4.0 });
+    }
+    for scale in [1.0f32, 2.0, 3.5] {
+        let image = page(&printed, 0, scale, &none).unwrap();
+        let px = |x: f32, y: f32| at(&image, (x * scale) as usize, (y * scale) as usize);
+        // Filled in the middle and along the sides; the corner itself is left as the paper.
+        assert_eq!(px(60.0, 120.0), [200, 30, 30]);
+        assert_eq!(px(60.0, 101.5), [200, 30, 30]);
+        assert_eq!(px(21.5, 120.0), [200, 30, 30]);
+        assert_eq!(px(21.0, 101.0), [255, 255, 255], "the corner at {scale}");
+        assert_eq!(px(98.5, 138.5), [255, 255, 255], "the far corner at {scale}");
+        assert_eq!(px(26.0, 106.0), [200, 30, 30], "inside the curve at {scale}");
+        // The band: its sides are filled, what it goes round is not, and its corners are round.
+        assert_eq!(px(112.0, 120.0), [0, 0, 255]);
+        assert_eq!(px(140.0, 102.0), [0, 0, 255]);
+        assert_eq!(px(140.0, 120.0), [255, 255, 255], "inside the band at {scale}");
+        assert_eq!(px(111.0, 101.0), [255, 255, 255], "the corner of the band at {scale}");
+        assert_eq!(px(115.5, 105.5), [0, 0, 255], "the band at its corner at {scale}");
+        assert_eq!(px(121.0, 111.0), [255, 255, 255], "inside the corner of the band at {scale}");
+    }
+    // Any numbers at all: drawn or left out, never a panic.
+    let junk = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0e30, 1.0e30, -5.0, 0.0, 0.3, 1.0e-30, 500.0];
+    let page_ = &mut printed.pages[0];
+    for a in junk {
+        for b in junk {
+            page_.fills.push(Fill { x: 10.0, y: 10.0, width: 50.0, height: 50.0, color: [1, 2, 3], depth: 0, radius: a, ring: b });
+            page_.fills.push(Fill { x: b, y: a, width: a, height: b, color: [1, 2, 3], depth: 0, radius: b, ring: a });
+        }
+    }
+    assert!(page(&printed, 0, 1.0, &none).is_some());
 }

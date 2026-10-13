@@ -171,6 +171,11 @@ pub struct Fill {
     pub color: Rgb,
     /// How deep in tables the fill is; a deeper one lies over a shallower one.
     pub depth: u16,
+    /// How far the corners are rounded, in points; nothing is square corners.
+    pub radius: f32,
+    /// More than nothing, and only a band this thick just inside the edge is filled: a
+    /// border with rounded corners.
+    pub ring: f32,
 }
 
 /// A picture and the rectangle it fills, from its top left corner.

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 77 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 78 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 316, all passing |
+| Tests | 321, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -112,7 +112,8 @@
 61. Done: SVG, WebP and TIFF pictures are shown, and pictures that move are played (M3b.23).
 62. Done: Several pictures stand at the sides of one paragraph, and a dark see-through picture has paper behind it on the dark pane (M3b.24).
 63. Done: Boxes stand inside one another, a table stands inside the block it was written in, and a body has its colour behind all of it (M3b.25).
-64. Next: M3b.26: borders on text within a line; rounded corners.
+64. Done: Text within a line is drawn in its border, and boxes and cells have rounded corners, in the window, on paper and in the PDF (M3b.26).
+65. Next: M3b.27: Outlook's highlight colours and `\lfolevel` list overrides in RTF.
 
 ## Do later (from M2)
 
@@ -184,7 +185,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph~~ | done: M3b.24 |
 | On paper, a table or a bordered block beside a picture at the side (in the window it stands beside it) | M5, with the other print styles |
 | ~~Boxes inside one another; a fill behind a table in a block and behind the whole body~~ | done: M3b.25 |
-| Borders on text within a line; rounded corners | M3b |
+| ~~Borders on text within a line; rounded corners~~ | done: M3b.26 |
 | Outlook's highlight colours; list numbers an override changes (`\lfolevel`) | M3b |
 | Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes | M3b |
 | Pictures on a server, loaded on an explicit command (never by themselves) | M4, with accounts |
@@ -1313,3 +1314,38 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   corners (M3b.26); a word wider than a very narrow column still stands out of its cell; a
   body colour is not drawn behind the message header; what Outlook does with a body colour
   in its dark mode was not observed.
+- **2026-10-13** - M3b.26: borders on text within a line; rounded corners. A border on a `<span>`,
+  `<code>` or any other element within a line is kept on its text (`Style::edge` in
+  `crates/formats/src/rich.rs`, CSS 2.1 section 8.5) where all four sides are the same line
+  (`rich::one_edge`); a line on one side only is not drawn as a box. In the window each
+  stretch of a line with the same border has its box (`body::outlines` in
+  `crates/ui-egui/src/body.rs`), and on paper each piece has a line over and under it
+  (`Look::edge` in `crates/layout/src/flow.rs`); a box is open at the side where its text
+  goes on in the next line, and a border that names no colour has the colour of its text.
+  `border-radius` rounds a block and a table cell (`Frame::radius`, `Cell::radius`, CSS
+  Backgrounds and Borders 3 section 5.1): the first length is taken for all four corners,
+  64 pixels at most (`MAX_RADIUS`) and never more than half the shorter side, so a very
+  large radius makes a pill. On paper a rounded fill is a `Fill` with a `radius`, and a
+  rounded border is a `Fill` with a `ring`: a band that follows the corners, in place of
+  four straight lines. The rasteriser fills it between two outlines by the even-odd rule
+  (`rounded` in `crates/render/src/lib.rs`) and the PDF writer writes four curves and `f*`
+  (`Writer::fill_round` in `crates/pdf/src/lib.rs`, PDF 32000-1 section 8.5). Made better on
+  the way: a fill with no border is rounded too; a cell that has only the table's own lines
+  is rounded with them; and what cannot be rounded honestly keeps square corners with all
+  of its lines, where sides differ, where the line is dashed, dotted or double, and where a
+  box on paper goes on over a page. 5 tests: in the reader, which text has which border,
+  the radius of blocks and cells, junk lengths and three thousand spans inside one another;
+  in the window, how far a corner is rounded, the box round two letters where they are
+  drawn, boxes open where text goes on over lines, heights unchanged by borders and
+  corners, and any radius at widths from nothing to a million; on paper, the four lines
+  round a word and where they stand, the colour of the text for a border with none, two
+  sides only for a border over many lines, the fill and the band of a rounded box and their
+  order, square corners for sides that differ and for boxes over pages, and any radius on
+  three sizes of paper; in the rasteriser, the pixels in, on and outside the corners of a
+  fill and a band at three scales, and a hundred junk pairs; in the PDF writer, the curves
+  as written and junk numbers. Looked at in the window in both themes and on a printed
+  page (`plan/shots/round.jsonl`, `plan/shots/round-print.jsonl`). Not done: text drawn in
+  another order than it is stored (right-to-left) has no border round it in the window;
+  each corner having its own radius, and radii that are a share of the box; padding of an
+  element within a line; what Outlook, which draws HTML with Word, shows of either was not
+  observed.

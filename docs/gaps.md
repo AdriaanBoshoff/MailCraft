@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 67 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 68 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -25,7 +25,9 @@
    rows as well as columns. Several pictures stand at the sides of one paragraph, and a dark see-through picture has
    paper behind it on the dark pane (M3b.24). Boxes stand inside one another, a table stands
    inside the block it was written in, and a body has its colour behind all of it (M3b.25).
-   Not yet: borders on text within a line and rounded corners. Style sheets
+   Text within a line is drawn in its border, and boxes and cells have rounded corners
+   (M3b.26). Not yet: a border round right-to-left text in the window; a radius for each
+   corner. Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
    their width, place, cell fills, padding, spacing and the vertical place of what cells hold; a
    picture that is not loaded leaves a frame of the size it asks for ([ui-parity.md](ui-parity.md),
@@ -78,6 +80,7 @@
 
 ## Revision history
 
+- 68 · 2026-10-13 — M3b.26: text within a line is drawn in its border, and boxes and cells have rounded corners, in the window, on paper and in the PDF.
 - 67 · 2026-10-13 — M3b.25: boxes stand inside one another, a table stands inside its block, and a body has its colour behind it, in the window and on paper.
 - 66 · 2026-10-13 — M3b.24: several pictures stand at the sides of one paragraph, in the window and on paper; a dark see-through picture has paper behind it on the dark pane.
 - 65 · 2026-10-13 — M3b.23: SVG, WebP and TIFF pictures are shown; animated GIF, PNG and WebP are played (`view.animations`).

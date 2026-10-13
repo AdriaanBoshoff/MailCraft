@@ -1615,3 +1615,85 @@ fn a_body_with_a_colour_behind_it_is_read_on_that_colour() {
         }
     }
 }
+
+#[test]
+fn text_within_a_line_is_drawn_in_its_border_and_boxes_have_rounded_corners() {
+    use openmailclient_formats::rich::{Edge, Line, MAX_RADIUS, Run, Style};
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 40.0));
+    let line = Edge { width: 1, color: None, line: Line::Solid };
+    // Rounded by what is asked, by no more than half the shorter side, and not at all when
+    // the border is not one unbroken line all the way round.
+    assert_eq!(body::corners(&[Edge::default(); 4], 10, rect), 10.0);
+    assert_eq!(body::corners(&[line; 4], 500, rect), 20.0);
+    assert_eq!(body::corners(&[line; 4], u16::MAX, rect.expand(1000.0)), f32::from(MAX_RADIUS));
+    assert_eq!(body::corners(&[line, line, line, Edge::default()], 10, rect), 0.0);
+    assert_eq!(body::corners(&[Edge { line: Line::Dashed, ..line }; 4], 10, rect), 0.0);
+    assert_eq!(body::corners(&[line; 4], 10, egui::Rect::NOTHING), 0.0);
+
+    // Three pieces of text, the middle one in a border.
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let red = Edge { width: 2, color: Some([255, 0, 0]), line: Line::Solid };
+    let piece = |text: &str, edge: Option<Edge>| Run { text: text.into(), style: Style { edge, ..Style::default() }, ..Run::default() };
+    let boxes = |texts: [&str; 3], wrap: f32| {
+        let runs = [piece(texts[0], None), piece(texts[1], Some(red)), piece(texts[2], None)];
+        let mut job = egui::text::LayoutJob::default();
+        let (mut ends, mut chars) = (Vec::new(), 0usize);
+        for run in &runs {
+            job.append(&run.text, 0.0, egui::TextFormat::default());
+            chars += run.text.chars().count();
+            ends.push(chars);
+        }
+        job.wrap.max_width = wrap;
+        let mut made = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| made = Some(ui.painter().layout_job(job.clone())));
+        output.textures_delta.clear();
+        let galley = made.unwrap();
+        (body::outlines(&galley, &runs, &ends, egui::pos2(50.0, 70.0)), galley)
+    };
+    let (one, galley) = boxes(["ab ", "cd", " ef"], 1000.0);
+    assert_eq!((one.len(), galley.rows.len()), (1, 1));
+    let (at, sides) = one[0];
+    // All four sides, round the two letters and nothing else, where the text is drawn.
+    assert!(sides.iter().all(|e| *e == red));
+    let row = &galley.rows[0];
+    let (c, e) = (&row.glyphs[3], &row.glyphs[5]);
+    assert!((at.left() - (50.0 + row.pos.x + c.pos.x)).abs() <= 1.0 && (at.right() - (50.0 + row.pos.x + e.pos.x)).abs() <= 1.0, "{at:?}");
+    assert!((at.top() - (70.0 + row.pos.y)).abs() < 0.01 && (at.height() - row.size.y).abs() < 0.01);
+
+    // Text in a border that goes on in the next line: each line has its box, open at the side
+    // where the text goes on.
+    let (many, galley) = boxes(["ab ", "cd ef gh ij kl mn op qr st uv wx yz", " end"], 60.0);
+    assert!(galley.rows.len() > 2 && many.len() >= 2, "{} rows, {} boxes", galley.rows.len(), many.len());
+    let (first, last) = (many[0].1, many[many.len() - 1].1);
+    assert!(first[3] == red && first[1].width == 0, "{first:?}");
+    assert!(last[1] == red && last[3].width == 0, "{last:?}");
+    assert!(many.iter().all(|(_, sides)| sides[0] == red && sides[2] == red));
+    assert!(many.iter().skip(1).take(many.len() - 2).all(|(_, sides)| sides[1].width == 0 && sides[3].width == 0));
+    // No border, no boxes.
+    let plain = [piece("ab", None)];
+    assert!(body::outlines(&galley, &plain, &[2], egui::pos2(0.0, 0.0)).is_empty());
+    // Ends that say nothing true about the text are met without a panic.
+    let _ = body::outlines(&galley, &[piece("x", Some(red))], &[], egui::pos2(f32::NAN, f32::INFINITY));
+    let _ = body::outlines(&galley, &[piece("x", Some(red))], &[usize::MAX, 0, 3], egui::pos2(0.0, 0.0));
+
+    // A border round a word and rounded corners take no room of their own.
+    let plain = drawn_height("<p>one two three</p>", 600.0);
+    let edged = drawn_height("<p>one <span style=\"border:1px solid red\">two</span> three</p>", 600.0);
+    assert!((plain - edged).abs() < 0.01, "{plain}, {edged}");
+    let square = drawn_height("<div style=\"border:2px solid red;background:#ddd;padding:6px\">text</div>", 600.0);
+    let round = drawn_height("<div style=\"border:2px solid red;background:#ddd;padding:6px;border-radius:10px\">text</div>", 600.0);
+    assert!((square - round).abs() < 0.01, "{square}, {round}");
+
+    // Any radius and any border, in boxes, cells and text from the right, at any width.
+    let wild = format!(
+        "<div style=\"border:9px solid red;border-radius:99999px;background:#123\">{}x \u{5d0}\u{5d1} y{}</div>\
+         <table border=1><tr><td style=\"border-radius:500px;background:#456\">a<td style=\"border:3px dotted;border-radius:7px\">b</table>\
+         <p dir=rtl><span style=\"border:1px solid\">\u{5d0}\u{5d1}\u{5d2} abc</span></p>",
+        "<span style=\"border:200px double blue\">".repeat(200),
+        "</span>".repeat(150)
+    );
+    for width in [0.0, 1.0, 37.0, 600.0, 1.0e6] {
+        assert!(drawn_height(&wild, width).is_finite());
+    }
+}

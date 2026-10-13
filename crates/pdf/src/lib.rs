@@ -141,6 +141,29 @@ pub struct Writer {
 }
 
 /// A number as a PDF file writes it: plain decimals, never an exponent.
+/// The path of a rectangle with rounded corners on a page `tall` high, each corner a curve
+/// (PDF 32000-1, 8.5.2.2). `at` is its top left corner and size, measured from the top.
+fn round_path((x, y, w, h): (f32, f32, f32, f32), radius: f32, tall: f32) -> String {
+    let r = if radius.is_finite() { radius.min(w / 2.0).min(h / 2.0) } else { 0.0 };
+    if r.is_nan() || r <= 0.0 {
+        return format!("{} {} {} {} re ", num(x), num(tall - y - h), num(w), num(h));
+    }
+    // How far a curve's handles stand from its ends for a quarter circle.
+    let k = r * 0.552_284_8;
+    let p = |px: f32, py: f32| format!("{} {} ", num(px), num(tall - py));
+    let (right, bottom) = (x + w, y + h);
+    let mut out = String::new();
+    out.push_str(&format!("{}m {}l ", p(x + r, y), p(right - r, y)));
+    out.push_str(&format!("{}{}{}c ", p(right - r + k, y), p(right, y + r - k), p(right, y + r)));
+    out.push_str(&format!("{}l ", p(right, bottom - r)));
+    out.push_str(&format!("{}{}{}c ", p(right, bottom - r + k), p(right - r + k, bottom), p(right - r, bottom)));
+    out.push_str(&format!("{}l ", p(x + r, bottom)));
+    out.push_str(&format!("{}{}{}c ", p(x + r - k, bottom), p(x, bottom - r + k), p(x, bottom - r)));
+    out.push_str(&format!("{}l ", p(x, y + r)));
+    out.push_str(&format!("{}{}{}c h ", p(x, y + r - k), p(x + r - k, y), p(x + r, y)));
+    out
+}
+
 fn num(v: f32) -> String {
     if !v.is_finite() {
         return "0".to_string();
@@ -196,6 +219,22 @@ impl Writer {
         let Some(page) = self.open() else { return };
         let bottom = page.height - y - height;
         let _ = writeln!(page.ops, "{} rg {} {} {} {} re f", rgb(color), num(x), num(bottom), num(width), num(height));
+    }
+
+    /// Fill a rectangle, given by its top left corner and size, with corners rounded by
+    /// `radius`. With `ring` more than nothing only a band that thick just inside its edge is
+    /// filled: a border with rounded corners.
+    pub fn fill_round(&mut self, at: (f32, f32, f32, f32), color: Rgb, radius: f32, ring: f32) {
+        let Some(page) = self.open() else { return };
+        let tall = page.height;
+        let mut path = round_path(at, radius, tall);
+        let (x, y, w, h) = at;
+        let band = ring.is_finite() && ring > 0.0;
+        if band && w > ring * 2.0 && h > ring * 2.0 {
+            path.push_str(&round_path((x + ring, y + ring, w - ring * 2.0, h - ring * 2.0), radius - ring, tall));
+        }
+        // Even-odd (PDF 32000-1, 8.5.3.3.3): what the second outline encloses is left open.
+        let _ = writeln!(page.ops, "{} rg {path}{}", rgb(color), if band { "f*" } else { "f" });
     }
 
     /// Draw a straight line `width` thick.

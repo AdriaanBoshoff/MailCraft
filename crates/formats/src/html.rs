@@ -12,8 +12,8 @@
 //! is kept as bytes for the reader to decode; nothing else about it is trusted.
 
 use crate::rich::{
-    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, MAX_BOXES, Para, ParaKind, Picture, Rgb, Run,
-    Script, Style, Table, TableWidth, VAlign, any_edge,
+    Align, Block, Cell, Doc, Edge, Edges, Float, Frame, LEADING_PX, LEADING_TIMES, Leading, Line, MAX_BOXES, MAX_RADIUS, Para, ParaKind, Picture,
+    Rgb, Run, Script, Style, Table, TableWidth, VAlign, any_edge,
 };
 use openmailclient_model::html::entity;
 use std::collections::HashMap;
@@ -226,6 +226,7 @@ struct CellBuild {
     valign: VAlign,
     rows: u16,
     edges: Option<Edges>,
+    radius: u16,
 }
 
 struct ParaHead {
@@ -273,6 +274,8 @@ struct Builder {
     css_padding: Option<[u16; 4]>,
     /// The background the element being opened asks for, as it is written.
     css_fill: Option<Rgb>,
+    /// How far the element being opened asks for its corners to be rounded, in pixels.
+    css_radius: u16,
 }
 
 impl Builder {
@@ -637,9 +640,11 @@ impl Builder {
                 // What a cell holds stands in the middle of it unless the cell or its row says otherwise.
                 let place = css_value(&css, "vertical-align").as_deref().and_then(valign).or_else(|| attr(attrs, "valign").and_then(valign));
                 let edges = self.css_border.take().filter(any_edge);
+                let radius = std::mem::take(&mut self.css_radius);
                 if let Some(cell) = self.tables.last_mut().and_then(|t| t.cell.as_mut()) {
                     cell.rows = rows;
                     cell.edges = edges;
+                    cell.radius = radius;
                     cell.background = background;
                     cell.width = pixels(asked).unwrap_or(0);
                     cell.share = percent(asked).unwrap_or(0);
@@ -768,6 +773,7 @@ impl Builder {
         let edges = self.css_border.take().filter(any_edge).filter(|_| name != "blockquote");
         let fill = self.css_fill.take();
         let padding = self.css_padding.take().filter(|p| p.iter().any(|v| *v > 0));
+        let radius = std::mem::take(&mut self.css_radius);
         if matches!(name, "body" | "html") {
             // A background on the body is behind all of the message (CSS 2.1 section 14.2),
             // and is not a highlight of each of its words. White is the page itself.
@@ -797,8 +803,14 @@ impl Builder {
                     between: Edge::default(),
                     fill,
                     within,
+                    radius,
                 }));
             }
+        } else if let Some(edge) = edges.as_ref().and_then(crate::rich::one_edge) {
+            // A border on text within a line (CSS 2.1 section 8.5) is drawn round that text.
+            // One that is not the same on all four sides is not drawn: a line under text is
+            // what `text-decoration` is for.
+            self.fmt.style.edge = Some(edge);
         }
         // Word-processor paragraphs ("MsoNormal" and friends) are written with no margins.
         if margin == Some(false) || (name == "p" && attr(attrs, "class").is_some_and(|c| c.trim_start().to_ascii_lowercase().starts_with("mso"))) {
@@ -851,6 +863,7 @@ impl Builder {
         }
         self.css_border = None;
         self.css_padding = None;
+        self.css_radius = 0;
         let css = self.sheet.declarations(name, attrs);
         if css.is_empty() { None } else { self.css(&css) }
     }
@@ -971,6 +984,9 @@ impl Builder {
                         *e = edge(v);
                     }
                 }
+                // Rounded corners (CSS Backgrounds and Borders 3, section 5.1): the first length
+                // is taken for all four; a share of the box's size is not.
+                "border-radius" => self.css_radius = v.split_whitespace().next().and_then(pad_length).unwrap_or(0).min(MAX_RADIUS),
                 // Padding (CSS 2.1 section 8.4): all four sides, or one of them.
                 "padding" => self.css_padding = block_padding(v),
                 "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => {
@@ -1136,6 +1152,7 @@ impl Builder {
             valign: VAlign::Middle,
             rows: 1,
             edges: None,
+            radius: 0,
         });
         self.sinks.push(Vec::new());
         self.gap = false;
@@ -1162,6 +1179,7 @@ impl Builder {
                 valign: cell.valign,
                 rows: cell.rows,
                 edges: cell.edges,
+                radius: cell.radius,
             });
         }
     }

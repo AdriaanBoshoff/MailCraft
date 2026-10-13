@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use openmailclient_formats::rich::{
-    Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, Para, ParaKind, Picture, Rgb, Run, Script, Style, TAB_STEP, Tab, Table, TableWidth,
-    VAlign, boxed_run, tab_room, tab_stop,
+    Align, Block, Cell, Edge, Edges, Float, Frame, Leader, Line, MAX_RADIUS, Para, ParaKind, Picture, Rgb, Run, Script, Style, TAB_STEP, Tab, Table,
+    TableWidth, VAlign, any_edge, boxed_run, one_edge as rich_one_edge, tab_room, tab_stop,
 };
 
 use crate::fonts::{Fonts, Pick};
@@ -120,6 +120,8 @@ struct Look {
     back: Option<Rgb>,
     /// How far above the baseline the glyphs stand.
     rise: f32,
+    /// The border drawn round the text, where it has one.
+    edge: Option<Edge>,
 }
 
 /// A picture standing at one side, with room beside it still to fill.
@@ -160,6 +162,8 @@ pub(crate) struct Flow<'f, 'l> {
     asides: Vec<Aside>,
     /// How far what is being set lies over the fills of the boxes it stands inside.
     lift: u16,
+    /// How far the corners of the next box drawn are rounded, in pixels; taken by `boxed`.
+    round: u16,
 }
 
 fn px(v: u16) -> f32 {
@@ -363,6 +367,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             sizes,
             asides: Vec::new(),
             lift: 0,
+            round: 0,
         }
     }
 
@@ -656,6 +661,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                 strike: s.strike,
                 back: s.background,
                 rise,
+                edge: s.edge.filter(|e| e.width > 0),
             };
             // A picture that can be printed stands in the line like one tall glyph.
             if let Some(picture) = &run.picture
@@ -668,7 +674,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                 {
                     self.glyphs_left -= 1;
                     let (wide, tall) = self.picture_size(run.extent, natural, room);
-                    let plain = Look { under: false, strike: false, back: None, rise: 0.0, ..look };
+                    let plain = Look { under: false, strike: false, back: None, rise: 0.0, edge: None, ..look };
                     let at = looks.iter().position(|l| *l == plain).unwrap_or_else(|| {
                         looks.push(plain);
                         looks.len() - 1
@@ -707,7 +713,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     };
                     let alt: String = run.text.chars().filter(|c| !c.is_control()).take(80).collect();
                     named = if alt.trim().is_empty() { format!("[{what}]") } else { format!("[{what}: {}]", alt.trim()) };
-                    look = Look { size: size.min(9.0), color: FAINT, under: false, strike: false, back: None, rise: 0.0 };
+                    look = Look { size: size.min(9.0), color: FAINT, under: false, strike: false, back: None, rise: 0.0, edge: None };
                     &named
                 }
                 None => &run.text,
@@ -971,7 +977,35 @@ impl<'f, 'l> Flow<'f, 'l> {
                     if let Some(color) = look.back
                         && let Some(page) = self.page(page)
                     {
-                        page.fills.push(Fill { x: pen, y: at.y, width: piece_wide, height: tall, color, depth: u16::MAX });
+                        page.fills.push(Fill { x: pen, y: at.y, width: piece_wide, height: tall, color, depth: u16::MAX, radius: 0.0, ring: 0.0 });
+                    }
+                    if let Some(edge) = look.edge {
+                        // A border round text within a line (CSS 2.1 section 8.5): over and
+                        // under each piece, and at a side only where the border ends there. It
+                        // is open where its text goes on in another line.
+                        let of = |g: Option<&Glyph>| g.and_then(|g| looks.get(g.look)).and_then(|l| l.edge);
+                        let before = match i.checked_sub(1) {
+                            Some(k) => of(line.get(k)),
+                            None if !turned => of(from.checked_sub(1).and_then(|k| glyphs.get(k))),
+                            None => None,
+                        };
+                        let after = match line.get(i.saturating_add(count)) {
+                            Some(g) => of(Some(g)),
+                            None if !turned => of(glyphs.get(next)),
+                            None => None,
+                        };
+                        let thick = px(u16::from(edge.width.min(MAX_EDGE))).min(tall / 2.0);
+                        let half = thick / 2.0;
+                        let drawn = Edge { color: Some(edge.color.unwrap_or(look.color)), ..edge };
+                        let (x0, x1, y0, y1) = (pen, pen + piece_wide, at.y, at.y + tall);
+                        self.edge(page, (x0, y0 + half), (x1, y0 + half), thick, &drawn, true);
+                        self.edge(page, (x0, y1 - half), (x1, y1 - half), thick, &drawn, true);
+                        if before != Some(edge) {
+                            self.edge(page, (x0 + half, y0), (x0 + half, y1), thick, &drawn, false);
+                        }
+                        if after != Some(edge) {
+                            self.edge(page, (x1 - half, y0), (x1 - half, y1), thick, &drawn, false);
+                        }
                     }
                     let thick = (look.size / 16.0).max(0.4);
                     if look.under {
@@ -1376,6 +1410,13 @@ impl<'f, 'l> Flow<'f, 'l> {
     /// is on. Lines stand on the box's edge when `on_edge`, else just inside it.
     fn boxed(&mut self, from: At, to: At, x: f32, width: f32, edges: &Edges, fill: Option<Rgb>, depth: u16, on_edge: bool) {
         let (top, bottom) = (self.top(), self.bottom());
+        // Rounded corners are for a box that is whole: on one page, with no border or with one
+        // unbroken line all the way round. Any other keeps square corners.
+        let asked = std::mem::take(&mut self.round);
+        let line = rich_one_edge(edges).filter(|e| e.line == Line::Solid);
+        let whole = from.page == to.page && asked > 0 && (line.is_some() || !any_edge(edges));
+        let radius = if whole { px(asked.min(MAX_RADIUS)).min(width / 2.0).min((to.y - from.y) / 2.0).max(0.0) } else { 0.0 };
+        let radius = if radius.is_finite() { radius } else { 0.0 };
         for page in from.page..=to.page.min(from.page.saturating_add(MAX_PAGES)) {
             let (y0, y1) = (if page == from.page { from.y } else { top }, if page == to.page { to.y } else { bottom });
             if y1 <= y0 {
@@ -1384,7 +1425,15 @@ impl<'f, 'l> Flow<'f, 'l> {
             if let Some(color) = fill
                 && let Some(page) = self.page(page)
             {
-                page.fills.push(Fill { x, y: y0, width, height: y1 - y0, color, depth });
+                page.fills.push(Fill { x, y: y0, width, height: y1 - y0, color, depth, radius, ring: 0.0 });
+            }
+            if let Some(edge) = line.filter(|_| radius > 0.0) {
+                // The border is a band that follows the corners, over the fill it is round.
+                let ring = px(u16::from(edge.width.min(MAX_EDGE))).min(width / 2.0).min((y1 - y0) / 2.0);
+                if let Some(page) = self.page(page) {
+                    page.fills.push(Fill { x, y: y0, width, height: y1 - y0, color: edge.color.unwrap_or(BLACK), depth, radius, ring });
+                }
+                continue;
             }
             for (side, edge) in edges.iter().enumerate() {
                 if edge.width == 0 || (side == 0 && page != from.page) || (side == 2 && page != to.page) {
@@ -1492,6 +1541,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         // A picture at one side of the last paragraph is inside the border too.
         inner = self.below_aside(inner);
         let end = At { page: inner.page, y: inner.y + far.1 };
+        self.round = frame.radius;
         self.boxed(start, end, x, width, &frame.edges, frame.fill, over, false);
         end
     }
@@ -1562,6 +1612,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         }
         for (cell, left, wide) in set {
             let edges = cell.edges.unwrap_or(if table.border { [lined; 4] } else { [Edge::default(); 4] });
+            self.round = cell.radius;
             self.boxed(at, end, left, wide, &edges, cell.background, fill_depth, true);
         }
         At { page: end.page, y: end.y + gap }
@@ -1678,6 +1729,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                     self.lower(w.start.page, w.before, w.after, if w.cell.valign == VAlign::Middle { spare / 2.0 } else { spare });
                 }
                 let edges = w.cell.edges.unwrap_or(if table.border { [lined; 4] } else { [Edge::default(); 4] });
+                self.round = w.cell.radius;
                 self.boxed(w.start, row_end, w.x, w.width, &edges, w.cell.background, fill_depth, true);
             }
             waiting = still;

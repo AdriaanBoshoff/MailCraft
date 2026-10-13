@@ -51,6 +51,7 @@ pub(crate) fn owner(name: &str) -> Para {
         between: Edge::default(),
         fill: None,
         within: None,
+        radius: 0,
     });
     let mut owner = text(name, true, Some(12.0));
     owner.frame = Some(frame);

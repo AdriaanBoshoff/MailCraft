@@ -787,7 +787,11 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
             break;
         }
         for fill in &page.fills {
-            writer.fill(fill.x, fill.y, fill.width, fill.height, fill.color);
+            if fill.radius > 0.0 || fill.ring > 0.0 {
+                writer.fill_round((fill.x, fill.y, fill.width, fill.height), fill.color, fill.radius, fill.ring);
+            } else {
+                writer.fill(fill.x, fill.y, fill.width, fill.height, fill.color);
+            }
         }
         for rule in &page.rules {
             let stroke = match rule.line {

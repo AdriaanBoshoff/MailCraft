@@ -381,3 +381,46 @@ fn glyphs_say_what_they_stand_for() {
         assert_eq!(line.matches(" BDC ").count(), line.matches(" EMC").count(), "{line}");
     }
 }
+
+#[test]
+fn rounded_fills_and_bands_are_paths_of_curves() {
+    let mut w = Writer::new();
+    assert!(w.page(200.0, 300.0));
+    w.fill_round((20.0, 100.0, 80.0, 40.0), [255, 0, 0], 12.0, 0.0);
+    w.fill_round((110.0, 100.0, 60.0, 40.0), [0, 0, 255], 12.0, 4.0);
+    // A radius of nothing is a rectangle, and one of more than half a side is half that side.
+    w.fill_round((10.0, 10.0, 30.0, 20.0), [0, 255, 0], 0.0, 0.0);
+    w.fill_round((10.0, 40.0, 30.0, 20.0), [0, 255, 0], 500.0, 0.0);
+    let file = w.finish("round").unwrap();
+    let page = streams(&file).into_iter().find(|s| has(s, " c ")).unwrap();
+    let text = String::from_utf8_lossy(&page).into_owned();
+    let lines: Vec<&str> = text.lines().collect();
+    // PDF 32000-1, 8.5.2: four curves, closed, filled; measured from the bottom of the page.
+    let filled = lines.iter().find(|l| l.starts_with("1 0 0 rg")).unwrap();
+    assert!(filled.starts_with("1 0 0 rg 32 200 m 88 200 l ") && filled.ends_with("c h f"), "{filled}");
+    assert_eq!(filled.matches(" c ").count(), 4);
+    assert!(filled.contains(" 100 188 c ") && filled.contains(" 20 172 c "), "{filled}");
+    // A band is two outlines filled by the even-odd rule: the inner one is left open.
+    let band = lines.iter().find(|l| l.starts_with("0 0 1 rg")).unwrap();
+    assert_eq!((band.matches(" c ").count(), band.matches(" m ").count()), (8, 2));
+    assert!(band.ends_with("h f*") && band.contains(" 122 196 m "), "{band}");
+    let green: Vec<_> = lines.iter().filter(|l| l.starts_with("0 1 0 rg")).collect();
+    assert!(green[0].ends_with("10 270 30 20 re f"), "{}", green[0]);
+    assert!(green[1].contains("20 260 m 30 260 l ") && green[1].matches(" c ").count() == 4, "{}", green[1]);
+
+    // Any numbers: still a file, and nothing in it that is not a number.
+    let mut w = Writer::new();
+    assert!(w.page(200.0, 300.0));
+    let junk = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0e30, 1.0e30, -0.0, 1.0e-30, 7.0];
+    for a in junk {
+        for b in junk {
+            w.fill_round((a, b, b, a), [1, 2, 3], a, b);
+            w.fill_round((10.0, 10.0, 50.0, 50.0), [1, 2, 3], b, a);
+        }
+    }
+    let file = w.finish("junk").unwrap();
+    assert!(file.starts_with(b"%PDF-"));
+    for page in streams(&file) {
+        assert!(!has(&page, "NaN") && !has(&page, "inf"));
+    }
+}

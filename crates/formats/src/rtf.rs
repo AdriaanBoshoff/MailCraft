@@ -826,6 +826,7 @@ impl Builder<'_> {
             between: cur.between,
             fill: cur.shade,
             within: None,
+            radius: 0,
         };
         match &self.frame {
             Some(last) if **last == frame => Some(Arc::clone(last)),

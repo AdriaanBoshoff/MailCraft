@@ -2994,3 +2994,55 @@ fn boxes_stand_inside_one_another_and_the_body_has_a_colour_behind_it() {
         at = Arc::try_unwrap(frame).ok().and_then(|f| f.within);
     }
 }
+
+#[test]
+fn text_within_a_line_has_a_border_and_boxes_have_rounded_corners() {
+    use crate::rich::{Edge, MAX_RADIUS, one_edge};
+    let doc = parse(
+        "<p>a <span style=\"border:1px solid #f00\">b</span> <span style=\"border-bottom:1px solid #f00\">c</span> \
+         <code style=\"border:2px dashed #00f;border-radius:4px\">d</code> e</p>\
+         <div style=\"border:1px solid #00f;border-radius:12px;padding:4px\">f</div>\
+         <div style=\"background:#ddd;border-radius:9999px\">g</div>\
+         <table><tr><td style=\"border-radius:6px 2px;background:#ccc\">h</td><td>i</td></tr></table>\
+         <p style=\"border:1px solid red;border-radius:50%\">j</p><div style=\"border-radius:8px\">k</div>",
+    );
+    let p = paras(&doc);
+    // CSS 2.1 section 8.5: a border on text within a line is round that text and no other.
+    let edge = |text: &str| p[0].runs.iter().find(|r| r.text.trim() == text).unwrap().style.edge;
+    assert_eq!(edge("b"), Some(Edge { width: 1, color: Some([255, 0, 0]), line: Line::Solid }));
+    assert_eq!(edge("d"), Some(Edge { width: 2, color: Some([0, 0, 255]), line: Line::Dashed }));
+    // A line on one side only is not a border round the text.
+    assert_eq!((edge("a"), edge("c"), edge("e")), (None, None, None));
+    // A block's border is the block's: its text has none of its own.
+    assert!(p.iter().skip(1).all(|q| q.runs.iter().all(|r| r.style.edge.is_none())));
+    // The first length rounds all four corners, never by more than is drawn; a share of the
+    // box's size is not read.
+    let radius = |n: usize| p[n].frame.as_ref().map(|f| f.radius);
+    assert_eq!((radius(1), radius(2), radius(3)), (Some(12), Some(MAX_RADIUS), Some(0)));
+    // Rounded corners alone, with no border, fill or room, make no box.
+    assert!(p[4].frame.is_none());
+    let table = doc
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((table.rows[0][0].radius, table.rows[0][1].radius), (6, 0));
+
+    // All four sides the same line that can be seen, or none.
+    let line = Edge { width: 1, color: None, line: Line::Solid };
+    assert_eq!(one_edge(&[line; 4]), Some(line));
+    assert_eq!(one_edge(&[line, line, line, Edge { width: 2, ..line }]), None);
+    assert_eq!(one_edge(&[Edge::default(); 4]), None);
+
+    // Nothing that is written for a radius or a border is too much.
+    for junk in ["-5px", "1e99px", "", "nanpx", "999999999999999999999px", "\u{0}", "4px/8px", "inherit"] {
+        let doc = parse(&format!("<div style=\"border:1px solid;border-radius:{junk}\">x<td style=\"border-radius:{junk}\">y</div>"));
+        assert!(paras(&doc).iter().all(|q| q.frame.as_ref().is_none_or(|f| f.radius <= MAX_RADIUS)), "{junk}");
+    }
+    let deep = format!("<p>{}x{}</p>", "<span style=\"border:300px double red;border-radius:9px\">".repeat(3000), "</span>".repeat(2990));
+    let doc = parse(&deep);
+    assert!(paras(&doc).iter().any(|q| q.runs.iter().any(|r| r.style.edge.is_some())));
+}

@@ -58,9 +58,39 @@ pub fn page<'a>(printed: &Printed, page: usize, scale: f32, pictures: &dyn Fn(&P
     Some(Image { width: canvas.w, height: canvas.h, rgb: canvas.into_rgb() })
 }
 
+/// The outline of a rectangle with its corners rounded by `round`, which is never more than
+/// half a side.
+fn rounded((l, t, r, b): (f32, f32, f32, f32), round: f32) -> Vec<(f32, f32)> {
+    let round = if round.is_finite() { round.min((r - l) / 2.0).min((b - t) / 2.0) } else { 0.0 };
+    if round.is_nan() || round <= 0.0 {
+        return vec![(l, t), (r, t), (r, b), (l, b)];
+    }
+    const STEPS: u8 = 8;
+    let mut out = Vec::with_capacity(4 * (usize::from(STEPS) + 1));
+    // Each corner is a quarter turn about its own centre, clockwise from the top right.
+    let centres = [(r - round, t + round), (r - round, b - round), (l + round, b - round), (l + round, t + round)];
+    for (quarter, (cx, cy)) in centres.into_iter().enumerate() {
+        for step in 0..=STEPS {
+            let turn = (quarter as f32 - 1.0 + f32::from(step) / f32::from(STEPS)) * std::f32::consts::FRAC_PI_2;
+            out.push((cx + round * turn.cos(), cy + round * turn.sin()));
+        }
+    }
+    out
+}
+
 fn draw<'a>(canvas: &mut Canvas, printed: &Printed, page: &Page, s: f32, pictures: &dyn Fn(&Picture) -> Option<Bitmap<'a>>) -> Option<()> {
     for fill in &page.fills {
         let (l, t, r, b) = (fill.x * s, fill.y * s, (fill.x + fill.width) * s, (fill.y + fill.height) * s);
+        let (round, ring) = (fill.radius * s, fill.ring * s);
+        if round > 0.0 || ring > 0.0 {
+            // Rounded corners, and for a border only the band between two outlines.
+            let mut rings = vec![rounded((l, t, r, b), round)];
+            if ring > 0.0 && r - l > ring * 2.0 && b - t > ring * 2.0 {
+                rings.push(rounded((l + ring, t + ring, r - ring, b - ring), round - ring));
+            }
+            canvas.fill(&rings, false, fill.color)?;
+            continue;
+        }
         canvas.fill(&[vec![(l, t), (r, t), (r, b), (l, b)]], true, fill.color)?;
     }
     for rule in &page.rules {

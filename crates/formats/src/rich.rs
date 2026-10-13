@@ -215,6 +215,17 @@ pub struct Frame {
     pub fill: Option<Rgb>,
     /// The box this one stands inside.
     pub within: Option<Arc<Frame>>,
+    /// How far its corners are rounded, in pixels; 0 is square.
+    pub radius: u16,
+}
+
+/// The most a corner is rounded by, in pixels.
+pub const MAX_RADIUS: u16 = 64;
+
+/// One line that is all four sides of `edges`, where they are the same line and can be seen.
+pub fn one_edge(edges: &Edges) -> Option<Edge> {
+    let first = edges.first().copied().filter(|e| e.width > 0)?;
+    edges.iter().all(|e| *e == first).then_some(first)
 }
 
 /// How many boxes may stand inside one another.
@@ -336,6 +347,8 @@ pub struct Style {
     pub background: Option<Rgb>,
     /// Where a link points. It is shown, never followed by the reader.
     pub link: Option<Arc<str>>,
+    /// A line drawn round the text where it stands in its line.
+    pub edge: Option<Edge>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -443,6 +456,8 @@ pub struct Cell {
     pub valign: VAlign,
     /// Rows the cell covers, at least 1.
     pub rows: u16,
+    /// How far the cell's corners are rounded, in pixels; 0 is square.
+    pub radius: u16,
     /// The cell's own border; `None` is what the table gives its cells.
     pub edges: Option<Edges>,
 }

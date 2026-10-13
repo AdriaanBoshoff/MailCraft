@@ -197,7 +197,7 @@ fn a_table_stands_in_columns_inside_its_lines() {
 fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
     let rows: Vec<Vec<Cell>> = (0..60).map(|i| vec![cell(&format!("r{i}")), cell("v")]).collect();
     let edge = Edge { width: 4, color: Some([0, 0, 90]), line: Line::Double };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between: Edge::default(), fill: None, within: None });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between: Edge::default(), fill: None, within: None, radius: 0 });
     let framed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Table(Table { rows, border: true, frame: [edge; 4], ..Table::default() }), framed("in"), framed("frame")]);
     let printed = print(&body, SMALL);
@@ -243,7 +243,8 @@ fn nested(depth: usize) -> Block {
 #[test]
 fn hostile_bodies_never_panic_and_stay_within_the_limits() {
     let wild = Edge { width: 255, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]), within: None });
+    let frame =
+        Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]), within: None, radius: 0 });
     let odd = |size: f32| Run {
         text: "odd \u{10ffff}\u{0}\n\n\t".repeat(20),
         style: Style { size: Some(size), family: Some(",,,;\"".into()), ..Style::default() },
@@ -449,7 +450,7 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
     let stop = |at, lead| Tab { at, kind: TabKind::Right, lead };
     let edge = Edge { width: 1, color: None, line: Line::Solid };
     let between = Edge { width: 2, color: Some([200, 0, 0]), line: Line::Solid };
-    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between, fill: None, within: None });
+    let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 0, between, fill: None, within: None, radius: 0 });
     let body = doc(vec![
         Block::Para(Para { tabs: vec![stop(160, Leader::Dots)], ..para("aa\t1") }),
         Block::Para(Para { tabs: vec![stop(160, Leader::None)], ..para("bb\t2") }),
@@ -485,7 +486,8 @@ fn leaders_fill_the_room_of_tabs_and_lines_stand_between_paragraphs() {
 
     // Hostile: lines of any width between many paragraphs, leaders with no room to stand in.
     let wild = Edge { width: u8::MAX, color: None, line: Line::Double };
-    let frame = Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]), within: None });
+    let frame =
+        Arc::new(Frame { edges: [wild; 4], padding: [u16::MAX; 4], indent: u8::MAX, between: wild, fill: Some([1, 2, 3]), within: None, radius: 0 });
     let mut blocks: Vec<Block> = (0..300).map(|_| Block::Para(Para { frame: Some(frame.clone()), ..para("a") })).collect();
     blocks.push(Block::Para(Para { tabs: (1..40).map(|n| stop(n, Leader::ThickLine)).collect(), ..para(&"a\t".repeat(500)) }));
     blocks.push(Block::Para(Para { tabs: vec![stop(u16::MAX, Leader::Hyphens)], ..para("a\tb\t\t") }));
@@ -501,6 +503,7 @@ fn a_filled_box_is_behind_its_paragraphs_with_its_room_on_each_side() {
         between: Edge::default(),
         fill: Some([0, 51, 102]),
         within: None,
+        radius: 0,
     });
     let boxed = |text: &str| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let body = doc(vec![Block::Para(para("before")), boxed("one"), boxed("two"), Block::Para(para("after"))]);
@@ -686,6 +689,7 @@ fn text_stands_beside_a_picture_at_one_side() {
                 between: Edge::default(),
                 fill: Some([1, 2, 3]),
                 within: None,
+                radius: 0,
             })),
             ..para("below")
         }),
@@ -1616,7 +1620,7 @@ fn what_stands_in_a_paragraph_written_from_the_right_is_counted_from_the_right()
     // A border set in is set in from the side its paragraphs start at.
     let boxed = |rtl: bool| {
         let edge = Edge { width: 1, color: None, line: Line::Solid };
-        let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 2, between: Edge::default(), fill: None, within: None });
+        let frame = Arc::new(Frame { edges: [edge; 4], padding: [4; 4], indent: 2, between: Edge::default(), fill: None, within: None, radius: 0 });
         Block::Para(Para { rtl, frame: Some(frame), ..para("ab") })
     };
     let sides = |printed: &Printed| {
@@ -1754,7 +1758,15 @@ fn boxes_stand_inside_one_another_on_paper_over_the_colour_behind_the_body() {
     use crate::Fill;
     use openmailclient_formats::rich::{Edge, Frame};
     let line = |width: u8| Edge { width, color: Some([0, 0, 0]), line: Line::Solid };
-    let outer = Arc::new(Frame { edges: [line(1); 4], padding: [10; 4], indent: 0, between: Edge::default(), fill: Some([200, 0, 0]), within: None });
+    let outer = Arc::new(Frame {
+        edges: [line(1); 4],
+        padding: [10; 4],
+        indent: 0,
+        between: Edge::default(),
+        fill: Some([200, 0, 0]),
+        within: None,
+        radius: 0,
+    });
     let inner = Arc::new(Frame {
         edges: [line(2); 4],
         padding: [4; 4],
@@ -1762,6 +1774,7 @@ fn boxes_stand_inside_one_another_on_paper_over_the_colour_behind_the_body() {
         between: Edge::default(),
         fill: Some([0, 0, 200]),
         within: Some(outer.clone()),
+        radius: 0,
     });
     let boxed = |text: &str, frame: &Arc<Frame>| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
     let shaded = Cell { background: Some([0, 200, 0]), ..cell("cell") };
@@ -1827,6 +1840,7 @@ fn boxes_stand_inside_one_another_on_paper_over_the_colour_behind_the_body() {
             between: line(i % 3),
             fill: Some([i; 3]),
             within: Some(frame),
+            radius: 0,
         });
         blocks.push(boxed("dp", &frame));
         let held = Cell { blocks: if i % 10 == 3 { blocks.clone() } else { vec![boxed("hd", &frame)] }, span: 1, rows: 1, ..Cell::default() };
@@ -1841,5 +1855,110 @@ fn boxes_stand_inside_one_another_on_paper_over_the_colour_behind_the_body() {
                 .unwrap(),
             paper,
         );
+    }
+}
+
+#[test]
+fn text_within_a_line_is_printed_in_its_border_and_boxes_have_rounded_corners() {
+    let blue = Edge { width: 2, color: Some([0, 0, 200]), line: Line::Solid };
+    let edged = |text: &str, edge: Edge| Run { text: text.into(), style: Style { edge: Some(edge), ..Style::default() }, ..Run::default() };
+    let body = doc(vec![Block::Para(Para { runs: vec![run("ab "), edged("cd", blue), run(" ef")], ..Para::default() })]);
+    let printed = print(&body, Paper::A4);
+    let page = &printed.pages[0];
+    let find = |page: &Page, text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap().clone();
+    let word = find(page, "cd");
+    let lines: Vec<_> = page.rules.iter().filter(|r| r.color == [0, 0, 200]).collect();
+    // Over, under and at both sides of the word, a pixel and a half thick, round its letters.
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(lines.iter().all(|r| (r.width - 1.5).abs() < 0.01));
+    let (level, upright): (Vec<&Rule>, Vec<&Rule>) = lines.iter().copied().partition(|r| (r.from.1 - r.to.1).abs() < 0.01);
+    assert_eq!((level.len(), upright.len()), (2, 2));
+    for r in &level {
+        assert!((r.from.0 - word.x).abs() < 0.01 && (r.to.0 - word.x - word.width).abs() < 0.01, "{r:?} {word:?}");
+    }
+    let (top, bottom) = (level[0].from.1.min(level[1].from.1), level[0].from.1.max(level[1].from.1));
+    assert!(top < word.y - word.size * 0.6 && bottom > word.y, "{top} {bottom} {}", word.y);
+    for r in &upright {
+        assert!(r.from.0 > word.x - 0.01 && r.from.0 < word.x + word.width + 0.01);
+        assert!((r.from.1.min(r.to.1) - (top - 0.75)).abs() < 0.01 && (r.from.1.max(r.to.1) - (bottom + 0.75)).abs() < 0.01);
+    }
+
+    // A border that names no colour has the colour of its text.
+    let own = Edge { color: None, ..blue };
+    let red = Run { style: Style { edge: Some(own), color: Some([200, 0, 0]), ..Style::default() }, ..run("cd") };
+    let printed = print(&doc(vec![Block::Para(Para { runs: vec![run("ab "), red], ..Para::default() })]), Paper::A4);
+    assert_eq!(printed.pages[0].rules.iter().filter(|r| r.color == [200, 0, 0]).count(), 4);
+
+    // Text in a border that goes on over three lines: a line over and under each, and a side
+    // only where the border starts and where it ends. Bold letters in it are in the same border.
+    let bold = Run { style: Style { edge: Some(blue), bold: true, ..Style::default() }, ..run("ef gh ") };
+    let long = vec![run("ab "), edged("ab cd ", blue), bold, edged(&"ij kl mn op ".repeat(5), blue), run("end")];
+    let printed = print(&doc(vec![Block::Para(Para { runs: long, ..Para::default() })]), SMALL);
+    let rules: Vec<_> = printed.pages[0].rules.iter().filter(|r| r.color == [0, 0, 200]).collect();
+    let upright = rules.iter().filter(|r| (r.from.0 - r.to.0).abs() < 0.01).count();
+    let rows: std::collections::BTreeSet<i32> = rules.iter().filter(|r| (r.from.1 - r.to.1).abs() < 0.01).map(|r| (r.from.1 * 10.0) as i32).collect();
+    assert_eq!(upright, 2, "{rules:?}");
+    assert!(rows.len() >= 6, "{rows:?}");
+    within(&printed, SMALL);
+
+    // A box with rounded corners: its fill is rounded, and its border is a band that follows
+    // the corners, over the fill, in place of four straight lines.
+    let line = |width: u8| Edge { width, color: Some([0, 0, 0]), line: Line::Solid };
+    let frame = |edges, radius| {
+        Arc::new(Frame { edges, padding: [4; 4], indent: 0, between: Edge::default(), fill: Some([0, 51, 102]), within: None, radius })
+    };
+    let boxed = |text: &str, frame: &Arc<Frame>| Block::Para(Para { frame: Some(frame.clone()), ..para(text) });
+    let round = frame([line(2); 4], 8);
+    let printed = print(&doc(vec![boxed("one", &round), boxed("two", &round)]), Paper::A4);
+    let page = &printed.pages[0];
+    // The line under the head of the page is thicker than any of these.
+    let lines = |page: &Page| page.rules.iter().filter(|r| r.width < 2.0).count();
+    assert_eq!(lines(page), 0, "{:?}", page.rules);
+    let (fill, band) = (page.fills.iter().find(|f| f.color == [0, 51, 102]).unwrap(), page.fills.iter().find(|f| f.ring > 0.0).unwrap());
+    assert!((fill.radius - 6.0).abs() < 0.01 && fill.ring == 0.0, "{fill:?}");
+    assert!((band.radius - 6.0).abs() < 0.01 && (band.ring - 1.5).abs() < 0.01 && band.color == [0, 0, 0]);
+    assert_eq!((band.x, band.y, band.width, band.height, band.depth), (fill.x, fill.y, fill.width, fill.height, fill.depth));
+    let (at_fill, at_band) = (page.fills.iter().position(|f| f == fill).unwrap(), page.fills.iter().position(|f| f == band).unwrap());
+    assert!(at_band > at_fill, "the border is drawn after the fill");
+
+    // Sides that differ, and dashes, keep square corners and straight lines.
+    for edges in [[line(2), line(2), line(2), line(1)], [Edge { line: Line::Dashed, ..line(2) }; 4]] {
+        let printed = print(&doc(vec![boxed("one", &frame(edges, 8))]), Paper::A4);
+        let page = &printed.pages[0];
+        assert!(page.fills.iter().all(|f| f.radius == 0.0 && f.ring == 0.0) && lines(page) == 4);
+    }
+    // A box with no border is rounded too, and a cell with a colour.
+    let printed = print(&doc(vec![boxed("one", &frame([Edge::default(); 4], 8))]), Paper::A4);
+    assert!(printed.pages[0].fills.iter().all(|f| (f.radius - 6.0).abs() < 0.01 && f.ring == 0.0) && printed.pages[0].fills.len() == 1);
+    let shaded = Cell { background: Some([0, 200, 0]), radius: 4, ..cell("cell") };
+    let printed = print(&doc(vec![Block::Table(Table { rows: vec![vec![shaded, cell("two")]], ..Table::default() })]), Paper::A4);
+    assert!(printed.pages[0].fills.iter().any(|f| f.color == [0, 200, 0] && (f.radius - 3.0).abs() < 0.01));
+
+    // A box that goes on over pages is cut where the page ends: square, with its lines.
+    let many: Vec<Block> = (0..80).map(|i| boxed(&format!("line {i}"), &round)).collect();
+    let printed = print(&doc(many), SMALL);
+    assert!(printed.pages.len() > 2);
+    assert!(printed.pages.iter().all(|p| p.fills.iter().all(|f| f.radius == 0.0 && f.ring == 0.0) && lines(p) > 0));
+
+    // Any radius and any border on small paper: every corner is rounded by a number, by no
+    // more than half of its box, and the text stays on the page.
+    let wild = Edge { width: u8::MAX, color: None, line: Line::Solid };
+    let huge = frame([wild; 4], u16::MAX);
+    let cells = vec![Cell { radius: u16::MAX, background: Some([1, 2, 3]), edges: Some([wild; 4]), ..cell("in a cell") }, cell("two")];
+    let blocks = vec![
+        boxed("in a box", &huge),
+        Block::Table(Table { rows: vec![cells], inside: Some(huge.clone()), ..Table::default() }),
+        Block::Para(Para { runs: vec![edged(&"wide words ".repeat(40), wild), edged("\u{5d0}\u{5d1} ab", wild)], rtl: true, ..Para::default() }),
+    ];
+    for paper in [SMALL, Paper { width: 60.0, height: 80.0, margin: 20.0 }, Paper::A4] {
+        let printed = print(&doc(blocks.clone()), paper);
+        for page in &printed.pages {
+            for f in &page.fills {
+                assert!(f.radius.is_finite() && f.ring.is_finite() && f.radius >= 0.0 && f.ring >= 0.0);
+                assert!(f.radius <= f.width / 2.0 + 0.01 && f.radius <= f.height / 2.0 + 0.01 && f.radius <= 48.01, "{f:?}");
+                assert!(f.ring <= f.width / 2.0 + 0.01 && f.ring <= f.height / 2.0 + 0.01, "{f:?}");
+            }
+            assert!(page.rules.iter().all(|r| r.width.is_finite() && r.from.0.is_finite() && r.to.1.is_finite()));
+        }
     }
 }
