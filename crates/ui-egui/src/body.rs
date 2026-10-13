@@ -118,16 +118,34 @@ pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, face
 #[derive(Clone, Copy)]
 struct Aside {
     left: bool,
-    /// Room the picture takes at its side, with the gap to what stands beside it.
-    width: f32,
+    /// Where text beside it may come to: the picture's far edge and the gap, across the pane.
+    edge: f32,
     bottom: f32,
+}
+
+/// Pictures left standing at once, and those one paragraph sets at its sides.
+const MAX_ASIDES: usize = 16;
+const MAX_OWN_ASIDES: usize = 8;
+
+/// The room across that `standing` leaves of `full` for what starts at `top`: a picture that
+/// ends at or above there takes none.
+fn between_asides(full: Rect, standing: &[Aside], top: f32) -> (f32, f32) {
+    let live = standing.iter().filter(|a| a.bottom > top + 0.5);
+    let left = live.clone().filter(|a| a.left).map(|a| a.edge).fold(full.left(), f32::max);
+    let right = live.filter(|a| !a.left).map(|a| a.edge).fold(full.right(), f32::min);
+    (left.min(full.right()), right.max(left + 8.0))
+}
+
+/// Where the lowest of the pictures still standing ends.
+fn below_asides(standing: &[Aside]) -> Option<f32> {
+    standing.iter().map(|a| a.bottom).reduce(f32::max)
 }
 
 /// Paragraphs that follow one another inside one border: the border and how many they are.
 type Group<'a> = Option<(&'a Arc<Frame>, usize)>;
 
 fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
-    let mut aside: Option<Aside> = None;
+    let mut standing: Vec<Aside> = Vec::new();
     let mut i = 0usize;
     while let Some(block) = list.get(i) {
         let group: Group = match block {
@@ -138,62 +156,53 @@ fn blocks(ui: &mut Ui, list: &[Block], look: Look, depth: usize) {
             _ => None,
         };
         // A picture at the side ends where it ends, or where a paragraph asks to start below it.
-        if let Some(a) = aside
-            && (ui.cursor().top() >= a.bottom || matches!(block, Block::Para(p) if p.clear))
+        let top = ui.cursor().top();
+        standing.retain(|a| a.bottom > top + 0.5);
+        if let (Some(bottom), Block::Para(p)) = (below_asides(&standing), block)
+            && p.clear
         {
-            ui.add_space((a.bottom - ui.cursor().top()).max(0.0));
-            aside = None;
+            ui.add_space((bottom - top).max(0.0));
+            standing.clear();
         }
-        match aside {
-            None => aside = one(ui, list, i, group, look, depth, None).0,
-            Some(a) => {
-                // What follows the picture's paragraph stands beside the picture too.
+        match (block, group) {
+            // A paragraph stands beside the pictures that stand, and may set its own.
+            (Block::Para(p), None) => para(ui, p, look, i > 0, &mut standing),
+            _ if standing.is_empty() => one(ui, list, i, group, look, depth),
+            _ => {
+                // What follows a picture's paragraph stands beside the picture too.
                 let top = ui.cursor().top();
                 let full = ui.available_rect_before_wrap();
-                let (left, right) = if a.left { (full.left() + a.width, full.right()) } else { (full.left(), full.right() - a.width) };
-                let room = Rect::from_min_max(pos2(left, top), pos2(right.max(left + 8.0), top));
+                let (left, right) = between_asides(full, &standing, top);
+                let room = Rect::from_min_max(pos2(left, top), pos2(right, top));
                 let mut child = ui.new_child(UiBuilder::new().id_salt(("beside", i)).max_rect(room));
                 child.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                let (_, under) = one(&mut child, list, i, group, look, depth, Some(a.bottom));
+                one(&mut child, list, i, group, look, depth);
                 ui.allocate_rect(Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(top))), Sense::hover());
-                // The lines of a paragraph that start below the picture go under it.
-                if let (Some(under), Block::Para(p)) = (under, block) {
-                    let (_, width) = self::room(ui, p);
-                    piece(ui, p, &under, look, Spot { left: 0.0, width, min_height: 0.0, marker: false });
-                    aside = None;
-                }
             }
         }
         i += group.map_or(1, |(_, count)| count.max(1));
     }
-    if let Some(a) = aside {
-        ui.add_space((a.bottom - ui.cursor().top()).max(0.0));
+    if let Some(bottom) = below_asides(&standing) {
+        ui.add_space((bottom - ui.cursor().top()).max(0.0));
     }
 }
 
-/// Draw the block at `i`, or the paragraphs that share its border. `until` is where a picture
-/// standing at the side ends. Returns a picture this block leaves standing, and the runs of a
-/// paragraph that go under the picture it stood beside.
-fn one(ui: &mut Ui, list: &[Block], i: usize, group: Group, look: Look, depth: usize, until: Option<f32>) -> (Option<Aside>, Option<Vec<Run>>) {
+/// Draw the block at `i`, or the paragraphs that share its border.
+fn one(ui: &mut Ui, list: &[Block], i: usize, group: Group, look: Look, depth: usize) {
     match (list.get(i), group) {
-        (Some(Block::Para(_)), Some((frame, count))) => {
-            framed(ui, list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, look, i);
-            (None, None)
-        }
-        (Some(Block::Para(p)), None) => para(ui, p, look, i > 0, until),
+        (Some(Block::Para(_)), Some((frame, count))) => framed(ui, list.get(i..i.saturating_add(count)).unwrap_or_default(), frame, look, i),
+        (Some(Block::Para(p)), None) => contained(ui, p, look, i > 0),
         (Some(Block::Rule), _) => {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 13.0), Sense::hover());
             ui.painter().hline(rect.x_range(), rect.center().y, (1.0, look.t.text_faint));
-            (None, None)
         }
         (Some(Block::Table(table)), _) => {
             if i > 0 && !table.snug {
                 ui.add_space(6.0);
             }
             self::table(ui, table, look, depth);
-            (None, None)
         }
-        (None, _) => (None, None),
+        (None, _) => {}
     }
 }
 
@@ -243,9 +252,7 @@ fn framed(ui: &mut Ui, paras: &[Block], frame: &Frame, look: Look, at: usize) {
                 edges(ui, line, &only, look, look.text());
             }
             // A picture at the side stays inside the border.
-            if let (Some(aside), _) = para(&mut child, p, look, k > 0 && between == 0.0, None) {
-                child.add_space((aside.bottom - child.cursor().top()).max(0.0));
-            }
+            contained(&mut child, p, look, k > 0 && between == 0.0);
         }
     }
     let rect = Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), child.min_rect().bottom().max(inside.top()) + far.y));
@@ -463,42 +470,110 @@ fn card(ui: &Ui, filed: &Filed, at: Rect, look: Look) {
     }
 }
 
-/// Draw a paragraph. `until` is where a picture already standing at the side ends: lines that
-/// start below it are not drawn but handed back, to go under the picture. A picture of the
-/// paragraph's own that is left standing past its text is handed back too.
-fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool, until: Option<f32>) -> (Option<Aside>, Option<Vec<Run>>) {
+/// Draw a paragraph with the room under any picture it sets at its side: nothing of it is left
+/// standing for what follows.
+fn contained(ui: &mut Ui, p: &Para, look: Look, after_another: bool) {
+    let mut standing = Vec::new();
+    para(ui, p, look, after_another, &mut standing);
+    if let Some(bottom) = below_asides(&standing) {
+        ui.add_space((bottom - ui.cursor().top()).max(0.0));
+    }
+}
+
+/// Draw a paragraph. `standing` are the pictures already standing at the sides: the text is set
+/// beside them, line by line as wide as they leave it, and under each from where it ends. The
+/// pictures of the paragraph's own that ask to stand at a side do, one beside another while
+/// there is room for text between them, and are added to `standing` for what follows.
+fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool, standing: &mut Vec<Aside>) {
     if after_another {
         ui.add_space(f32::from(para.lead()));
     }
-    let (_, width) = room(ui, para);
-    let whole = Spot { left: 0.0, width, min_height: 0.0, marker: true };
-    if let Some(until) = until {
-        let (job, ends, _) = job(ui, para, &para.runs, look, width);
-        let galley = ui.painter().layout_job(job);
-        return match lines_beside(&galley, until - ui.cursor().top()) {
-            Some(chars) => {
-                let (head, tail) = split(&para.runs, &ends, chars);
-                piece(ui, para, &head, look, whole);
-                (None, Some(tail))
+    let top = ui.cursor().top();
+    standing.retain(|a| a.bottom > top + 0.5);
+    let asks = |run: &Run| run.float != Float::None && run.picture.is_some();
+    if standing.is_empty() && !para.runs.iter().take(MAX_FLOAT_SEARCH).any(asks) {
+        let (_, width) = room(ui, para);
+        piece(ui, para, &para.runs, look, Spot { left: 0.0, width, min_height: 0.0, marker: true });
+        return;
+    }
+    // Those that stood before this paragraph narrow the room it is set in; its own stand
+    // inside that room, and narrow its text.
+    let others = standing.len();
+    let full = ui.available_rect_before_wrap();
+    let (room_left, room_right) = between_asides(full, standing, top);
+    let (inset, width) = room_of(room_right - room_left, para);
+    let text_left = room_left + if para.rtl { 0.0 } else { inset };
+    let (mut left, mut right) = (text_left, text_left + width);
+    let mut rest: Vec<Run> = Vec::with_capacity(para.runs.len());
+    for (at, run) in para.runs.iter().enumerate() {
+        let stand = (at < MAX_FLOAT_SEARCH && asks(run) && standing.len() < others.saturating_add(MAX_OWN_ASIDES).min(MAX_ASIDES))
+            .then(|| shown(run, look.pictures))
+            .flatten();
+        let placed = stand.and_then(|stand| {
+            let size = picture_size(run.extent, stand.natural(run), width);
+            (right - left - size.x - FLOAT_GAP >= MIN_BESIDE).then_some((stand, size))
+        });
+        let Some((stand, size)) = placed else {
+            rest.push(run.clone());
+            continue;
+        };
+        let at_left = run.float == Float::Left;
+        let x = if at_left { left } else { right - size.x };
+        if at_left {
+            left = x + size.x + FLOAT_GAP;
+        } else {
+            right = x - FLOAT_GAP;
+        }
+        standing.push(Aside { left: at_left, edge: if at_left { left } else { right }, bottom: top + size.y + FLOAT_GAP / 2.0 });
+        let spot = Rect::from_min_size(pos2(x.round(), top.round()), size);
+        if ui.is_rect_visible(spot) {
+            picture(ui, run, stand, spot, look);
+            let id = ui.id().with(("aside", at, spot.min.x.to_bits(), spot.min.y.to_bits()));
+            let tip = tip(run, stand);
+            let response = ui.interact(spot, id, Sense::hover());
+            if !tip.is_empty() {
+                response.on_hover_text_at_pointer(tip);
+            }
+        }
+    }
+
+    // The text, in as many pieces as there are heights at which a picture ends.
+    let mut marker = true;
+    for band in 0..=MAX_ASIDES {
+        let now = ui.cursor().top();
+        let full = ui.available_rect_before_wrap();
+        let (earlier, own) = standing.split_at(others.min(standing.len()));
+        let (room_left, room_right) = between_asides(full, earlier, now);
+        let (inset, width) = room_of(room_right - room_left, para);
+        let text_left = room_left + if para.rtl { 0.0 } else { inset };
+        let (left, right) = between_asides(Rect::from_min_max(pos2(text_left, now), pos2(text_left + width, now)), own, now);
+        let until = standing.iter().map(|a| a.bottom).filter(|bottom| *bottom > now + 0.5).reduce(f32::min).filter(|_| band < MAX_ASIDES);
+        let mut child = ui.new_child(
+            UiBuilder::new().id_salt(("band", now.to_bits(), band)).max_rect(Rect::from_min_max(pos2(room_left, now), pos2(room_right, now))),
+        );
+        child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        let spot = |min_height: f32| Spot { left: left - text_left, width: (right - left).max(8.0), min_height, marker };
+        let cut = until.and_then(|until| {
+            let (job, ends, _) = job(&child, para, &rest, look, (right - left).max(8.0));
+            let galley = child.painter().layout_job(job);
+            lines_beside(&galley, until - now).map(|chars| (split(&rest, &ends, chars), until))
+        });
+        let done = match cut {
+            Some(((head, tail), until)) => {
+                piece(&mut child, para, &head, look, spot(until - now));
+                rest = tail;
+                false
             }
             None => {
-                piece(ui, para, &para.runs, look, whole);
-                (None, None)
+                piece(&mut child, para, &rest, look, spot(0.0));
+                true
             }
         };
-    }
-    // The first picture that asks to stand at one side does, when there is room beside it.
-    let aside = para.runs.iter().take(MAX_FLOAT_SEARCH).enumerate().find_map(|(i, run)| {
-        let stand = (run.float != Float::None).then(|| shown(run, look.pictures)).flatten()?;
-        let size = picture_size(run.extent, stand.natural(run), width);
-        (width - size.x - FLOAT_GAP >= MIN_BESIDE).then_some((i, stand, size))
-    });
-    match aside {
-        Some((at, stand, size)) => (beside(ui, para, at, stand, size, look), None),
-        None => {
-            piece(ui, para, &para.runs, look, whole);
-            (None, None)
+        ui.allocate_rect(Rect::from_min_max(pos2(full.left(), now), pos2(full.right(), child.min_rect().bottom().max(now))), Sense::hover());
+        if done {
+            break;
         }
+        marker = false;
     }
 }
 
@@ -513,49 +588,6 @@ fn lines_beside(galley: &egui::Galley, tall: f32) -> Option<usize> {
         chars = chars.saturating_add(row.glyphs.len()).saturating_add(usize::from(row.ends_with_newline));
     }
     None
-}
-
-/// A paragraph with a picture at one side: the text stands beside the picture for as many lines
-/// as the picture is tall, and under it from there on. A picture taller than the paragraph's
-/// text is handed back as still standing: what follows the paragraph stands beside it too.
-fn beside(ui: &mut Ui, para: &Para, at: usize, stand: Stand, size: Vec2, look: Look) -> Option<Aside> {
-    let (inset, width) = room(ui, para);
-    let run = para.runs.get(at)?;
-    let rest: Vec<Run> = para.runs.iter().enumerate().filter(|(i, _)| *i != at).map(|(_, r)| r.clone()).collect();
-    let narrow = width - size.x - FLOAT_GAP;
-    let left = if run.float == Float::Left { size.x + FLOAT_GAP } else { 0.0 };
-
-    // Lay the text out beside the picture to learn where the picture ends.
-    let (job, ends, _) = job(ui, para, &rest, look, narrow);
-    let galley = ui.painter().layout_job(job);
-    let rect = match lines_beside(&galley, size.y) {
-        Some(chars) => {
-            let (head, tail) = split(&rest, &ends, chars);
-            let rect = piece(ui, para, &head, look, Spot { left, width: narrow, min_height: size.y, marker: true });
-            piece(ui, para, &tail, look, Spot { left: 0.0, width, min_height: 0.0, marker: false });
-            rect
-        }
-        None => piece(ui, para, &rest, look, Spot { left, width: narrow, min_height: 0.0, marker: true }),
-    };
-    let bottom = rect.top() + size.y + FLOAT_GAP / 2.0;
-    // The paragraph is set in on the side it starts at; a picture at that side stands inside
-    // what it is set in by.
-    let (at_left, lead) = (run.float == Float::Left, if para.rtl { 0.0 } else { inset });
-    let beside_inset = if at_left != para.rtl { inset } else { 0.0 };
-    let standing = (bottom > ui.cursor().top()).then_some(Aside { left: at_left, width: beside_inset + size.x + FLOAT_GAP, bottom });
-
-    let x = rect.left() + lead + if at_left { 0.0 } else { width - size.x };
-    let spot = Rect::from_min_size(pos2(x.round(), rect.top().round()), size);
-    if ui.is_rect_visible(spot) {
-        picture(ui, run, stand, spot, look);
-        let id = ui.id().with(("aside", at, spot.min.x.to_bits(), spot.min.y.to_bits()));
-        let tip = tip(run, stand);
-        let response = ui.interact(spot, id, Sense::hover());
-        if !tip.is_empty() {
-            response.on_hover_text_at_pointer(tip);
-        }
-    }
-    standing
 }
 
 /// Runs cut in two after `chars` characters of the text they are drawn as; `ends` is where each
@@ -595,8 +627,13 @@ fn inset(para: &Para) -> f32 {
 
 /// Room a paragraph leaves on its left here, and the width left for what it holds.
 fn room(ui: &Ui, para: &Para) -> (f32, f32) {
-    let inset = inset(para).min(ui.available_width() * 0.6);
-    (inset, (ui.available_width() - inset).max(40.0))
+    room_of(ui.available_width(), para)
+}
+
+/// [`room`] in a width that is given.
+fn room_of(available: f32, para: &Para) -> (f32, f32) {
+    let inset = inset(para).min(available * 0.6);
+    (inset, (available - inset).max(40.0))
 }
 
 fn quote_bars(ui: &Ui, para: &Para, rect: Rect, t: &Tokens) {
@@ -623,10 +660,27 @@ pub(crate) fn picture_size(asked: (u16, u16), natural: Vec2, room: f32) -> Vec2 
     vec2(size.x.clamp(1.0, MAX_PICTURE_WIDTH), size.y.clamp(1.0, MAX_PICTURE_HEIGHT))
 }
 
+/// What is laid behind a dark picture that is seen through, on the dark pane: paper, a little
+/// wider than the picture.
+pub(crate) const BACKING: Color32 = Color32::from_rgb(0xF4, 0xF4, 0xF2);
+const BACKING_MARGIN: f32 = 3.0;
+/// A picture no lighter than this is taken to be drawn for a light page.
+const DARK_INK: f32 = 0.42;
+
+/// Whether a picture is given a backing: one that is seen through and is dark, where what is
+/// behind it is the dark pane itself. A light one is drawn for a dark page and needs none; where
+/// the message chose what is behind, that is left as chosen.
+fn backed(drawn: &Shown, look: Look) -> bool {
+    look.t.dark && look.on == look.t.surface && drawn.ink.is_some_and(|ink| ink <= DARK_INK)
+}
+
 /// Draw a picture, or the frame that takes its place.
 fn picture(ui: &Ui, run: &Run, stand: Stand, at: Rect, look: Look) {
     match stand {
         Stand::Drawn(drawn) => {
+            if backed(drawn, look) {
+                ui.painter().rect_filled(at.expand(BACKING_MARGIN), 3.0, BACKING);
+            }
             ui.painter().image(drawn.frame(ui.ctx(), look.pictures.moving), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         Stand::Frame => frame(ui, run, at, look),

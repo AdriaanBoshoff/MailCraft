@@ -1624,3 +1624,114 @@ fn what_stands_in_a_paragraph_written_from_the_right_is_counted_from_the_right()
     ]);
     within(&hostile, paper);
 }
+
+#[test]
+fn several_pictures_stand_at_the_sides_of_one_paragraph() {
+    use openmailclient_formats::rich::Float;
+    let side = |id: &str, float: Float| Run { picture: Some(Picture::Attached(id.into())), float, ..Run::default() };
+    // In points: small is 60 by 30, tall 60 by 120, broad 300 by 30; each takes 6 more as its gap.
+    let sizes = |picture: &Picture| match picture {
+        Picture::Attached(id) if id == "small" => Some((80, 40)),
+        Picture::Attached(id) if id == "tall" => Some((80, 160)),
+        Picture::Attached(id) if id == "broad" => Some((400, 40)),
+        _ => None,
+    };
+    let print =
+        |body: &Doc| print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body, plain: false, sizes: &sizes }, Paper::A4).unwrap();
+    let words = |n: usize| vec!["word"; n].join(" ");
+    let (left, right) = (36.0f32, 595.28f32 - 36.0);
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let lines_of = |page: &Page| -> Vec<Text> { page.texts.iter().filter(|t| t.glyphs.first().is_some_and(|g| g.1 == 'w')).cloned().collect() };
+    let find = |page: &Page, text: &str| page.texts.iter().find(|t| t.glyphs.iter().map(|g| g.1).collect::<String>() == text).unwrap().clone();
+
+    // One at each side, of different heights: lines are short at both ends while both stand,
+    // at one while one does, and as wide as the page under both.
+    let body =
+        doc(vec![Block::Para(Para { runs: vec![side("small", Float::Left), side("tall", Float::Right), run(&words(400))], ..Para::default() })]);
+    let printed = print(&body);
+    let page = &printed.pages[0];
+    assert_eq!(page.pictures.len(), 2);
+    let (small, tall) = (&page.pictures[0], &page.pictures[1]);
+    assert!(near(small.x, left) && near(tall.x, right - 60.0) && near(small.y, tall.y), "{small:?} {tall:?}");
+    let lines = lines_of(page);
+    assert!(lines.len() > 13, "{}", lines.len());
+    for (n, line) in lines.iter().enumerate() {
+        let (from, to) = match n {
+            0..=2 => (left + 66.0, right - 66.0),
+            3..=10 => (left, right - 66.0),
+            _ => (left, right),
+        };
+        assert!(near(line.x, from) && line.x + line.width <= to + 0.01, "line {n}: {} {}", line.x, line.width);
+        assert!(n + 1 == lines.len() || line.width + 27.0 > to - from, "line {n} is short");
+    }
+    within(&printed, Paper::A4);
+
+    // Two at one side stand beside one another; from the right they are set from the right.
+    for float in [Float::Left, Float::Right] {
+        let body = doc(vec![Block::Para(Para { runs: vec![side("small", float), side("tall", float), run(&words(60))], ..Para::default() })]);
+        let printed = print(&body);
+        let page = &printed.pages[0];
+        let (first, second, line) = (&page.pictures[0], &page.pictures[1], &lines_of(page)[0]);
+        if float == Float::Left {
+            assert!(near(first.x, left) && near(second.x, left + 66.0) && near(line.x, left + 132.0));
+        } else {
+            assert!(
+                near(first.x, right - 60.0) && near(second.x, right - 126.0) && near(line.x, left) && line.x + line.width <= right - 132.0 + 0.01
+            );
+        }
+    }
+
+    // One set while another still stands is set beside it, and what follows stands beside both
+    // for as long as both stand.
+    let body = doc(vec![
+        Block::Para(Para { runs: vec![side("tall", Float::Left), run("one")], ..Para::default() }),
+        Block::Para(Para { runs: vec![side("small", Float::Left), run("two")], ..Para::default() }),
+        Block::Para(para("three")),
+        Block::Para(Para { clear: true, ..para("below") }),
+    ]);
+    let printed = print(&body);
+    let page = &printed.pages[0];
+    let (first, second) = (&page.pictures[0], &page.pictures[1]);
+    let (one, two, three, below) = (find(page, "one"), find(page, "two"), find(page, "three"), find(page, "below"));
+    assert!(near(first.x, left) && near(second.x, left + 66.0) && second.y > first.y, "{first:?} {second:?}");
+    assert!(near(one.x, left + 66.0) && near(two.x, left + 132.0) && near(three.x, left + 132.0), "{} {} {}", one.x, two.x, three.x);
+    assert!(near(below.x, left) && below.y - 9.6 >= first.y + 120.0 - 0.01);
+
+    // One for which no room is left between the others stands in the text.
+    let body = doc(vec![Block::Para(Para {
+        runs: vec![side("broad", Float::Left), side("small", Float::Right), side("broad", Float::Left), run("ab")],
+        ..Para::default()
+    })]);
+    let printed = print(&body);
+    let page = &printed.pages[0];
+    assert_eq!(page.pictures.len(), 3);
+    let inline = page.pictures.iter().filter(|p| p.x > left + 300.0 && p.x < right - 66.0).count();
+    assert_eq!(inline, 1, "{:?}", page.pictures);
+    within(&printed, Paper::A4);
+
+    // Hostile: far more of them than are ever set at the sides, of every size, everywhere.
+    let mut blocks: Vec<Block> = Vec::new();
+    for i in 0..60u16 {
+        let mut runs: Vec<Run> = (0..40u16)
+            .map(|k| Run {
+                extent: (i.wrapping_mul(977).wrapping_add(k * 31) % 700, k.wrapping_mul(331) % 1500),
+                ..side(["small", "tall", "broad", "none"][usize::from((i + k) % 4)], if (i + k) % 3 == 0 { Float::Left } else { Float::Right })
+            })
+            .collect();
+        runs.push(run(&words(usize::from(i % 9))));
+        blocks.push(Block::Para(Para { runs, rtl: i % 4 == 1, clear: i % 11 == 5, indent: (i % 14) as u8, ..Para::default() }));
+        if i % 13 == 7 {
+            blocks.push(Block::Table(Table {
+                rows: vec![vec![cell("in"), Cell { blocks: blocks.clone(), span: 1, rows: 1, ..Cell::default() }]],
+                ..Table::default()
+            }));
+        }
+    }
+    for paper in [Paper::A4, SMALL] {
+        within(
+            &print_on(&Library::empty(), &Memo { owner: "Owner", fields: &[], body: &doc(blocks.clone()), plain: false, sizes: &sizes }, paper)
+                .unwrap(),
+            paper,
+        );
+    }
+}

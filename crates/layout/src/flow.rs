@@ -126,11 +126,15 @@ struct Look {
 #[derive(Clone, Copy)]
 struct Aside {
     left: bool,
-    /// Room the picture takes at its side, with the gap to what stands beside it.
-    width: f32,
+    /// Where text beside it may come to: the picture's far edge and the gap, across the page.
+    edge: f32,
     page: usize,
     bottom: f32,
 }
+
+/// Pictures left standing at once, and those one paragraph sets at its sides.
+const MAX_ASIDES: usize = 16;
+const MAX_OWN_ASIDES: usize = 8;
 
 /// How many fills, lines, texts and pictures a page held at some moment.
 type Mark = (usize, usize, usize, usize);
@@ -152,8 +156,8 @@ pub(crate) struct Flow<'f, 'l> {
     pub no_font: bool,
     glyphs_left: usize,
     sizes: &'f dyn Fn(&Picture) -> Option<(u16, u16)>,
-    /// The picture that stands at one side of the blocks being set.
-    aside: Option<Aside>,
+    /// The pictures that stand at the sides of the blocks being set.
+    asides: Vec<Aside>,
 }
 
 fn px(v: u16) -> f32 {
@@ -355,7 +359,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             no_font: false,
             glyphs_left: MAX_GLYPHS,
             sizes,
-            aside: None,
+            asides: Vec::new(),
         }
     }
 
@@ -399,13 +403,23 @@ impl<'f, 'l> Flow<'f, 'l> {
         at
     }
 
-    /// Where what does not stand beside a picture goes on: `at`, or under the picture that
-    /// stands at one side. No picture stands there afterwards.
+    /// Where what does not stand beside a picture goes on: `at`, or under the lowest of the
+    /// pictures that stand at the sides. No picture stands there afterwards.
     fn below_aside(&mut self, at: At) -> At {
-        match self.aside.take() {
-            Some(a) if a.page == at.page && at.y < a.bottom => At { page: at.page, y: a.bottom.min(self.bottom()) },
-            _ => at,
+        let lowest = self.asides.drain(..).filter(|a| a.page == at.page && at.y < a.bottom).map(|a| a.bottom).reduce(f32::max);
+        match lowest {
+            Some(bottom) => At { page: at.page, y: bottom.min(self.bottom()) },
+            None => at,
         }
+    }
+
+    /// The room across that the pictures standing at the sides leave, of the room from `left`
+    /// that is `room` wide, for a line that starts at `at`.
+    fn between_asides(&self, left: f32, room: f32, at: At) -> (f32, f32) {
+        let live = self.asides.iter().filter(|a| a.page == at.page && at.y < a.bottom - 0.01);
+        let from = live.clone().filter(|a| a.left).map(|a| a.edge).fold(left, f32::max);
+        let to = live.filter(|a| !a.left).map(|a| a.edge).fold(left + room, f32::min);
+        (from.min(left + room), to)
     }
 
     fn mark(&self, page: usize) -> Mark {
@@ -454,8 +468,8 @@ impl<'f, 'l> Flow<'f, 'l> {
     }
 
     /// The glyphs of a paragraph that has `room` across, the looks they point at, and the
-    /// pictures among them. The run at `aside` stands at one side and is not among them.
-    fn glyphs<'p>(&mut self, para: &'p Para, room: f32, aside: Option<usize>) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>, Vec<char>) {
+    /// pictures among them. The runs at `aside` stand at the sides and are not among them.
+    fn glyphs<'p>(&mut self, para: &'p Para, room: f32, aside: &[usize]) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>, Vec<char>) {
         let mut stored: Vec<char> = Vec::new();
         let (mut out, looks, pictures) = self.glyphs_stored(para, room, aside, &mut stored);
         self.directed(para.rtl, &mut out, &stored, &looks);
@@ -608,19 +622,13 @@ impl<'f, 'l> Flow<'f, 'l> {
             .collect()
     }
 
-    fn glyphs_stored<'p>(
-        &mut self,
-        para: &'p Para,
-        room: f32,
-        aside: Option<usize>,
-        stored: &mut Vec<char>,
-    ) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
+    fn glyphs_stored<'p>(&mut self, para: &'p Para, room: f32, aside: &[usize], stored: &mut Vec<char>) -> (Vec<Glyph>, Vec<Look>, Vec<&'p Picture>) {
         let shapes = self.shapes(para);
         let mut out: Vec<Glyph> = Vec::new();
         let mut looks: Vec<Look> = Vec::new();
         let mut pictures: Vec<&'p Picture> = Vec::new();
         for (n, run) in para.runs.iter().enumerate() {
-            if aside == Some(n) {
+            if aside.contains(&n) {
                 continue;
             }
             let s = &run.style;
@@ -816,42 +824,70 @@ impl<'f, 'l> Flow<'f, 'l> {
         let (left, room) = (if para.rtl { x } else { x + inset }, (width - inset).max(24.0));
         // A picture standing at one side ends where it ends, or where a paragraph asks to
         // start below it.
-        if self.aside.is_some_and(|a| para.clear || a.page != at.page || at.y >= a.bottom - 0.01) {
+        if para.clear {
             at = self.below_aside(at);
         }
-        // The first picture that asks to stand at one side does, when there is room beside it
-        // and no other stands there.
-        let stand = para.runs.iter().take(MAX_FLOAT_SEARCH).enumerate().filter(|_| self.aside.is_none()).find_map(|(n, run)| {
-            let picture = run.picture.as_ref().filter(|_| run.float != Float::None)?;
-            let (wide, tall) = self.picture_size(run.extent, (self.sizes)(picture)?, room);
-            (room - wide - FLOAT_GAP >= MIN_BESIDE).then_some((n, picture, run.float, wide, tall))
-        });
-        if let Some((_, picture, float, wide, tall)) = stand {
-            at = self.room(at, tall);
+        self.asides.retain(|a| a.page == at.page && at.y < a.bottom - 0.01);
+        // The pictures that ask to stand at a side do, one beside another, while room for text
+        // is left between them and those that stand already.
+        let (mut from, mut to) = self.between_asides(left, room, at);
+        let mut stand: Vec<(usize, &Picture, Float, f32, f32)> = Vec::new();
+        for (n, run) in para.runs.iter().enumerate().take(MAX_FLOAT_SEARCH) {
+            if stand.len() >= MAX_OWN_ASIDES.min(MAX_ASIDES.saturating_sub(self.asides.len())) {
+                break;
+            }
+            let Some(picture) = run.picture.as_ref().filter(|_| run.float != Float::None) else { continue };
+            let Some(size) = (self.sizes)(picture) else { continue };
+            let (wide, tall) = self.picture_size(run.extent, size, room);
+            if to - from - wide - FLOAT_GAP >= MIN_BESIDE {
+                if run.float == Float::Left {
+                    from += wide + FLOAT_GAP;
+                } else {
+                    to -= wide + FLOAT_GAP;
+                }
+                stand.push((n, picture, run.float, wide, tall));
+            }
+        }
+        if let Some(tallest) = stand.iter().map(|s| s.4).reduce(f32::max) {
+            // On a page that has room for the tallest of them. On a new page none of those
+            // that stood before stands, so there is no less room for these.
+            at = self.room(at, tallest);
             if self.full {
                 return at;
             }
-            let placed = Placed {
-                x: if float == Float::Left { left } else { left + room - wide },
-                y: at.y,
-                width: wide,
-                height: tall,
-                picture: picture.clone(),
-            };
-            if let Some(page) = self.page(at.page) {
-                page.pictures.push(placed);
+            let (mut from, mut to) = self.between_asides(left, room, at);
+            for (_, picture, float, wide, tall) in &stand {
+                let at_left = *float == Float::Left;
+                let x = if at_left { from } else { to - wide };
+                if at_left {
+                    from = x + wide + FLOAT_GAP;
+                } else {
+                    to = x - FLOAT_GAP;
+                }
+                let placed = Placed { x, y: at.y, width: *wide, height: *tall, picture: (*picture).clone() };
+                if let Some(page) = self.page(at.page) {
+                    page.pictures.push(placed);
+                }
+                self.asides.push(Aside {
+                    left: at_left,
+                    edge: if at_left { from } else { to },
+                    page: at.page,
+                    bottom: at.y + tall + FLOAT_GAP / 2.0,
+                });
             }
-            self.aside = Some(Aside { left: float == Float::Left, width: wide + FLOAT_GAP, page: at.page, bottom: at.y + tall + FLOAT_GAP / 2.0 });
         }
-        let (mut glyphs, looks, pictures, stored) = self.glyphs(para, room, stand.map(|s| s.0));
+        let standing: Vec<usize> = stand.iter().map(|s| s.0).collect();
+        let (mut glyphs, looks, pictures, stored) = self.glyphs(para, room, &standing);
         set_tabs(&mut glyphs, &para.tabs, matches!(para.kind, ParaKind::Pre), room);
         let own_size = looks.first().map_or(self.base.size, |l| l.size);
         let (mut from, mut n) = (0usize, 0usize);
         loop {
-            // A line beside a picture that stands at one side is shorter.
-            let (left, room) = match self.aside.filter(|a| a.page == at.page && at.y < a.bottom - 0.01) {
-                Some(a) => (if a.left { left + a.width } else { left }, (room - a.width).max(24.0)),
-                None => (left, room),
+            // A line beside pictures that stand at the sides is shorter.
+            let (left, room) = if self.asides.is_empty() {
+                (left, room)
+            } else {
+                let (from, to) = self.between_asides(left, room, at);
+                (from, (to - from).max(24.0))
             };
             let Some((to, next)) = line_end(&glyphs, from, room) else { break };
             let line = glyphs.get(from..to).unwrap_or_default();
@@ -1190,7 +1226,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         let rtl = script::first_strong(&text).unwrap_or(false);
         let style = Style { family: Some(family.into()), size: Some(size), ..Style::default() };
         let para = Para { runs: vec![Run { text, style, ..Run::default() }], rtl, ..Para::default() };
-        let (glyphs, _, _, stored) = self.glyphs(&para, self.width(), None);
+        let (glyphs, _, _, stored) = self.glyphs(&para, self.width(), &[]);
         let glyphs: Vec<Glyph> = glyphs.into_iter().filter(|g| g.picture.is_none() && g.kind != Kind::Break && g.ch != '\t').collect();
         let glyphs = if rtl || glyphs.iter().any(|g| g.level > 0) {
             let chars: Vec<char> = glyphs.iter().map(|g| g.ch).collect();
@@ -1207,7 +1243,7 @@ impl<'f, 'l> Flow<'f, 'l> {
     /// The narrowest and the widest a paragraph can usefully be: its longest word, and its
     /// longest line when nothing is wrapped.
     fn para_wants(&mut self, para: &Para) -> (f32, f32) {
-        let (glyphs, ..) = self.glyphs(para, f32::MAX, None);
+        let (glyphs, ..) = self.glyphs(para, f32::MAX, &[]);
         let (mut word, mut line, mut least, mut most) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for g in &glyphs {
             match g.kind {
@@ -1418,7 +1454,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             return at;
         }
         // A picture at one side belongs to the blocks it is among: these start with none.
-        let outer = self.aside.take();
+        let outer = std::mem::take(&mut self.asides);
         let mut i = 0usize;
         while let Some(block) = list.get(i) {
             if self.full {
@@ -1455,7 +1491,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             i += step;
         }
         at = self.below_aside(at);
-        self.aside = outer;
+        self.asides = outer;
         at
     }
 

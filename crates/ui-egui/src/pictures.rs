@@ -25,6 +25,34 @@ pub(crate) struct Shown {
     pub size: Vec2,
     /// The frames of a picture that moves.
     pub film: Option<Reel>,
+    /// For a picture that is seen through in places: how light what is seen of it is, from 0
+    /// (black) to 1 (white). `None` for one that covers all of its room.
+    pub ink: Option<f32>,
+}
+
+/// Pixels looked at to tell how light a picture is.
+const MAX_LOOKED_AT: usize = 1 << 16;
+
+/// How light the part of a picture that is seen is, when part of it is seen through: `None` for
+/// a picture that covers its room, or of which nothing is seen at all. `rgba` is four bytes a
+/// pixel, colour not multiplied by cover.
+pub(crate) fn ink(rgba: &[u8]) -> Option<f32> {
+    let pixels = rgba.len() / 4;
+    let step = pixels.div_ceil(MAX_LOOKED_AT).max(1);
+    let (mut looked, mut through, mut cover, mut light) = (0u64, 0u64, 0u64, 0u64);
+    for pixel in rgba.chunks_exact(4).step_by(step) {
+        let [r, g, b, a] = [pixel.first()?, pixel.get(1)?, pixel.get(2)?, pixel.get(3)?].map(|v| u64::from(*v));
+        looked += 1;
+        through += u64::from(a < 128);
+        cover += a;
+        // Rec. 601 weights, in thousandths.
+        light += a * (299 * r + 587 * g + 114 * b) / 1000;
+    }
+    // A few soft pixels at the corners of a photograph do not make it a drawing on glass.
+    if looked == 0 || cover == 0 || through * 20 < looked {
+        return None;
+    }
+    Some((light as f32 / cover as f32 / 255.0).clamp(0.0, 1.0))
 }
 
 /// The frames of a picture that moves, the first among them.
@@ -144,11 +172,14 @@ impl Pictures {
             let texture = frames.first()?.0.clone();
             let size = vec2(f32::from(film.natural.0), f32::from(film.natural.1));
             let since = ctx.input(|i| i.time);
-            return Some(Shown { texture, size, film: Some(Reel { frames, loops: film.loops, since }) });
+            let ink = film.frames.first().and_then(|frame| ink(&frame.rgba));
+            return Some(Shown { texture, size, film: Some(Reel { frames, loops: film.loops, since }), ink });
         }
-        let (image, size) = decode(data)?;
+        let pixels = openmailclient_engine::pictures::decode(data)?;
+        let ink = ink(&pixels.rgba);
+        let (image, size) = image_of(&pixels)?;
         self.kept_bytes = self.kept_bytes.saturating_add(image.pixels.len().saturating_mul(4));
-        Some(Shown { texture: ctx.load_texture(name, image, TextureOptions::LINEAR), size, film: None })
+        Some(Shown { texture: ctx.load_texture(name, image, TextureOptions::LINEAR), size, film: None, ink })
     }
 }
 
@@ -171,8 +202,12 @@ fn content_ids<'a>(blocks: &'a [Block], out: &mut Vec<&'a str>, depth: usize) {
 
 /// A picture file → pixels and its size as written. `None` for anything that is not a picture
 /// this build reads (PNG, JPEG, GIF, BMP, WebP, TIFF, SVG), is over the limits, or is damaged.
+#[cfg(test)]
 pub(crate) fn decode(data: &[u8]) -> Option<(ColorImage, Vec2)> {
-    let pixels = openmailclient_engine::pictures::decode(data)?;
+    image_of(&openmailclient_engine::pictures::decode(data)?)
+}
+
+fn image_of(pixels: &openmailclient_engine::pictures::Pixels) -> Option<(ColorImage, Vec2)> {
     let kept = [usize::try_from(pixels.width).ok()?, usize::try_from(pixels.height).ok()?];
     let size = vec2(f32::from(pixels.natural.0), f32::from(pixels.natural.1));
     Some((ColorImage::from_rgba_unmultiplied(kept, &pixels.rgba), size))

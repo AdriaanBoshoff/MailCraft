@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 75 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 76 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 309, all passing |
+| Tests | 312, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -110,7 +110,8 @@
 59. Done: ANSI data files are written, and a re-saved one keeps its kind (M3b.21).
 60. Done: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom (M3b.22).
 61. Done: SVG, WebP and TIFF pictures are shown, and pictures that move are played (M3b.23).
-62. Next: M3b.24: a backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph.
+62. Done: Several pictures stand at the sides of one paragraph, and a dark see-through picture has paper behind it on the dark pane (M3b.24).
+63. Next: M3b.25: boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners.
 
 ## Do later (from M2)
 
@@ -179,7 +180,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~SVG, WebP and TIFF pictures; GIF animation~~ | done: M3b.23 |
 | SVG drawings in the web build (one thread, a small stack); bitmaps inside a drawing, under the limits of other pictures; `.svgz` | M6, with the web app |
 | Pictures decoded off the thread that draws the window | M4, with pictures loaded from a server on command |
-| A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph | M3b |
+| ~~A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph~~ | done: M3b.24 |
+| On paper, a table or a bordered block beside a picture at the side (in the window it stands beside it) | M5, with the other print styles |
 | Boxes inside one another; a fill behind a table in a block and behind the whole body; borders on text within a line; rounded corners | M3b |
 | Outlook's highlight colours; list numbers an override changes (`\lfolevel`) | M3b |
 | Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes | M3b |
@@ -1254,3 +1256,29 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   not read; an animated PNG or WebP was not tried, there being no writer for one here;
   a picture is decoded on the thread that draws the window, as before, so a drawing given up
   holds it for three seconds; what Outlook shows of any of these was not observed.
+- **2026-10-13** - M3b.24: several pictures at the sides, and paper behind a dark picture on glass. A
+  paragraph sets every picture that asks for a side at that side, one beside another, while
+  room for text is left between them (eight of its own at most, sixteen standing at once);
+  one for which no room is left stands in the text as before. A picture set while another
+  still stands is set beside it. The text is as wide as the pictures leave it line by line:
+  it widens where each one ends. This is so in the reading pane (`para` in
+  `crates/ui-egui/src/body.rs`, which sets the text in a piece for each height at which a
+  picture ends) and on the printed page (`Flow::asides` in `crates/layout/src/flow.rs`).
+  In the dark reading pane a picture that is seen through in places and is dark where it is
+  seen (a logo drawn for a white page) has light paper laid behind it, so that it can be
+  read. Made better on the way: the paper is laid only where it helps. A light picture on
+  glass was drawn for a dark page and is left as it is; a picture that covers its room needs
+  none; and where the message chose what is behind (a filled cell or block) that choice is
+  kept. A photograph with a few soft pixels at its corners is not taken for a drawing on
+  glass. 3 tests: in the window, heights with one, two and three pictures at the sides, two
+  at one side, pictures of different heights, one set while another stands, one with no room,
+  inside a border, and sixty to a paragraph at widths from nothing to a million; how light a
+  picture is, and the paper drawn in each of the cases above and in no other; on paper, where
+  every line starts and ends beside two pictures of different heights, two at one side from
+  the left and from the right, one set while another stands, one with no room, and forty to
+  a paragraph in sixty paragraphs and in cells. Looked at in the window in both themes
+  (`plan/shots/asides.jsonl`). Not done: on paper a table or a bordered block still starts
+  under a picture at the side, where in the window it stands beside it; the paper is not
+  laid behind a dark picture in a cell the message filled dark; what Outlook does with
+  several pictures at the sides, or with see-through pictures in its dark mode, was not
+  observed.

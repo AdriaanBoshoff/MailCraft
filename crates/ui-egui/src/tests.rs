@@ -1417,3 +1417,126 @@ fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
         }
     }
 }
+
+#[test]
+fn several_pictures_stand_at_the_sides_of_one_paragraph_and_beside_one_another() {
+    let words = "word ".repeat(400);
+    let left = "<img src=cid:none align=left width=200 height=400>";
+    let right = "<img src=cid:none align=right width=200 height=400>";
+    let plain = drawn_height(&format!("<p>{words}</p>"), 600.0);
+    let one = drawn_height(&format!("<p>{left}{words}</p>"), 600.0);
+    let both = drawn_height(&format!("<p>{left}{right}{words}</p>"), 600.0);
+    // Each picture takes room from the lines beside it, so the same words take more lines.
+    assert!(one > plain + 20.0 && both > one + 20.0, "{plain}, {one}, {both}");
+    // Two on the same side stand beside one another, not one under the other.
+    let pair = drawn_height(&format!("<p>{left}{left}a</p>"), 600.0);
+    let single = drawn_height(&format!("<p>{left}a</p>"), 600.0);
+    assert!((pair - single).abs() < 1.0, "{pair} against {single}");
+    // Pictures that end at different heights: the text is as wide as each leaves it, so it is
+    // between what two short ones and two tall ones make of it.
+    let short = "<img src=cid:none align=right width=200 height=60>";
+    let mixed = drawn_height(&format!("<p>{left}{short}{words}</p>"), 600.0);
+    assert!(mixed > one && mixed < both, "{one}, {mixed}, {both}");
+    // A picture set while another still stands: it stands beside the first, and what follows
+    // stands beside both, adding no height.
+    let first = "<p><img src=cid:none align=left width=100 height=300>a</p>";
+    let alone = drawn_height(first, 600.0);
+    let second = drawn_height(&format!("{first}<p><img src=cid:none align=left width=100 height=100>b</p><p>c</p>"), 600.0);
+    assert!((second - alone).abs() < 1.0, "{second} against {alone}");
+    let across = drawn_height(&format!("{first}<p><img src=cid:none align=right width=100 height=200>b</p><p>c</p>"), 600.0);
+    assert!((across - alone).abs() < 1.0, "{across} against {alone}");
+    // One for which there is no room beside the others stands in the text between them, as
+    // large as fits there.
+    let crowded = drawn_height(&format!("<p>{left}{right}{left}a</p>"), 600.0);
+    assert!((crowded - single).abs() < 1.0, "{crowded} against {single}");
+    let under = drawn_height(&format!("<p>{left}{right}<img src=cid:none align=left width=150 height=800>a</p>"), 600.0);
+    assert!(under > single + 300.0, "{under} against {single}");
+    // Inside a border the pictures are given their room before the border closes.
+    let framed = drawn_height(&format!("<p style=\"border:1px solid red\">{left}{right}a</p>"), 600.0);
+    assert!(framed >= single, "{framed} against {single}");
+
+    // Any number of them, at any width, from either side: drawn, and never a panic.
+    let many: String = (0..60)
+        .map(|i| {
+            format!("<img src=cid:none align={} width={} height={}>w ", if i % 3 == 0 { "left" } else { "right" }, 1 + i * 37 % 500, 1 + i * 53 % 900)
+        })
+        .collect();
+    let hostile = format!(
+        "<p>{many}</p><p dir=rtl>{left}{right}{words}</p><blockquote><ul><li>{left}{right}{many}</ul></blockquote>\
+         <table border=1><tr><td>{many}<td>{left}{left}{left}{right}x</table><p style=\"border:3px solid red\">{many}</p>{many}<br clear=all><p>end</p>"
+    );
+    for width in [0.0, 1.0, 40.0, 130.0, 333.3, 2000.0, 1e6] {
+        let height = drawn_height(&hostile, width);
+        assert!(height.is_finite() && height > 0.0, "{width}: {height}");
+    }
+}
+
+/// A PNG of one colour in its middle and nothing round it, or of one colour throughout.
+fn glass(colour: [u8; 3], whole: bool) -> Vec<u8> {
+    let image = image::RgbaImage::from_fn(40, 20, |x, y| {
+        let inside = whole || ((10..30).contains(&x) && (5..15).contains(&y));
+        image::Rgba([colour[0], colour[1], colour[2], if inside { 255 } else { 0 }])
+    });
+    let mut file = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut file, image::ImageFormat::Png).unwrap();
+    file.into_inner()
+}
+
+fn fills(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
+    match shape {
+        egui::Shape::Rect(rect) => out.push(rect.fill),
+        egui::Shape::Vec(list) => list.iter().for_each(|s| fills(s, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn a_dark_picture_seen_through_is_given_paper_behind_it_on_the_dark_pane() {
+    // How light what is seen of a picture is; none for one that covers its room.
+    assert_eq!(pictures::ink(&[0, 0, 0, 255].repeat(50)), None);
+    assert_eq!(pictures::ink(&[]), None);
+    assert_eq!(pictures::ink(&[9, 9, 9, 0].repeat(50)), None, "nothing of it is seen");
+    let half = |colour: [u8; 3]| [[colour[0], colour[1], colour[2], 255], [255, 255, 255, 0]].concat().repeat(40);
+    assert!(pictures::ink(&half([0, 0, 0])).unwrap() < 0.01);
+    assert!(pictures::ink(&half([255, 255, 255])).unwrap() > 0.99);
+    assert!((pictures::ink(&half([128, 128, 128])).unwrap() - 0.5).abs() < 0.01);
+    // One soft pixel in a hundred is not see-through enough to count.
+    let mut photo = [20, 20, 20, 255].repeat(100);
+    photo[3] = 0;
+    assert_eq!(pictures::ink(&photo), None);
+    for junk in [&[1u8, 2, 3][..], &[0; 7], &[255; 4]] {
+        let _ = pictures::ink(junk);
+    }
+    let _ = pictures::ink(&vec![77; 4 * 300_000 + 3]);
+
+    let mut item = openmailclient_model::Item::new_mail();
+    for (id, data) in [("dark", glass([10, 10, 30], false)), ("light", glass([250, 250, 240], false)), ("solid", glass([10, 10, 30], true))] {
+        let mut a = openmailclient_model::Attachment::file(&format!("{id}.png"), "image/png", data);
+        a.props.set_str(pid::ATTACH_CONTENT_ID, id);
+        item.attachments.push(a);
+    }
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let backed = |html: &str, dark: bool| {
+        let doc = openmailclient_formats::html::parse(html);
+        let mut shown = pictures::Pictures::default();
+        shown.load(&ctx, 1, &doc, &item);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_max_width(500.0);
+            body::draw(ui, &doc, &theme::Tokens::named(dark), &shown, &faces::Faces::default());
+        });
+        output.textures_delta.clear();
+        let mut seen = Vec::new();
+        output.shapes.iter().for_each(|clipped| fills(&clipped.shape, &mut seen));
+        seen.iter().filter(|fill| **fill == body::BACKING).count()
+    };
+    // A dark drawing on glass would be lost on the dark pane: paper is laid behind it, in the
+    // text and at the side alike.
+    assert_eq!(backed("<p>a <img src=cid:dark> b</p>", true), 1);
+    assert_eq!(backed("<p><img src=cid:dark align=left>beside</p><p><img src=cid:dark></p>", true), 2);
+    // Not on the light pane, not behind a light drawing (made for a dark page), not behind a
+    // picture that covers its room, and not where the message chose what is behind.
+    assert_eq!(backed("<p>a <img src=cid:dark> b</p>", false), 0);
+    assert_eq!(backed("<p><img src=cid:light> <img src=cid:solid> <img src=cid:none></p>", true), 0);
+    assert_eq!(backed("<table><tr><td bgcolor=#203040><img src=cid:dark></table>", true), 0);
+}

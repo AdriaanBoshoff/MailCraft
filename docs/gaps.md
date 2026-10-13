@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 65 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 66 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -22,8 +22,8 @@
    break clears them. Text is drawn in the fonts the message names when they are installed, in
    their own bold and italic faces, with open fonts of the same measures standing in; no font is
    bundled. Borders set in styles are drawn round paragraphs, tables and cells, and cells span
-   rows as well as columns. Not yet: several pictures at the sides of one paragraph, or a second one while the
-   first still stands; a backing for see-through pictures on the dark pane; boxes
+   rows as well as columns. Several pictures stand at the sides of one paragraph, and a dark see-through picture has
+   paper behind it on the dark pane (M3b.24). Not yet: boxes
    inside one another, a fill behind a table in a block and behind the whole body; borders on
    text within a line and rounded corners. Style sheets
    are read as far as Outlook follows them (rules by element name, first class and id); tables keep
@@ -78,6 +78,7 @@
 
 ## Revision history
 
+- 66 · 2026-10-13 — M3b.24: several pictures stand at the sides of one paragraph, in the window and on paper; a dark see-through picture has paper behind it on the dark pane.
 - 65 · 2026-10-13 — M3b.23: SVG, WebP and TIFF pictures are shown; animated GIF, PNG and WebP are played (`view.animations`).
 - 64 · 2026-10-13 — M3b.22: Table Style prints chosen columns, group headings and the selected message; the print preview has a zoom.
 - 63 · 2026-10-13 — M3b.21: ANSI data files are written (`file.export` with `"kind": "ansi"`), take changes and stay ANSI when saved; 4K-page files stay read-only.
