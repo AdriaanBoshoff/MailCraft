@@ -120,7 +120,7 @@ fn inspect(path: &Path, check: bool) -> Result<(), String> {
             if check {
                 println!("check: {listed} rows listed, {loaded} items loaded, {failed} failed");
                 match io::check_structure(path).map_err(|e| e.to_string())? {
-                    None => println!("structure: not checked for this kind of data file yet"),
+                    None => println!("structure: not checked, this kind of data file is not known to the check"),
                     Some(s) => {
                         println!(
                             "structure: {} pages, {} blocks, {} nodes, {} bytes free, {} problems",

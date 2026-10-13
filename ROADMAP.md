@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 71 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 72 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 289, all passing |
+| Tests | 292, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -106,7 +106,8 @@
 55. Done: a file attached again with other contents keeps what is stored on it, and an attachment that cannot be read stays where it is (M3b.17).
 56. Done: a value of another type than its column's is shown as the column holds it; the structure check hears Stop and compares a heap's fill levels with its blocks (M3b.18).
 57. Done: an export of any mailbox runs on a thread of its own: the sample, an `.ost`, an ANSI `.pst` and a 4K-page file as well (M3b.19).
-58. Next: M3b.20: the structure check for ANSI data files and for files with 4K pages.
+58. Done: the structure check covers ANSI data files and files with 4K pages (M3b.20).
+59. Next: M3b.21: ANSI data files are written, and a re-saved one keeps its kind.
 
 ## Do later (from M2)
 
@@ -155,7 +156,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file)~~ | done: M3b.19 |
 | ~~The structure check hearing Stop~~ | done: M3b.18 |
 | ~~Table cells whose type differs from the column's kept in a saved `.pst`'s tables~~ | done: M3b.18, where nothing is lost by it; otherwise the cell is empty and the item keeps the value |
-| The structure check for ANSI and 4K-page (`.ost`) files | M3b |
+| ~~The structure check for ANSI and 4K-page (`.ost`) files~~ | done: M3b.20 |
+| The structure check on a 4K-page file's heap fill levels, on the last eight bytes of its trailers and on a second section's map pages | with a 4K-page file that shows them, or a public description |
 | ~~The structure check reaching into heaps, property lists and tables~~ | done: M3b.13 |
 | ~~The structure check comparing a heap's fill levels with its free space~~ | done: M3b.18 |
 | The structure check run on a 512-byte-page `.pst` written by Outlook | with the first such file we may read |
@@ -1133,3 +1135,32 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   `.pst` and a 4K-page file were not exported this way in a test, there being no writer for
   them yet (they take the same path as the `.ost` in the test); a data file that was opened
   from bytes and is in no file is exported on the caller's thread.
+- **2026-10-13** - M3b.20: the structure check for the other two kinds of data file. It knew Unicode files
+  with 512-byte pages and said of the others that it could not look. It is now given the
+  layout of the kind it is looking at (`Geom` in `crates/pst/src/check.rs`): the size of a
+  page and of its trailer, where a map's bits are, how much one bit stands for, where the
+  first map is, where a tree's page counts its entries, a block's trailer and its largest
+  size, and whether an id is four bytes or eight. An ANSI file is held against [MS-PST]:
+  the header with its one checksum and its root at 164, trailers of twelve bytes with the id
+  before the checksum, maps with four bytes of padding before their bits, tree entries of
+  twelve and sixteen bytes, blocks of up to 8180 bytes, subnode blocks whose entries begin
+  after four bytes, and inside the nodes a table's row index with places of two bytes. A
+  file with 4K pages (wVer 36) is in no specification; what is held against it was measured
+  on the local `.ost` copies, structure only: pages of 4096 bytes with a trailer of 24 whose
+  first sixteen are a Unicode trailer, entry counts of two bytes at 4056, the first
+  allocation map at 0x22000 with a bit for 512 bytes and one section of 4072 * 8 * 512
+  bytes, no page map or free maps, blocks of up to 64 KB less a trailer of 24, a checksum
+  of the bytes as stored, and a block entry with the inflated size before the reference
+  count. The three local files pass with nothing found, inside the nodes too (5 to 8 pages,
+  99 to 313 blocks, 158 to 272 nodes; counts only, the files stay local). Made better on
+  the way: a block stored deflated is inflated by the check and has to come to the size its
+  entry gives, which the reader does not ask; and `inspect --check` of the CLI now says
+  what it finds for every kind of data file we read. 3 tests: an ANSI file and a 4K-page
+  file put together byte by byte in the test (not by our writer, and not from any real
+  file), each sound and then with a block, the free count, a map and a heap's fill level
+  wrong; both cut short and smashed 400 times without a panic. This is also the first
+  4K-page fixture in the repository (gaps item 8), small as it is. Not done: a 4K-page
+  file's heap fill levels (their steps for 64 KB blocks are not known) and the eight bytes
+  after its trailers are not held against anything; a 4K-page file with a second section
+  was not seen, so whether one has more map pages is not known; where an ANSI file has its
+  free maps is worked out as for a Unicode file; no Outlook-written ANSI file was tried.

@@ -5,7 +5,7 @@
 //! The reader in `ltp` takes what it can from a damaged heap and goes on; this takes nothing
 //! for granted, so that a file we wrote is known to be what another program expects.
 
-use crate::ndb::{Ndb, Subnodes, u16_at, u32_at};
+use crate::ndb::{Ndb, Subnodes, Ver, u16_at, u32_at};
 use openmailclient_model::ptype;
 use std::collections::HashSet;
 
@@ -15,8 +15,16 @@ const MAX_DEPTH: u8 = 8;
 const MAX_RECORDS: usize = 1 << 20;
 const MAX_ROWS: usize = 4_000_000;
 
-/// The bytes a data block of a Unicode file with 512-byte pages holds ([MS-PST] 2.2.2.8.3.1).
-const BLOCK: usize = 8176;
+/// The bytes a data block holds ([MS-PST] 2.2.2.8.3.1): 8 KB less the trailer, which is
+/// twelve bytes in an ANSI file and sixteen in a Unicode one. A file with 4K pages is not
+/// in the specification, and how full its blocks are said to be is not held against anything.
+fn block_size(ver: Ver) -> Option<usize> {
+    match ver {
+        Ver::Ansi => Some(8180),
+        Ver::Unicode => Some(8176),
+        Ver::Unicode4k => None,
+    }
+}
 
 /// How full a block with `free` bytes left is said to be ([MS-PST] 2.3.1.2, rgbFillLevel):
 /// 0 with at least 3584 bytes free, and so on to 15 with fewer than 8.
@@ -59,10 +67,17 @@ struct Heap {
     blocks: Vec<Vec<u8>>,
     client: u8,
     root: u32,
+    ver: Ver,
 }
 
 impl Heap {
+    /// The heap of a Unicode file with 512-byte pages.
+    #[cfg(test)]
     fn new(blocks: Vec<Vec<u8>>) -> Result<Self, String> {
+        Self::of(blocks, Ver::Unicode)
+    }
+
+    fn of(blocks: Vec<Vec<u8>>, ver: Ver) -> Result<Self, String> {
         let first = blocks.first().ok_or("its heap has no data")?;
         // HNHDR ([MS-PST] 2.3.1.2): ibHnpm, bSig, bClientSig, hidUserRoot, rgbFillLevel.
         if first.get(2) != Some(&SIG_HEAP) {
@@ -102,7 +117,8 @@ impl Heap {
             Some(if (i - holder).is_multiple_of(2) { byte & 15 } else { byte >> 4 })
         };
         let last = if blocks.len() <= 8 { 8 } else { 8 + (blocks.len() - 8).div_ceil(128) * 128 };
-        for i in 0..last {
+        let size = block_size(ver);
+        for i in 0..if size.is_some() { last } else { 0 } {
             let Some(said) = said(i) else { continue };
             let Some(b) = blocks.get(i) else {
                 if said != 0 {
@@ -114,7 +130,7 @@ impl Heap {
             // the map counts those. How the edges of a level are counted by other programs
             // is not known, so a level may be one off; further off it misleads whoever
             // looks for room.
-            let is = level(BLOCK.saturating_sub(b.len()));
+            let is = level(size.unwrap_or(0).saturating_sub(b.len()));
             let given_up = u16_at(b, usize::from(u16_at(b, 0).unwrap_or(0)) + 2).unwrap_or(0);
             if said > is + 1 {
                 return Err(format!("block {i} of its heap is said to be fuller than it is (level {said}, and it is at {is})"));
@@ -123,16 +139,22 @@ impl Heap {
                 return Err(format!("block {i} of its heap is said to have more room than it has (level {said}, and it is at {is})"));
             }
         }
-        Ok(Self { blocks, client, root })
+        Ok(Self { blocks, client, root, ver })
     }
 
     /// One allocation by HID ([MS-PST] 2.3.1.1): five bits of kind (zero), eleven of a
-    /// 1-based index, sixteen of the block.
+    /// 1-based index, sixteen of the block. A file with 4K pages has more allocations in
+    /// its larger blocks: there the index is taken as fourteen bits and the block as
+    /// thirteen, as the reader takes them.
     fn alloc(&self, hid: u32) -> Option<&[u8]> {
         if hid & 0x1F != 0 {
             return None;
         }
-        let (block, index) = ((hid >> 16) as usize, ((hid >> 5) & 0x7FF) as usize);
+        let (block, index) = if self.ver == Ver::Unicode4k {
+            ((hid >> 19) as usize, ((hid >> 5) & 0x3FFF) as usize)
+        } else {
+            ((hid >> 16) as usize, ((hid >> 5) & 0x7FF) as usize)
+        };
         let b = self.blocks.get(block)?;
         let map = usize::from(u16_at(b, 0)?);
         if index == 0 || index > usize::from(u16_at(b, map)?) {
@@ -338,8 +360,11 @@ fn table(ndb: &mut Ndb, heap: &Heap, subs: &Subnodes) -> Result<(), String> {
     let rows: Vec<&[u8]> = if row_size == 0 { Vec::new() } else { blocks.iter().flat_map(|b| b.chunks_exact(row_size)).take(MAX_ROWS).collect() };
     // The row index ([MS-PST] 2.3.4.3): a row's id, and which row that is.
     let mut taken = HashSet::new();
-    for rec in bth(heap, row_index, 4, 4, "its table's row index")? {
-        let (Some(id), Some(n)) = (u32_at(rec, 0), u32_at(rec, 4)) else { continue };
+    // TCROWID ([MS-PST] 2.3.4.3.1): the place of a row is four bytes, and two in an ANSI file.
+    let place = if heap.ver == Ver::Ansi { 2 } else { 4 };
+    for rec in bth(heap, row_index, 4, place, "its table's row index")? {
+        let n = if place == 2 { u16_at(rec, 4).map(u32::from) } else { u32_at(rec, 4) };
+        let (Some(id), Some(n)) = (u32_at(rec, 0), n) else { continue };
         let row = rows.get(n as usize).ok_or(format!("its table's row index puts the row {id:#x} at {n}, past the last row"))?;
         if !taken.insert(n) {
             return Err(format!("its table's row index puts two rows at {n}"));
@@ -392,7 +417,7 @@ impl Inside<'_, '_> {
         if kind != Holds::Other && data != 0 {
             let found = match self.ndb.data_blocks(data) {
                 Err(e) => Err(format!("its data cannot be read: {e}")),
-                Ok(blocks) => Heap::new(blocks).and_then(|heap| match kind {
+                Ok(blocks) => Heap::of(blocks, self.ndb.ver).and_then(|heap| match kind {
                     Holds::Table => table(self.ndb, &heap, &subs),
                     _ => properties(&heap, &subs),
                 }),

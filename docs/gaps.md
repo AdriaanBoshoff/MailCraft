@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 61 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 62 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -54,8 +54,10 @@
    produced by a test-only builder, including truncated, corrupted and cyclic ones. Checked locally
    against a few small Outlook-written 4K-page `.ost` files (wVer 36): every folder and every item
    loaded. No Outlook-written Unicode or ANSI `.pst`, and no large mailbox, has been tried yet.
-8. **No committed fixture for 4K-page files.** The real files used for the check above are private and
-   stay local; the test builder only writes 512-byte-page files.
+8. **Only a small committed fixture for 4K-page files.** The real files used for the check above are
+   private and stay local; the writer only writes 512-byte-page files. A small 4K-page file is put
+   together by hand in `crates/pst/src/tests_check_kinds.rs` for the structure check (M3b.20): a few
+   nodes, no mailbox.
 9. **`.msg`/`.oft` output is checked in Outlook Classic only for plain mail.** Outlook opens our
    messages and templates and reads back subject, sender, recipients, times, flags, categories, bodies
    and a file attachment ([file-format-parity.md](file-format-parity.md)). Attached messages, inline
@@ -77,6 +79,7 @@
 
 ## Revision history
 
+- 62 · 2026-10-13 — M3b.20: the structure check covers ANSI files (from the specification) and 4K-page files (from measurement); three local Outlook-written 4K-page files pass it.
 - 61 · 2026-10-13 — M3b.19: `file.export` with `"wait": false` runs on a thread of its own for every kind of mailbox, the writing from what is read included.
 - 60 · 2026-10-13 — M3b.18: values of another type than their column's are shown as the column holds them; the structure check hears Stop and compares fill levels.
 - 59 · 2026-10-13 — M3b.17: a file attached again with other contents keeps its stored properties; attachments that cannot be read are carried through a save.

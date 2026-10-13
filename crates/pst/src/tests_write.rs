@@ -255,9 +255,10 @@ fn damage_is_found_and_never_panics() {
         let _ = check(&mut Cursor::new(&bytes[..len]));
     }
     assert!(matches!(check(&mut Cursor::new(b"not a data file".to_vec())), Err(PstError::NotPst)));
-    // A file of another format is not called damaged: it is not checked.
+    // A file of a format the check does not know is not called damaged: it is not checked.
+    // (One that says it has 4K pages and has not is looked at as such, and found wanting.)
     let mut other = bytes.clone();
-    other[10] = 36;
+    other[10] = 99;
     assert!(matches!(check(&mut Cursor::new(other)), Err(PstError::Unsupported(_))));
 }
 
