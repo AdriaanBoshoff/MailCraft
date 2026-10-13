@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 68 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 69 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -40,7 +40,7 @@
    2.3.4 and 2.3.6, any other as a card with its name and size that a click saves),
    paragraph borders and the room paragraphs ask for above and below,
    and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet in a metafile: a part of a bitmap, one mirrored, turned, packed in runs or not copied as it is, a patterned brush, or text that needs shaping
-   (a placeholder), list numbers an override changes (`\lfolevel`), and Outlook's highlight colours. OpenMailClient never writes compressed RTF
+   (a placeholder). List numbers follow what an override changes (`\lfolevel`) and a highlight is one of the sixteen marker colours (M3b.27). OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, sending pages to a printer,
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 69 · 2026-10-13 — M3b.27: an RTF highlight is one of the sixteen marker colours, and list numbers follow what their override changes.
 - 68 · 2026-10-13 — M3b.26: text within a line is drawn in its border, and boxes and cells have rounded corners, in the window, on paper and in the PDF.
 - 67 · 2026-10-13 — M3b.25: boxes stand inside one another, a table stands inside its block, and a body has its colour behind it, in the window and on paper.
 - 66 · 2026-10-13 — M3b.24: several pictures stand at the sides of one paragraph, in the window and on paper; a dark see-through picture has paper behind it on the dark pane.

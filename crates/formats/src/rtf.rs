@@ -103,8 +103,10 @@ enum Dest {
     /// (`\leveltext`).
     Lists,
     LevelText,
-    /// Which list each list paragraph is of (`\listoverridetable`).
+    /// Which list each list paragraph is of (`\listoverridetable`), and the words of a level
+    /// that one of them writes anew.
     Overrides,
+    OverrideText,
 }
 
 /// Lists a body may describe, levels a list has, lists paragraphs may name, and characters
@@ -131,10 +133,69 @@ struct List {
     levels: Vec<ListLevel>,
 }
 
-/// Where a list has counted to: the number of each level, where it has one.
+/// Where a list has counted to: the number of each level, where it has one, and which of
+/// the numbers that paragraphs name (`\ls`) counted last.
 #[derive(Clone, Copy, Default)]
 struct Count {
     at: [Option<i32>; MAX_LEVELS],
+    ls: Option<i32>,
+}
+
+/// What paragraphs that name one number (`\ls`) have otherwise than their list says, for one
+/// level (`\lfolevel`; RTF 1.9.1, "List Override Table").
+#[derive(Clone, Default)]
+struct Changed {
+    /// The level starts at a number of its own (`\listoverridestartat`).
+    starts: bool,
+    /// The level is written in a way of its own (`\listoverrideformat`).
+    formats: bool,
+    start: Option<i32>,
+    level: Option<ListLevel>,
+}
+
+/// The sixteen colours a highlight is kept as (ECMA-376 Part 1, 17.18.40, names them). RTF
+/// gives a highlight as a place in the colour table (RTF 1.9.1, "Highlighting"); what stands
+/// there is shown as the one of these it is nearest to.
+const MARKERS: [Rgb; 16] = [
+    [0, 0, 0],
+    [0, 0, 255],
+    [0, 255, 255],
+    [0, 255, 0],
+    [255, 0, 255],
+    [255, 0, 0],
+    [255, 255, 0],
+    [255, 255, 255],
+    [0, 0, 128],
+    [0, 128, 128],
+    [0, 128, 0],
+    [128, 0, 128],
+    [128, 0, 0],
+    [128, 128, 0],
+    [128, 128, 128],
+    [192, 192, 192],
+];
+
+/// The highlight colour `color` is shown as: itself when it is one of the sixteen; a grey by
+/// how light it is when it has nearly no colour; else the pure colour of its hue, bright or
+/// dark. (Seen in Outlook for one case: a pale yellow is shown as bright yellow.)
+fn highlighter(color: Rgb) -> Rgb {
+    if MARKERS.contains(&color) {
+        return color;
+    }
+    let (most, least) = (color.iter().copied().max().unwrap_or(0), color.iter().copied().min().unwrap_or(0));
+    let spread = most - least;
+    if spread < 24 {
+        let grey = match most {
+            0..=63 => 0,
+            64..=159 => 128,
+            160..=223 => 192,
+            _ => 255,
+        };
+        return [grey; 3];
+    }
+    // A part is in the hue when it is nearer the most of the three than the least.
+    let full = if most >= 192 { 255 } else { 128 };
+    color.map(|part| if u16::from(part - least) * 2 >= u16::from(spread) { full } else { 0 })
 }
 
 /// A picture being read.
@@ -303,6 +364,11 @@ struct Builder<'a> {
     list: Option<List>,
     override_id: i32,
     overrides: HashMap<i32, i32>,
+    /// The levels the override being read changes, whether the last `\lfolevel` is one of
+    /// them, and the changes of each number that paragraphs name.
+    changed: Vec<Changed>,
+    changing: bool,
+    changes: HashMap<i32, Vec<Changed>>,
     counts: HashMap<i32, Count>,
     colors: Vec<Option<Rgb>>,
     rgb: Option<Rgb>,
@@ -369,14 +435,8 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                     }
                     Dest::Picture => b.picture_word(&mut scope.cur, word, param, star),
                     Dest::Lists => b.list_word(&mut scope.cur, word, param, star),
-                    Dest::Overrides => match word {
-                        "listid" => b.override_id = param.unwrap_or(0),
-                        "ls" if b.overrides.len() < MAX_OVERRIDES => {
-                            b.overrides.insert(param.unwrap_or(0), b.override_id);
-                        }
-                        _ => {}
-                    },
-                    Dest::Skip | Dest::Instruction | Dest::Marker | Dest::LevelText => {}
+                    Dest::Overrides => b.override_word(&mut scope.cur, word, param),
+                    Dest::Skip | Dest::Instruction | Dest::Marker | Dest::LevelText | Dest::OverrideText => {}
                 }
             }
             Event::Bin(data, whole) => {
@@ -420,6 +480,12 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                     }
                     Dest::LevelText => {
                         if let Some(level) = b.list.as_mut().and_then(|l| l.levels.last_mut()) {
+                            let room = MAX_LEVEL_TEXT.saturating_sub(level.text.len());
+                            level.text.extend(text.chars().take(room));
+                        }
+                    }
+                    Dest::OverrideText => {
+                        if let Some(level) = b.changed.last_mut().filter(|_| b.changing).and_then(|c| c.level.as_mut()) {
                             let room = MAX_LEVEL_TEXT.saturating_sub(level.text.len());
                             level.text.extend(text.chars().take(room));
                         }
@@ -495,7 +561,9 @@ impl Builder<'_> {
             // Half points.
             "fs" => cur.style.size = param.map(|p| f32::from(u16::try_from(p.clamp(2, 800)).unwrap_or(24)) / 2.0),
             "cf" => cur.style.color = color(&self.colors),
-            "highlight" | "cb" | "chcbpat" => cur.style.background = color(&self.colors),
+            // A highlight is one of sixteen colours, whatever the colour table holds.
+            "highlight" => cur.style.background = color(&self.colors).map(highlighter),
+            "cb" | "chcbpat" => cur.style.background = color(&self.colors),
             // The colour behind a whole paragraph (RTF 1.9.1, "Paragraph Shading").
             "cbpat" => cur.shade = color(&self.colors),
             "super" => cur.style.script = Script::Super,
@@ -727,6 +795,61 @@ impl Builder<'_> {
         }
     }
 
+    /// A control word inside `\listoverridetable` (RTF 1.9.1, "List Override Table"): which
+    /// list a number that paragraphs name stands for, and what its levels have otherwise
+    /// than the list says. The first `\lfolevel` is for the first level, and so on.
+    fn override_word(&mut self, cur: &mut Chars, word: &str, param: Option<i32>) {
+        match word {
+            "listoverride" => {
+                self.changed.clear();
+                self.changing = false;
+            }
+            "listid" => self.override_id = param.unwrap_or(0),
+            "lfolevel" => {
+                self.changing = self.changed.len() < MAX_LEVELS;
+                if self.changing {
+                    self.changed.push(Changed::default());
+                }
+            }
+            "listoverridestartat" => self.change(|c| c.starts = true),
+            "listoverrideformat" => self.change(|c| c.formats = true),
+            "listlevel" => self.change(|c| c.level = Some(ListLevel { start: 1, ..ListLevel::default() })),
+            "levelstartat" => self.change(|c| c.start = Some(param.unwrap_or(1))),
+            "levelnfc" | "levelnfcn" => self.change(|c| {
+                if let Some(level) = &mut c.level {
+                    level.nfc = param.unwrap_or(0);
+                }
+            }),
+            "leveltext" => {
+                cur.dest = Dest::OverrideText;
+                self.change(|c| {
+                    if let Some(level) = &mut c.level {
+                        level.text.clear();
+                    }
+                });
+            }
+            "levelnumbers" => cur.dest = Dest::Skip,
+            "ls" if self.overrides.len() < MAX_OVERRIDES => {
+                let ls = param.unwrap_or(0);
+                self.overrides.insert(ls, self.override_id);
+                let changed = std::mem::take(&mut self.changed);
+                self.changing = false;
+                if changed.iter().any(|c| c.starts || c.formats) {
+                    self.changes.insert(ls, changed);
+                } else {
+                    self.changes.remove(&ls);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn change(&mut self, set: impl FnOnce(&mut Changed)) {
+        if let Some(changed) = self.changed.last_mut().filter(|_| self.changing) {
+            set(changed);
+        }
+    }
+
     fn level(&mut self, set: impl FnOnce(&mut ListLevel)) {
         if let Some(level) = self.list.as_mut().and_then(|l| l.levels.last_mut()) {
             set(level);
@@ -750,13 +873,23 @@ impl Builder<'_> {
         let id = *self.overrides.get(&ls)?;
         let list = self.lists.iter().find(|l| l.id == id)?;
         let at = usize::from(cur.ilvl).min(MAX_LEVELS - 1);
-        let level = list.levels.get(at)?;
-        if self.counts.len() >= MAX_OVERRIDES && !self.counts.contains_key(&ls) {
+        // A level as these paragraphs have it: as their own number changes it, or as the list
+        // says.
+        let changes = self.changes.get(&ls);
+        let changed = |n: usize| changes.and_then(|c| c.get(n));
+        let level_of = |n: usize| changed(n).filter(|c| c.formats).and_then(|c| c.level.as_ref()).or_else(|| list.levels.get(n));
+        let start_of = |n: usize| changed(n).filter(|c| c.starts).and_then(|c| c.start).or_else(|| list.levels.get(n).map(|l| l.start)).unwrap_or(1);
+        let level = level_of(at)?;
+        // One list counts on through every number that names it; a number that says where
+        // its level starts begins there when it takes over.
+        if self.counts.len() >= MAX_OVERRIDES && !self.counts.contains_key(&id) {
             return None;
         }
-        let count = self.counts.entry(ls).or_default();
+        let count = self.counts.entry(id).or_default();
+        let anew = count.ls != Some(ls) && changed(at).is_some_and(|c| c.starts);
+        count.ls = Some(ls);
         let slot = count.at.get_mut(at)?;
-        *slot = Some(slot.map_or(level.start, |n| n.saturating_add(1)));
+        *slot = Some(slot.filter(|_| !anew).map_or(start_of(at), |n| n.saturating_add(1)));
         for deeper in count.at.iter_mut().skip(at + 1) {
             *deeper = None;
         }
@@ -772,8 +905,8 @@ impl Builder<'_> {
         for c in words {
             match usize::try_from(*c as u32).ok().filter(|n| *n < MAX_LEVELS) {
                 Some(of) => {
-                    let nfc = list.levels.get(of).map_or(0, |l| l.nfc);
-                    let n = count.at.get(of).copied().flatten().or_else(|| list.levels.get(of).map(|l| l.start)).unwrap_or(1);
+                    let nfc = level_of(of).map_or(0, |l| l.nfc);
+                    let n = count.at.get(of).copied().flatten().unwrap_or_else(|| start_of(of));
                     out.push_str(&numbered(n, nfc));
                 }
                 None => out.push(*c),

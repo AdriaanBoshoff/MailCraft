@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 21 · 2026-10-13 · borders round text within a line and rounded corners on boxes and cells (M3b.26), ours, not compared with Outlook; boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 22 · 2026-10-13 · an RTF highlight is a marker colour as in the one case seen (M3b.27); borders round text within a line and rounded corners on boxes and cells (M3b.26), ours, not compared with Outlook; boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -90,7 +90,7 @@ Nothing from the owner's mailbox was involved.
 | Room round an RTF table and in its cells | the table stands right under the paragraph before it; rows are as tall as their text | the same, with 1 px above and below the text and 2 px beside it | close |
 | RTF picture (`\pict` with PNG data) | in the line of text on its baseline, at its own size, or at the goal size times the scale | the same; JPEG too | same |
 | RTF left indent | 720 twips is 48 | 720 twips is 48 | same |
-| RTF highlight | a bright marker colour from a fixed palette | the colour the RTF's colour table gives | differs |
+| RTF highlight | a bright marker colour from a fixed palette: a pale yellow in the colour table is bright yellow | one of sixteen marker colours: the colour itself when it is one, a grey, or the pure colour of its hue | same for the case seen; others not compared |
 | Message window type | an RTF-only `.msg` is shown as rich text only when it is marked as in sync (see [file-format-parity.md](file-format-parity.md)) | written so | same |
 
 Not followed yet, in order of how much they show: the space Outlook
@@ -123,6 +123,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 22 · 2026-10-13 — an RTF highlight is shown as one of sixteen marker colours: the pale yellow of the receipt message is bright yellow, as Outlook shows it (M3b.27). Other colours are chosen by hue, which is ours and was not compared.
 - 21 · 2026-10-13 — text within a line is drawn in its border; boxes and cells have rounded corners (M3b.26). Not compared with Outlook.
 - 20 · 2026-10-13 — boxes inside one another; a table inside the block it was written in; a body colour fills the reading pane (M3b.25). Not compared with Outlook.
 - 19 · 2026-10-13 — several pictures at the sides of one paragraph; paper behind a dark see-through picture on the dark pane (M3b.24). Not compared with Outlook.

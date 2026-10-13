@@ -234,7 +234,7 @@ fn rtf_keeps_styles_paragraphs_tables_and_links() {
     assert!(table.rows[0][1].edges.is_none() && table.rows[1][0].edges.is_none());
     assert_eq!((table.rows.len(), table.columns()), (2, 2));
     let Block::Para(total) = &table.rows[1][0].blocks[0] else { panic!("a paragraph") };
-    assert_eq!(total.runs[0].style.background, Some([255, 242, 204]));
+    assert_eq!(total.runs[0].style.background, Some([255, 255, 0]));
     assert_eq!(p[3].indent, 2);
     assert_eq!(p[3].runs[1].picture, Some(Picture::Inline(None)));
     let link = by_text(p[4], "the help page");
@@ -3045,4 +3045,99 @@ fn text_within_a_line_has_a_border_and_boxes_have_rounded_corners() {
     let deep = format!("<p>{}x{}</p>", "<span style=\"border:300px double red;border-radius:9px\">".repeat(3000), "</span>".repeat(2990));
     let doc = parse(&deep);
     assert!(paras(&doc).iter().any(|q| q.runs.iter().any(|r| r.style.edge.is_some())));
+}
+
+#[test]
+fn rtf_highlights_are_marker_colours_and_list_numbers_follow_their_overrides() {
+    // RTF 1.9.1, "Highlighting": the highlight is a place in the colour table. It is shown as
+    // one of sixteen colours; a colour behind text that is not a highlight is kept as it is.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi{\\colortbl;\\red255\\green242\\blue204;\\red0\\green128\\blue128;\\red250\\green250\\blue250;\
+          \\red100\\green104\\blue110;\\red30\\green60\\blue140;\\red255\\green150\\blue180;\\red10\\green10\\blue10;}\
+          {\\highlight1 a}{\\highlight2 b}{\\highlight3 c}{\\highlight4 d}{\\highlight5 e}{\\highlight6 f}{\\highlight7 g}\
+          {\\cb1 h}{\\chcbpat6 i}{\\highlight0 j}{\\highlight99 k}\\par}",
+    );
+    let p = paras(&doc);
+    let behind: Vec<Option<[u8; 3]>> =
+        "abcdefghijk".chars().map(|c| p[0].runs.iter().find(|r| r.text.contains(c)).unwrap().style.background).collect();
+    assert_eq!(
+        behind,
+        [
+            // A pale yellow is the yellow marker, as Outlook shows it.
+            Some([255, 255, 0]),
+            // One of the sixteen is itself.
+            Some([0, 128, 128]),
+            // Nearly no colour: a grey, by how light it is.
+            Some([255, 255, 255]),
+            Some([128, 128, 128]),
+            // Else the pure colour of its hue, dark or bright.
+            Some([0, 0, 128]),
+            Some([255, 0, 0]),
+            Some([0, 0, 0]),
+            Some([255, 242, 204]),
+            Some([255, 150, 180]),
+            None,
+            None,
+        ]
+    );
+
+    // RTF 1.9.1, "List Override Table": a number that paragraphs name may start a level of
+    // its list somewhere else (`\listoverridestartat`), or write it another way
+    // (`\listoverrideformat`). The first `\lfolevel` is for the first level.
+    let doc = crate::rtf::parse(
+        b"{\\rtf1\\ansi\
+          {\\*\\listtable{\\list\
+          {\\listlevel\\levelnfc0\\levelstartat1{\\leveltext\\'02\\'00.;}{\\levelnumbers\\'01;}}\
+          {\\listlevel\\levelnfc4\\levelstartat1{\\leveltext\\'03\\'00.\\'01;}{\\levelnumbers\\'01\\'03;}}\\listid7}}\
+          {\\*\\listoverridetable{\\listoverride\\listid7\\listoverridecount0\\ls1}\
+          {\\listoverride\\listid7\\listoverridecount1{\\lfolevel\\listoverridestartat\\levelstartat5}\\ls2}\
+          {\\listoverride\\listid7\\listoverridecount2{\\lfolevel\\listoverridestartat\\listoverrideformat\
+          {\\listlevel\\levelnfc1\\levelstartat3{\\leveltext\\'02\\'00);}{\\levelnumbers\\'01;}}}\
+          {\\lfolevel\\listoverrideformat{\\listlevel\\levelnfc0\\levelstartat9{\\leveltext\\'03\\'00-\\'01;}{\\levelnumbers\\'01\\'03;}}}\\ls3}\
+          {\\listoverride\\listid7\\listoverridecount0\\ls4}}\
+          \\pard\\ls1 one\\par two\\par \
+          \\pard\\ls4 three\\par \
+          \\pard\\ls2 five\\par six\\par \
+          \\pard\\ls2\\ilvl1 six a\\par \
+          \\pard\\ls1 seven\\par \
+          \\pard\\ls2 five again\\par \
+          \\pard\\ls3 three\\par four\\par \
+          \\pard\\ls3\\ilvl1 four one\\par four two\\par \
+          \\pard\\ls4 five\\par}",
+    );
+    let kinds: Vec<String> = paras(&doc)
+        .iter()
+        .map(|p| match &p.kind {
+            ParaKind::Item(marker) => marker.clone(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    // One list counts on through every number that names it; a number that starts a level
+    // somewhere begins there each time it takes over. A level written anew keeps the list's
+    // start unless the override says it starts too.
+    assert_eq!(kinds, ["1.", "2.", "3.", "5.", "6.", "6.a", "7.", "5.", "III)", "IV)", "IV-1", "IV-2", "5."]);
+
+    // Hostile: more levels than a list has, changes with nothing in them, words outside any
+    // level, numbers at the edge, and more overrides than are kept.
+    let mut body =
+        String::from("{\\rtf1\\ansi{\\*\\listtable{\\list{\\listlevel\\levelnfc0{\\leveltext\\'02\\'00.;}}\\listid1}}{\\*\\listoverridetable");
+    body.push_str("\\listoverridestartat\\levelstartat7\\listlevel\\levelnfc3{\\leveltext\\'ff\\'08\\'07}\\ls-5");
+    for i in 0..1500 {
+        body.push_str(&format!("{{\\listoverride\\listid{}\\listoverridecount2147483647", i % 3));
+        for _ in 0..12 {
+            body.push_str("{\\lfolevel\\listoverridestartat\\levelstartat2147483647\\listoverrideformat{\\listlevel\\levelnfc-7\\levelstartat-2147483648{\\leveltext\\'ff\\'00\\'08\\'07\\'01.;}}}");
+        }
+        body.push_str(&format!("{{\\lfolevel}}{{\\lfolevel\\listoverrideformat}}\\ls{i}}}"));
+    }
+    body.push('}');
+    for i in 0..1600 {
+        body.push_str(&format!("\\pard\\ls{}\\ilvl{} x\\par ", i % 1550 - 6, i % 11));
+    }
+    body.push('}');
+    let doc = crate::rtf::parse(body.as_bytes());
+    assert_eq!(paras(&doc).len(), 1600);
+    assert!(paras(&doc).iter().all(|p| match &p.kind {
+        ParaKind::Item(marker) => marker.chars().count() <= 400,
+        _ => true,
+    }));
 }
