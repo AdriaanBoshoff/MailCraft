@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 79 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 80 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 322, all passing |
+| Tests | 328, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -114,7 +114,8 @@
 63. Done: Boxes stand inside one another, a table stands inside the block it was written in, and a body has its colour behind all of it (M3b.25).
 64. Done: Text within a line is drawn in its border, and boxes and cells have rounded corners, in the window, on paper and in the PDF (M3b.26).
 65. Done: An RTF highlight is one of the sixteen marker colours, and list numbers follow what their override changes (M3b.27).
-66. Next: M3b.28: metafiles (a part of a bitmap, mirrored and turned ones, run-packed ones, copies that are not plain, patterned brushes, regions of many boxes).
+66. Done: Metafiles draw parts of bitmaps, mirrored and turned ones, run-packed ones, every way of mixing, hatched and patterned brushes, and regions (M3b.28).
+67. Next: The last M3b row: a save that does not rewrite the whole data file (writes into the data file that are journalled themselves).
 
 ## Do later (from M2)
 
@@ -188,7 +189,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Boxes inside one another; a fill behind a table in a block and behind the whole body~~ | done: M3b.25 |
 | ~~Borders on text within a line; rounded corners~~ | done: M3b.26 |
 | ~~Outlook's highlight colours; list numbers an override changes (`\lfolevel`)~~ | done: M3b.27 |
-| Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes | M3b |
+| ~~Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes~~ | done: M3b.28 |
 | Pictures on a server, loaded on an explicit command (never by themselves) | M4, with accounts |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
@@ -1371,3 +1372,31 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   edge and words outside any level. Not done: what Outlook shows for highlights other than
   the pale yellow was not observed, so the choice by hue is ours; `\levelrestart`,
   `\levellegal` and levels that do not restart under the one above.
+- **2026-10-13** - M3b.28: metafiles. A bitmap in a Windows or an enhanced metafile is laid by the way back
+  from the page to its pixels (`Lay` and `placed` in `crates/formats/src/canvas.rs`), so a
+  part of it, one mirrored (a width or a height below nothing) and one in a world that is
+  turned are all the same work; `metafile::blit` does it for META_STRETCHDIB,
+  META_DIBSTRETCHBLT, META_DIBBITBLT, META_PATBLT ([MS-WMF] 2.3.1, 2.3.3.12) and
+  EMR_STRETCHDIBITS, EMR_BITBLT, EMR_STRETCHBLT ([MS-EMF] 2.3.1). Pixels packed in runs
+  (BI_RLE8, BI_RLE4; [MS-WMF] 2.1.1.7) are unpacked (`unpacked` in
+  `crates/formats/src/metafile.rs`). A copy is mixed with the brush and with what is there
+  by the table in its raster operation (`mixed`; [MS-WMF] 2.1.1.31). Brushes are a colour,
+  one of six hatchings (2.1.1.12) or a bitmap laid side by side (META_DIBCREATEPATTERNBRUSH,
+  META_CREATEPATTERNBRUSH of one bit, EMR_CREATEDIBPATTERNBRUSHPT, EMR_CREATEMONOBRUSH).
+  Regions of many boxes are filled, painted, framed, turned over and cut to (WMF 2.2.1.5 and
+  2.3.3; EMF 2.2.24, records 71 to 75), and a box is kept out of (META_EXCLUDECLIPRECT,
+  EMR_EXCLUDECLIPRECT): what is cut to is a share of each pixel (`Canvas::mask`,
+  `Canvas::cut`). Made better on the way, beyond the row: all 256 ways of mixing are done,
+  not the named few; a clip path of any shape is cut to, and a box in a turned world;
+  regions join by either, one-not-both and without as well as both; a hatching's lines stay
+  even at any size; and a metafile that holds one bitmap is taken as that bitmap only when
+  it takes all of it, unmirrored (before, a part was shown as the whole). 6 tests and 5
+  changed: runs of both kinds with steps, ends and runs past the side; five ways of mixing a
+  bitmap and five with none, by every record; six hatchings, see-through and not, and three
+  kinds of pattern; regions painted, filled, framed, turned over and cut to in both
+  formats, joined four ways, with a state put back and a triangle cut to; bitmaps copied
+  and stretched in an enhanced drawing; and every new record cut to twelve lengths of four
+  kinds of junk, with boxes at the ends of their numbers. Not done: copies with a mask, see-
+  through copies and ones onto a leaning box (EMR_MASKBLT, EMR_ALPHABLEND,
+  EMR_TRANSPARENTBLT, EMR_PLGBLT), pens that mix or are patterned, colours that are numbers
+  in a palette, a one-bit pattern in the text's colours, and a clip that is moved.

@@ -1,17 +1,20 @@
 //! An enhanced metafile that is a drawing of lines, curves, filled shapes, text and bitmaps,
 //! drawn onto a page of pixels ([MS-EMF] 2.3.5 drawing records, 2.3.1 bitmap records, 2.3.7 and
-//! 2.3.8 objects, 2.3.10 the path bracket, 2.3.11 state, 2.3.12 transforms, 2.3.2 clipping). A
-//! metafile that asks for anything this does not draw (a part of a bitmap, one that is turned or
-//! not copied as it is, patterned brushes, regions of many boxes, text in a font nobody
-//! here knows) is not drawn at all: half a picture is worse than its place.
+//! 2.3.8 objects, 2.3.10 the path bracket, 2.3.11 state, 2.3.12 transforms, 2.3.2 clipping).
+//! Bitmaps are copied whole or in part, mirrored and turned, and mixed with the brush and with
+//! what is there ([MS-WMF] 2.1.1.31); brushes are a colour, a hatching or a pattern; regions of
+//! boxes are filled, framed, inverted and cut to, and so is any path. A metafile that asks for
+//! anything this does not draw (a pen of a pattern or one that does not cover, measures in
+//! parts of an inch, text in a font nobody here knows) is not drawn at all: half a picture is
+//! worse than its place.
 
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
 use openmailclient_fonts::Lettering;
 
-use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
-use crate::metafile::{COPY, Drawn, MAX_DIB_PIXELS, dib_pixels, emf_parts, size_at, u32_at};
+use crate::canvas::{Brush, Canvas, Paint, Point, Rgb, Tile, arc, page_size, rounded, steps};
+use crate::metafile::{Blit, Drawn, MAX_DIB_PIXELS, blit, dib_pixels, emf_parts, size_at, u32_at};
 use crate::words::{self, Font, Line};
 
 /// Records one drawing is read through.
@@ -27,6 +30,9 @@ const CURVE: usize = 16;
 
 /// Characters of text in one line.
 const MAX_LINE: usize = 4096;
+/// Boxes one region is of, and the pixels of a brush's pattern.
+const MAX_BOXES: usize = 4096;
+const MAX_TILE: usize = 65_536;
 
 /// Records that change nothing that is drawn here: ways of bitmaps, the palette, colour
 /// matching, comments ([MS-EMF] 2.3.11, 2.3.3).
@@ -142,6 +148,8 @@ struct State {
     at: Point,
     /// On the page; `None` is all of it.
     clip: Option<Clip>,
+    /// How much of each of the page's pixels can be drawn on; `None` is all of each.
+    mask: Option<Arc<Vec<u8>>>,
     /// What text is written in; `None` is one of the device's own fonts, which nobody here
     /// knows.
     font: Option<Arc<Font>>,
@@ -200,14 +208,86 @@ fn boxed(a: Point, b: Point) -> Clip {
     (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))
 }
 
+/// The boxes of the region whose header is at `head` of a record, each moved `by`
+/// ([MS-EMF] 2.2.24, RegionData: a header of 32 bytes that says they are boxes and how many,
+/// then two corners for each).
+fn region(record: &[u8], head: usize, by: &Turn) -> Option<Vec<Vec<Point>>> {
+    let count = size_at(record, head.checked_add(8)?)?;
+    if u32_at(record, head.checked_add(4)?)? != 1 || count > MAX_BOXES {
+        return None;
+    }
+    (0..count)
+        .map(|i| {
+            let at = head.checked_add(32 + 16 * i)?;
+            let (l, t, r, b) = boxed(point(record, at)?, point(record, at.checked_add(8)?)?);
+            Some(vec![by.at((l, t)), by.at((r, t)), by.at((r, b)), by.at((l, b))])
+        })
+        .collect()
+}
+
 impl Page<'_> {
-    /// From the drawing's units to the page's pixels: the world's turn, the window onto the
-    /// viewport, the device onto the page.
-    fn total(&self) -> Turn {
+    /// From the drawing's units to the device's: the world's turn, the window onto the
+    /// viewport.
+    fn device(&self) -> Turn {
         let State { window, viewport, scaled, .. } = self.state;
         let by = if scaled { (viewport.1.0 / window.1.0, viewport.1.1 / window.1.1) } else { (1.0, 1.0) };
         let page = Turn([by.0, 0.0, 0.0, by.1, viewport.0.0 - window.0.0 * by.0, viewport.0.1 - window.0.1 * by.1]);
-        self.state.world.then(&page).then(&self.frame)
+        self.state.world.then(&page)
+    }
+
+    /// From the drawing's units to the page's pixels: to the device, and the device onto the
+    /// page.
+    fn total(&self) -> Turn {
+        self.device().then(&self.frame)
+    }
+
+    /// Draw inside what the drawing is cut to.
+    fn aim(&mut self) {
+        self.canvas.clip = self.state.clip.unwrap_or(self.all());
+        self.canvas.mask = self.state.mask.clone();
+    }
+
+    /// The colour between the lines of a hatching (none when what is behind shows through),
+    /// and how many of the page's pixels one of a pattern's is.
+    fn with(&self) -> (Option<Rgb>, f32) {
+        (self.state.opaque.then_some(self.state.back), self.frame.grow().clamp(1.0, 8.0))
+    }
+
+    /// The brush that was made as object `which`, or one that every device has.
+    fn brush(&self, which: u32) -> Option<Brush> {
+        if which & 0x8000_0000 != 0 {
+            return Some(match which & 0x7FFF_FFFF {
+                0 => Brush::Solid([255; 3]),
+                1 => Brush::Solid([192; 3]),
+                2 => Brush::Solid([128; 3]),
+                3 => Brush::Solid([64; 3]),
+                4 => Brush::Solid([0; 3]),
+                5 => Brush::Null,
+                _ => return None,
+            });
+        }
+        match self.objects.get(usize::try_from(which).ok()?)?.as_ref()? {
+            Object::Brush(brush) => Some(brush.clone()),
+            _ => None,
+        }
+    }
+
+    /// Copy onto the box `to` of the drawing (left, top, wide, high) the part `from` of a
+    /// bitmap (the same four, in its pixels), the brush, or what is there, mixed the way `how`
+    /// says ([MS-WMF] 2.1.1.31). The box is turned as the drawing is.
+    fn copy(&mut self, how: u32, dib: Option<&[u8]>, from: Clip, to: Clip, upwards: bool) -> Option<()> {
+        let (brush, with, forward) = (self.state.brush.clone(), self.with(), self.total().0);
+        self.aim();
+        let drew = blit(&mut self.canvas, &Blit { how, dib, from, to, upwards, forward, brush: &brush, with }, &mut self.pixels)?;
+        self.drew |= drew;
+        Some(())
+    }
+
+    /// Join `rings` to what the drawing is cut to ([MS-EMF] 2.1.29, RegionMode).
+    fn cut_to(&mut self, rings: &[Vec<Point>], winding: bool, mode: u32) -> Option<()> {
+        let was = (self.state.clip, self.state.mask.clone());
+        (self.state.clip, self.state.mask) = self.canvas.cut(was, rings, winding, mode)?;
+        Some(())
     }
 
     fn count(&mut self, points: usize) -> Option<()> {
@@ -221,18 +301,12 @@ impl Page<'_> {
 
     /// Fill `figures` with the brush when `fill`, and draw the pen along them when `line`.
     fn paint(&mut self, figures: &[Figure], fill: bool, line: bool) -> Option<()> {
-        let State { pen, brush, winding, clip, .. } = self.state;
+        let (pen, winding, brush, with) = (self.state.pen, self.state.winding, self.state.brush.clone(), self.with());
         let grow = (self.total().grow(), self.frame.grow());
-        self.canvas.clip = clip.unwrap_or(self.all());
-        if fill {
-            match brush {
-                Brush::Null => {}
-                Brush::Solid(colour) => {
-                    let rings: Vec<Vec<Point>> = figures.iter().map(|figure| figure.0.clone()).collect();
-                    self.canvas.fill(&rings, winding, colour)?;
-                }
-                Brush::Unknown => return None,
-            }
+        self.aim();
+        if fill && !matches!(brush, Brush::Null) {
+            let rings: Vec<Vec<Point>> = figures.iter().map(|figure| figure.0.clone()).collect();
+            self.canvas.brushed(&rings, winding, &brush, with, None)?;
         }
         if line && let Some(pen) = pen {
             let width = (pen.width * if pen.own { grow.0 } else { grow.1 }).max(1.0);
@@ -329,7 +403,7 @@ impl Page<'_> {
         }
         let State { ink, back, opaque, align, clip, .. } = self.state;
         let all = clip.unwrap_or(self.all());
-        self.canvas.clip = all;
+        self.aim();
         let frame = frame.map(|(a, b)| boxed(total.at(a), total.at(b)));
         if options & words::OPAQUE != 0
             && let Some((l, t, r, b)) = frame
@@ -376,12 +450,13 @@ impl Page<'_> {
             return None;
         }
         let was = self.state.clip.unwrap_or(self.all());
-        self.state.clip = Some(match mode {
-            // [MS-EMF] 2.1.29, RegionMode: RGN_AND and RGN_COPY.
-            1 => (to.0.max(was.0), to.1.max(was.1), to.2.min(was.2), to.3.min(was.3)),
-            5 => to,
-            _ => return None,
-        });
+        match mode {
+            // [MS-EMF] 2.1.29, RegionMode: RGN_AND and RGN_COPY; then the ways that leave what
+            // is no box.
+            1 => self.state.clip = Some((to.0.max(was.0), to.1.max(was.1), to.2.min(was.2), to.3.min(was.3))),
+            5 => (self.state.clip, self.state.mask) = (Some(to), None),
+            _ => self.cut_to(&[vec![(to.0, to.1), (to.2, to.1), (to.2, to.3), (to.0, to.3)]], true, mode)?,
+        }
         Some(())
     }
 
@@ -468,7 +543,7 @@ impl Page<'_> {
                 if !self.building {
                     self.count(1)?;
                     let side = self.frame.grow().max(1.0);
-                    self.canvas.clip = self.state.clip.unwrap_or(self.all());
+                    self.aim();
                     self.canvas.fill(&[vec![at, (at.0 + side, at.1), (at.0 + side, at.1 + side), (at.0, at.1 + side)]], true, colour)?;
                     self.drew = true;
                 }
@@ -505,13 +580,18 @@ impl Page<'_> {
                 }
             }
             54 => self.run_on(&[point(record, 8)?])?,
-            // EMR_INTERSECTCLIPRECT: a box in the drawing's units, which must stand straight.
-            30 => {
+            // EMR_EXCLUDECLIPRECT, EMR_INTERSECTCLIPRECT: a box in the drawing's units, which
+            // what is drawn from here on stays out of, or inside.
+            29 | 30 => {
                 let total = self.total();
-                if !total.straight() {
-                    return None;
+                let (l, t, r, b) = boxed(point(record, 8)?, point(record, 16)?);
+                if kind == 30 && total.straight() {
+                    self.cut(boxed(total.at((l, t)), total.at((r, b))), 1)?;
+                } else {
+                    self.count(4)?;
+                    let ring = vec![total.at((l, t)), total.at((r, t)), total.at((r, b)), total.at((l, b))];
+                    self.cut_to(&[ring], true, if kind == 30 { 1 } else { 4 })?;
                 }
-                self.cut(boxed(total.at(point(record, 8)?), total.at(point(record, 16)?)), 1)?;
             }
             // EMR_SAVEDC, EMR_RESTOREDC: back so many states, or to the one of that number.
             33 => {
@@ -568,9 +648,11 @@ impl Page<'_> {
             }
             // EMR_CREATEBRUSHINDIRECT ([MS-EMF] 2.2.12, LogBrushEx).
             39 => {
-                let brush = match u32_at(record, 12)? {
-                    0 => Brush::Solid(colour_at(record, 16)?),
-                    1 => Brush::Null,
+                let brush = match (u32_at(record, 12)?, u32_at(record, 20)) {
+                    (0, _) => Brush::Solid(colour_at(record, 16)?),
+                    (1, _) => Brush::Null,
+                    // [MS-WMF] 2.1.1.12, HatchStyle.
+                    (2, Some(kind @ 0..=5)) => Brush::Hatch(kind, colour_at(record, 16)?),
                     _ => Brush::Unknown,
                 };
                 self.keep(record, Object::Brush(brush))?;
@@ -589,8 +671,21 @@ impl Page<'_> {
                 };
                 self.keep(record, object)?;
             }
-            // Brushes of a pattern; a palette and a colour space, which only take a place.
-            93 | 94 => self.keep(record, Object::Brush(Brush::Unknown))?,
+            // [MS-EMF] 2.3.7.5, EMR_CREATEMONOBRUSH, and 2.3.7.4, EMR_CREATEDIBPATTERNBRUSHPT:
+            // what the colours are numbers in, and the two parts of a bitmap that is laid side
+            // by side. Then a palette and a colour space, which only take a place.
+            93 | 94 => {
+                let most = MAX_TILE.min(MAX_DIB_PIXELS.saturating_sub(self.pixels));
+                let tile = if u32_at(record, 12)? == 0 { emf_parts(record, 16).and_then(|dib| dib_pixels(&dib, most)) } else { None };
+                let brush = match tile {
+                    Some(((w, h), rgba)) => {
+                        self.pixels = self.pixels.saturating_add(w.saturating_mul(h));
+                        Brush::Tile(Arc::new(Tile { w, h, rgba }))
+                    }
+                    None => Brush::Unknown,
+                };
+                self.keep(record, Object::Brush(brush))?;
+            }
             49 | 99 | 122 => self.keep(record, Object::Other)?,
             // EMR_EXTCREATEFONTINDIRECTW ([MS-EMF] 2.2.13, LogFont): its height, how it is
             // turned, how heavy it is, whether it leans, is underlined or struck out, its
@@ -687,62 +782,126 @@ impl Page<'_> {
                     self.paint(&path, kind != 64, kind != 62)?;
                 }
             }
-            // EMR_SELECTCLIPPATH: a path that is one box standing straight is cut to.
+            // EMR_SELECTCLIPPATH: the path is cut to. One that is a box standing straight stays
+            // a box; any other is what it would fill.
             67 => {
                 let path = std::mem::take(&mut self.path);
                 self.building = false;
-                let [(ring, _)] = &path[..] else { return None };
-                let corners = match &ring[..] {
-                    [a, b, c, d] => [a, b, c, d],
-                    [a, b, c, d, again] if again == a => [a, b, c, d],
-                    _ => return None,
-                };
-                let to = corners.iter().fold((f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY), |to, p| {
-                    (to.0.min(p.0), to.1.min(p.1), to.2.max(p.0), to.3.max(p.1))
-                });
-                if !corners.iter().all(|p| (p.0 == to.0 || p.0 == to.2) && (p.1 == to.1 || p.1 == to.3)) {
+                let mode = u32_at(record, 8)?;
+                if path.is_empty() {
                     return None;
                 }
-                self.cut(to, u32_at(record, 8)?)?;
+                let stands = || {
+                    let [(ring, _)] = &path[..] else { return None };
+                    let corners = match &ring[..] {
+                        [a, b, c, d] => [a, b, c, d],
+                        [a, b, c, d, again] if again == a => [a, b, c, d],
+                        _ => return None,
+                    };
+                    let to = corners.iter().fold((f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY), |to, p| {
+                        (to.0.min(p.0), to.1.min(p.1), to.2.max(p.0), to.3.max(p.1))
+                    });
+                    corners.iter().all(|p| (p.0 == to.0 || p.0 == to.2) && (p.1 == to.1 || p.1 == to.3)).then_some(to)
+                };
+                match stands() {
+                    Some(to) if matches!(mode, 1 | 5) => self.cut(to, mode)?,
+                    _ => {
+                        let rings: Vec<Vec<Point>> = path.into_iter().map(|figure| figure.0).collect();
+                        self.cut_to(&rings, self.state.winding, mode)?;
+                    }
+                }
             }
-            // EMR_EXTSELECTCLIPRGN: no region, an empty one, or one of a single box, in the
-            // device's units ([MS-EMF] 2.2.24, RegionData).
+            // EMR_EXTSELECTCLIPRGN: no region, or one of boxes in the device's units
+            // ([MS-EMF] 2.2.24, RegionData), joined to what the drawing is cut to.
             75 => {
                 let (size, mode) = (size_at(record, 8)?, u32_at(record, 12)?);
                 if size == 0 {
                     if mode != 5 {
                         return None;
                     }
-                    self.state.clip = None;
+                    (self.state.clip, self.state.mask) = (None, None);
                 } else {
-                    let to = match u32_at(record, 24)? {
-                        0 => (0.0, 0.0, 0.0, 0.0),
-                        1 => boxed(self.frame.at(point(record, 48)?), self.frame.at(point(record, 56)?)),
-                        _ => return None,
-                    };
-                    self.cut(to, mode)?;
+                    let rings = region(record, 16, &self.frame)?;
+                    self.count(rings.len().checked_mul(4)?)?;
+                    match (&rings[..], mode) {
+                        ([], 1 | 5) => self.cut((0.0, 0.0, 0.0, 0.0), mode)?,
+                        ([ring], 1 | 5) => {
+                            let (Some(&a), Some(&c)) = (ring.first(), ring.get(2)) else { return None };
+                            self.cut(boxed(a, c), mode)?;
+                        }
+                        _ => self.cut_to(&rings, true, mode)?,
+                    }
                 }
             }
             // [MS-EMF] 2.3.1.7, EMR_STRETCHDIBITS: where it goes, the part of the bitmap that is
-            // taken, the bitmap's two parts, what its colours are numbers in, how it is copied,
-            // and how large it is made. Only a whole bitmap, copied as it is onto a box that
-            // stands straight, is drawn.
+            // taken (its rows counted from the bottom of a bitmap that is kept that way), the
+            // bitmap's two parts, what its colours are numbers in, how it is copied, and how
+            // large it is made. A width or a height below nothing mirrors it.
             81 => {
-                if u32_at(record, 64)? != 0 || u32_at(record, 68)? != COPY {
+                if u32_at(record, 64)? != 0 {
                     return None;
                 }
-                let ((w, h), rgba) = dib_pixels(&emf_parts(record, 48)?, MAX_DIB_PIXELS.checked_sub(self.pixels)?)?;
-                self.pixels = self.pixels.checked_add(w.checked_mul(h)?)?;
-                if (point(record, 32)?, point(record, 40)?) != ((0.0, 0.0), (w as f32, h as f32)) {
-                    return None;
+                let dib = if size_at(record, 52)? == 0 { None } else { Some(emf_parts(record, 48)?) };
+                let from = (num(record, 32)?, num(record, 36)?, num(record, 40)?, num(record, 44)?);
+                let to = (num(record, 24)?, num(record, 28)?, num(record, 72)?, num(record, 76)?);
+                self.copy(u32_at(record, 68)?, dib.as_deref(), from, to, true)?;
+            }
+            // [MS-EMF] 2.3.1.2, EMR_BITBLT, and 2.3.1.6, EMR_STRETCHBLT: the box it goes to, how
+            // it is copied, where the part taken starts, how the bitmap's own units are turned
+            // (which must leave a box standing straight), what its colours are numbers in, the
+            // bitmap's two parts, and for the second how large the part is. The first takes as
+            // many pixels as the box has on the device. One with no bitmap copies the brush
+            // or what is there.
+            76 | 77 => {
+                let to = (num(record, 24)?, num(record, 28)?, num(record, 32)?, num(record, 36)?);
+                let how = u32_at(record, 40)?;
+                if size_at(record, 88)? == 0 {
+                    self.copy(how, None, (0.0, 0.0, 0.0, 0.0), to, false)?;
+                } else {
+                    if u32_at(record, 80)? != 0 {
+                        return None;
+                    }
+                    let dib = emf_parts(record, 84)?;
+                    let mut turn = SAME;
+                    for (i, part) in turn.0.iter_mut().enumerate() {
+                        *part = real(record, 52 + 4 * i)?;
+                    }
+                    let device = self.device();
+                    let size = if kind == 77 {
+                        (num(record, 100)?, num(record, 104)?)
+                    } else if device.straight() {
+                        (to.2 * device.0[0].abs(), to.3 * device.0[3].abs())
+                    } else {
+                        (to.2, to.3)
+                    };
+                    if !turn.straight() {
+                        return None;
+                    }
+                    let start = (num(record, 44)?, num(record, 48)?);
+                    let (a, b) = (turn.at(start), turn.at((start.0 + size.0, start.1 + size.1)));
+                    self.copy(how, Some(&dib), (a.0, a.1, b.0 - a.0, b.1 - a.1), to, false)?;
                 }
-                let (from, size, total) = (point(record, 24)?, point(record, 72)?, self.total());
-                let (a, b) = (total.at(from), total.at((from.0 + size.0, from.1 + size.1)));
-                if !total.straight() || b.0 < a.0 || b.1 < a.1 {
-                    return None;
+            }
+            // [MS-EMF] 2.3.5.9, EMR_FILLRGN (a brush), 2.3.5.11, EMR_FRAMERGN (a brush, and how
+            // wide and high its strokes are), 2.3.5.14, EMR_INVERTRGN, and 2.3.5.26,
+            // EMR_PAINTRGN (the brush there is): a region of boxes, in the drawing's units.
+            71..=74 => {
+                let head = match kind {
+                    71 => 32,
+                    72 => 40,
+                    _ => 28,
+                };
+                let total = self.total();
+                let rings = region(record, head, &total)?;
+                self.count(rings.len().checked_mul(4)?)?;
+                let brush = if kind < 73 { self.brush(u32_at(record, 28)?)? } else { self.state.brush.clone() };
+                let with = self.with();
+                self.aim();
+                match kind {
+                    73 => self.canvas.fill_with(&rings, true, Paint::Solid([0; 3]), Some(0x55))?,
+                    72 => self.canvas.framed(&rings, (num(record, 32)? * total.grow(), num(record, 36)? * total.grow()), &brush, with)?,
+                    _ => self.canvas.brushed(&rings, true, &brush, with, None)?,
                 }
-                self.canvas.clip = self.state.clip.unwrap_or(self.all());
-                self.canvas.image(&rgba, (w, h), (a.0, a.1, b.0, b.1))?;
                 self.drew = true;
             }
             _ if IGNORED.contains(&kind) => {}
@@ -795,6 +954,7 @@ pub(crate) fn emf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option
         clockwise: false,
         at: (0.0, 0.0),
         clip: None,
+        mask: None,
         font: None,
         ink: [0; 3],
         back: [255; 3],

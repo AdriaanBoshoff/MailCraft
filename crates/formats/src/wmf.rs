@@ -1,17 +1,19 @@
 //! A Windows metafile that is a drawing of lines, filled shapes, text and bitmaps, drawn onto a
 //! page of pixels ([MS-WMF] 2.3.3 drawing records, 2.3.1 bitmap records, 2.3.4 object records,
-//! 2.3.5 state records). A metafile that asks for anything this does not draw (a part of a
-//! bitmap, or one that is not copied as it is; patterned brushes, regions,
-//! text in a font nobody here knows) is not drawn at all: half a picture is worse than its
-//! place.
+//! 2.3.5 state records). Bitmaps are copied whole or in part, mirrored, and mixed with the
+//! brush and with what is there ([MS-WMF] 2.1.1.31); brushes are a colour, a hatching or a
+//! pattern; regions of boxes are filled, framed, inverted and cut to. A metafile that asks for
+//! anything this does not draw (a pen that does not cover, colours that are numbers in a
+//! palette, text in a font nobody here knows) is not drawn at all: half a picture is worse
+//! than its place.
 
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
 use openmailclient_fonts::Lettering;
 
-use crate::canvas::{Brush, Canvas, Point, Rgb, arc, page_size, rounded, steps};
-use crate::metafile::{COPY, Drawn, MAX_DIB_PIXELS, dib_pixels, size_at, u16_at, u32_at};
+use crate::canvas::{Brush, Canvas, Clip, Paint, Point, Rgb, Tile, arc, page_size, rounded, steps};
+use crate::metafile::{Blit, Drawn, MAX_DIB_PIXELS, blit, dib_pixels, size_at, u16_at, u32_at};
 use crate::words::{self, Font, Line};
 
 /// Records one drawing is read through.
@@ -25,6 +27,50 @@ const MAX_SAVED: usize = 64;
 
 /// Bytes of text in one line.
 const MAX_LINE: usize = 4096;
+/// Boxes one region is of, and the pixels of a brush's pattern.
+const MAX_BOXES: usize = 4096;
+const MAX_TILE: usize = 65_536;
+
+/// [MS-WMF] 2.2.1.5, Region: after its header of 22 bytes, scans; each is how many ends of
+/// lines it has, its top, its bottom, the ends in pairs (left, right), and how many again
+/// (2.2.2.17, Scan). Each pair is a box.
+fn region(record: &[u8]) -> Option<Vec<Clip>> {
+    let scans = usize::from(u16_at(record, 16)?);
+    let (mut at, mut boxes) = (28usize, Vec::new());
+    for _ in 0..scans {
+        let ends = usize::from(u16_at(record, at)?);
+        let (top, bottom) = (f32::from(i16_at(record, at + 2)?), f32::from(i16_at(record, at + 4)?));
+        for pair in 0..ends / 2 {
+            let (left, right) = (f32::from(i16_at(record, at + 6 + 4 * pair)?), f32::from(i16_at(record, at + 8 + 4 * pair)?));
+            if boxes.len() >= MAX_BOXES {
+                return None;
+            }
+            boxes.push((left.min(right), top.min(bottom), left.max(right), top.max(bottom)));
+        }
+        at = at.checked_add(8 + 2 * ends)?;
+    }
+    Some(boxes)
+}
+
+/// [MS-WMF] 2.3.4.4, META_CREATEPATTERNBRUSH: a bitmap of the oldest kind (2.2.2.1, Bitmap16:
+/// what it is, how wide, how high, the bytes of a row, its planes and its bits to the pixel),
+/// 18 bytes that say nothing, and its rows from the top. Only one of a single bit to the pixel
+/// is read: a bit that is set is white.
+fn old_pattern(record: &[u8]) -> Option<Tile> {
+    let (w, h, row) = (usize::from(u16_at(record, 8)?), usize::from(u16_at(record, 10)?), usize::from(u16_at(record, 12)?));
+    if record.get(14..16)? != [1, 1] || w == 0 || h == 0 || w > 256 || h > 256 {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let byte = *record.get(38 + y * row + x / 8)?;
+            let shade = if byte >> (7 - x % 8) & 1 == 1 { 255 } else { 0 };
+            rgba.extend([shade, shade, shade, 255]);
+        }
+    }
+    Some(Tile { w, h, rgba })
+}
 
 /// Records that change nothing that is drawn here: ways of bitmaps and of spacing text out,
 /// the palette, and what is said to a printer ([MS-WMF] 2.3.5, 2.3.6).
@@ -52,6 +98,8 @@ enum Object {
     Pen(Pen),
     Brush(Brush),
     Font(Arc<Font>),
+    /// A region: its boxes, in the drawing's units.
+    Region(Arc<Vec<Clip>>),
     Other,
 }
 
@@ -67,6 +115,8 @@ struct State {
     at: Point,
     /// On the page; `None` is all of it.
     clip: Option<(f32, f32, f32, f32)>,
+    /// How much of each of the page's pixels can be drawn on; `None` is all of each.
+    mask: Option<Arc<Vec<u8>>>,
     /// What text is written in; `None` is the device's own font, which nobody here knows.
     font: Option<Arc<Font>>,
     /// The colour of letters, the colour behind them, and whether that is filled in.
@@ -110,37 +160,57 @@ struct Page<'a> {
 }
 
 impl Page<'_> {
-    /// Lay the whole of the bitmap that `record` holds from `start` over a box of the drawing:
-    /// `from` is where the record says which part of the bitmap is taken (how high, how wide,
-    /// and from which row and column) and `to` the box (how high, how wide, its top and its
-    /// left), each four words. Only a bitmap taken whole, and laid the way it stands, is drawn.
-    fn bitmap(&mut self, record: &[u8], start: usize, from: Option<usize>, to: usize) -> Option<()> {
-        let word = |at: usize| i16_at(record, at).map(f32::from);
-        let ((w, h), rgba) = dib_pixels(record.get(start..)?, MAX_DIB_PIXELS.checked_sub(self.pixels)?)?;
-        self.pixels = self.pixels.checked_add(w.checked_mul(h)?)?;
-        let (high, wide, top, left) = match from {
-            Some(from) => {
-                if (word(from)?, word(from + 2)?, word(from + 4)?, word(from + 6)?) != (h as f32, w as f32, 0.0, 0.0) {
-                    return None;
-                }
-                (word(to)?, word(to + 2)?, word(to + 4)?, word(to + 6)?)
-            }
-            // META_DIBBITBLT: as large as it is, from a row and a column that must be the first.
-            None => {
-                if (word(to)?, word(to + 2)?, word(to + 4)?, word(to + 6)?) != (0.0, 0.0, h as f32, w as f32) {
-                    return None;
-                }
-                (h as f32, w as f32, word(to + 8)?, word(to + 10)?)
-            }
-        };
+    /// Copy onto the box `to` of the drawing (left, top, wide, high) the part `from` of a
+    /// bitmap (the same four, in its pixels), the brush, or what is there, mixed the way `how`
+    /// says ([MS-WMF] 2.1.1.31). A width or a height below nothing mirrors.
+    fn copy(&mut self, how: u32, dib: Option<&[u8]>, from: Clip, to: Clip, upwards: bool) -> Option<()> {
         let map = self.ready()?;
-        let (a, b) = (map.at((left, top)), map.at((left + wide, top + high)));
-        if b.0 < a.0 || b.1 < a.1 {
-            return None;
-        }
-        self.canvas.as_mut()?.image(&rgba, (w, h), (a.0, a.1, b.0, b.1))?;
-        self.drew = true;
+        let forward = [map.scale.0, 0.0, 0.0, map.scale.1, -map.origin.0 * map.scale.0, -map.origin.1 * map.scale.1];
+        let (brush, with) = (self.state.brush.clone(), self.with());
+        let drew = blit(self.canvas.as_mut()?, &Blit { how, dib, from, to, upwards, forward, brush: &brush, with }, &mut self.pixels)?;
+        self.drew |= drew;
         Some(())
+    }
+
+    /// The colour between the lines of a hatching (none when what is behind shows through),
+    /// and how many of the page's pixels one of a pattern's is.
+    fn with(&self) -> (Option<Rgb>, f32) {
+        let step = match (self.natural, self.want, &self.canvas) {
+            (Some((wide, _)), _, Some(canvas)) if wide > 0.0 => (canvas.w as f32 / wide).clamp(1.0, 8.0),
+            (_, Some(_), _) => 2.0,
+            _ => 1.0,
+        };
+        (self.state.opaque.then_some(self.state.back), step)
+    }
+
+    /// The boxes of the region that is object `index`, on the page.
+    fn region(&mut self, index: u16, map: Map) -> Option<Vec<Vec<Point>>> {
+        let Some(Object::Region(boxes)) = self.objects.get(usize::from(index))?.clone() else { return None };
+        self.count(boxes.len().checked_mul(4)?)?;
+        Some(
+            boxes
+                .iter()
+                .map(|&(l, t, r, b)| {
+                    let (a, c) = (map.at((l, t)), map.at((r, b)));
+                    vec![a, (c.0, a.1), c, (a.0, c.1)]
+                })
+                .collect(),
+        )
+    }
+
+    /// Join `rings` to what the drawing is cut to ([MS-EMF] 2.1.29, RegionMode).
+    fn cut(&mut self, rings: &[Vec<Point>], mode: u32) -> Option<()> {
+        let was = (self.state.clip, self.state.mask.clone());
+        (self.state.clip, self.state.mask) = self.canvas.as_mut()?.cut(was, rings, true, mode)?;
+        Some(())
+    }
+
+    /// The brush that is object `index`.
+    fn brush(&self, index: u16) -> Option<Brush> {
+        match self.objects.get(usize::from(index))?.as_ref()? {
+            Object::Brush(brush) => Some(brush.clone()),
+            _ => None,
+        }
     }
 
     /// The page's pixels, made when the first thing is drawn: by then the window is known.
@@ -156,6 +226,7 @@ impl Page<'_> {
         let canvas = self.canvas.as_mut()?;
         let all = (0.0, 0.0, canvas.w as f32, canvas.h as f32);
         canvas.clip = self.state.clip.unwrap_or(all);
+        canvas.mask = self.state.mask.clone();
         Some(Map { origin: self.state.origin, scale: (canvas.w as f32 / ex, canvas.h as f32 / ey) })
     }
 
@@ -166,14 +237,10 @@ impl Page<'_> {
 
     /// Fill `rings` with the brush when `filled`, and draw the pen along them.
     fn shape(&mut self, rings: &[Vec<Point>], filled: bool, closed: bool, map: Map) -> Option<()> {
-        let State { pen, brush, winding, .. } = self.state;
+        let (pen, winding, brush, with) = (self.state.pen, self.state.winding, self.state.brush.clone(), self.with());
         let canvas = self.canvas.as_mut()?;
         if filled {
-            match brush {
-                Brush::Null => {}
-                Brush::Solid(colour) => canvas.fill(rings, winding, colour)?,
-                Brush::Unknown => return None,
-            }
+            canvas.brushed(rings, winding, &brush, with, None)?;
         }
         if let Some((width, colour)) = pen {
             for ring in rings {
@@ -303,16 +370,38 @@ impl Page<'_> {
             }
             // [MS-WMF] 2.2.1.1, Brush: its style, and its colour when that is all it is.
             0x02FC => {
-                let brush = match u16_at(record, 6)? {
-                    0 => Brush::Solid(colour_at(record, 8)?),
-                    1 => Brush::Null,
+                let brush = match (u16_at(record, 6)?, u16_at(record, 12)) {
+                    (0, _) => Brush::Solid(colour_at(record, 8)?),
+                    (1, _) => Brush::Null,
+                    // [MS-WMF] 2.1.1.12, HatchStyle.
+                    (2, Some(kind @ 0..=5)) => Brush::Hatch(u32::from(kind), colour_at(record, 8)?),
                     _ => Brush::Unknown,
                 };
                 self.make(Object::Brush(brush))?;
             }
-            // Brushes of a pattern; a palette and a region, which only take a place.
-            0x0142 | 0x01F9 => self.make(Object::Brush(Brush::Unknown))?,
-            0x00F7 | 0x06FF => self.make(Object::Other)?,
+            // [MS-WMF] 2.3.4.8, META_DIBCREATEPATTERNBRUSH: what kind of brush, what its
+            // colours are numbers in, and a bitmap that is laid side by side.
+            0x0142 => {
+                let most = MAX_TILE.min(MAX_DIB_PIXELS.saturating_sub(self.pixels));
+                let tile =
+                    if u16_at(record, 6)? != 3 && u16_at(record, 8)? == 0 { record.get(10..).and_then(|dib| dib_pixels(dib, most)) } else { None };
+                let brush = match tile {
+                    Some(((w, h), rgba)) => {
+                        self.pixels = self.pixels.saturating_add(w.saturating_mul(h));
+                        Brush::Tile(Arc::new(Tile { w, h, rgba }))
+                    }
+                    None => Brush::Unknown,
+                };
+                self.make(Object::Brush(brush))?;
+            }
+            0x01F9 => {
+                let brush = old_pattern(record).filter(|tile| tile.w * tile.h <= MAX_DIB_PIXELS.saturating_sub(self.pixels));
+                self.pixels = self.pixels.saturating_add(brush.as_ref().map_or(0, |tile| tile.w * tile.h));
+                self.make(Object::Brush(brush.map_or(Brush::Unknown, |tile| Brush::Tile(Arc::new(tile)))))?;
+            }
+            // A palette, which only takes a place; a region.
+            0x00F7 => self.make(Object::Other)?,
+            0x06FF => self.make(region(record).map_or(Object::Other, |boxes| Object::Region(Arc::new(boxes))))?,
             // [MS-WMF] 2.2.1.2, Font: its height, how it is turned, how heavy it is, whether it
             // leans, is underlined or struck out, its character set, and its name.
             0x02FB => {
@@ -336,8 +425,36 @@ impl Page<'_> {
                 Object::Pen(pen) => self.state.pen = pen,
                 Object::Brush(brush) => self.state.brush = brush,
                 Object::Font(font) => self.state.font = Some(font),
+                // A region that is selected is what the drawing is cut to.
+                Object::Region(_) => {
+                    let map = self.ready()?;
+                    let rings = self.region(u16_at(record, 6)?, map)?;
+                    self.cut(&rings, 5)?;
+                }
                 Object::Other => {}
             },
+            // META_SELECTCLIPREGION.
+            0x012C => {
+                let map = self.ready()?;
+                let rings = self.region(u16_at(record, 6)?, map)?;
+                self.cut(&rings, 5)?;
+            }
+            // META_FILLREGION (a region and a brush), META_PAINTREGION (with the brush there
+            // is), META_INVERTREGION, META_FRAMEREGION (a region, a brush, and how high and
+            // how wide the brush's strokes are).
+            0x0228 | 0x012B | 0x012A | 0x0429 => {
+                let map = self.ready()?;
+                let rings = self.region(u16_at(record, 6)?, map)?;
+                let brush = if matches!(function, 0x0228 | 0x0429) { self.brush(u16_at(record, 8)?)? } else { self.state.brush.clone() };
+                let with = self.with();
+                let canvas = self.canvas.as_mut()?;
+                match function {
+                    0x012A => canvas.fill_with(&rings, true, Paint::Solid([0; 3]), Some(0x55))?,
+                    0x0429 => canvas.framed(&rings, (word(3)? * map.scale.0, word(2)? * map.scale.1), &brush, with)?,
+                    _ => canvas.brushed(&rings, true, &brush, with, None)?,
+                }
+                self.drew = true;
+            }
             // META_SETTEXTCOLOR, META_SETBKCOLOR, META_SETBKMODE, META_SETTEXTALIGN.
             0x0209 => self.state.ink = colour_at(record, 6)?,
             0x0201 => self.state.back = colour_at(record, 6)?,
@@ -466,14 +583,42 @@ impl Page<'_> {
                 let was = self.canvas.as_ref()?.clip;
                 self.state.clip = Some((l.max(was.0), t.max(was.1), r.min(was.2), b.min(was.3)));
             }
+            // META_EXCLUDECLIPRECT: what is drawn from here on stays out of this box.
+            0x0415 => {
+                let map = self.ready()?;
+                let (l, t, r, b) = Self::bounds(record, 0, map)?;
+                self.cut(&[vec![(l, t), (r, t), (r, b), (l, b)]], 4)?;
+            }
             // [MS-WMF] 2.3.1.6, META_STRETCHDIB: how it is copied, what its colours are numbers
-            // in, the part taken, the box it goes to, the bitmap.
-            0x0F43 if u32_at(record, 6)? == COPY && u16_at(record, 10)? == 0 => self.bitmap(record, 28, Some(12), 20)?,
-            // [MS-WMF] 2.3.1.3, META_DIBSTRETCHBLT: the same without the colours' way.
-            0x0B41 if u32_at(record, 6)? == COPY => self.bitmap(record, 26, Some(10), 18)?,
+            // in, the part taken (how high, how wide, its row, counted from the bottom of a
+            // bitmap that is kept that way, and its column), the box it goes to (how high, how
+            // wide, its top, its left), the bitmap.
+            0x0F43 if u16_at(record, 10)? == 0 => {
+                let (from, to) = ((word(6)?, word(5)?, word(4)?, word(3)?), (word(10)?, word(9)?, word(8)?, word(7)?));
+                self.copy(u32_at(record, 6)?, record.get(28..), from, to, true)?;
+            }
+            // [MS-WMF] 2.3.1.3, META_DIBSTRETCHBLT: the same without the colours' way, rows
+            // counted from the top. One with no bitmap has a word that says nothing before
+            // the box, and copies the brush or what is there.
+            0x0B41 => {
+                let bare = record.len() == 28;
+                let first = if bare { 7 } else { 6 };
+                let (from, to) = ((word(5)?, word(4)?, word(3)?, word(2)?), (word(first + 3)?, word(first + 2)?, word(first + 1)?, word(first)?));
+                self.copy(u32_at(record, 6)?, if bare { None } else { record.get(26..) }, from, to, false)?;
+            }
             // [MS-WMF] 2.3.1.2, META_DIBBITBLT: where in the bitmap it starts (row, column), how
-            // high and wide the part is, and where it goes (top, left).
-            0x0940 if u32_at(record, 6)? == COPY => self.bitmap(record, 22, None, 10)?,
+            // high and wide the part is, and where it goes (top, left); a unit of the drawing
+            // is a pixel of the bitmap.
+            0x0940 => {
+                let bare = record.len() == 24;
+                let first = if bare { 5 } else { 4 };
+                let (high, wide, top, left) = (word(first)?, word(first + 1)?, word(first + 2)?, word(first + 3)?);
+                let dib = if bare { None } else { record.get(22..) };
+                self.copy(u32_at(record, 6)?, dib, (word(3)?, word(2)?, wide, high), (left, top, wide, high), false)?;
+            }
+            // [MS-WMF] 2.3.3.12, META_PATBLT: how it is mixed, and the box (how high, how
+            // wide, its top, its left) that the brush is copied onto.
+            0x061D => self.copy(u32_at(record, 6)?, None, (0.0, 0.0, 0.0, 0.0), (word(5)?, word(4)?, word(3)?, word(2)?), false)?,
             _ if IGNORED.contains(&function) => {}
             _ => return None,
         }
@@ -493,6 +638,7 @@ pub(crate) fn wmf_drawing(data: &[u8], want: Option<(u32, u32)>, letters: Option
         winding: false,
         at: (0.0, 0.0),
         clip: None,
+        mask: None,
         font: None,
         ink: [0; 3],
         back: [255; 3],

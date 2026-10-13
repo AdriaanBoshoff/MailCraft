@@ -1,6 +1,6 @@
 # UI parity
 
-**Status:** revision 22 · 2026-10-13 · an RTF highlight is a marker colour as in the one case seen (M3b.27); borders round text within a line and rounded corners on boxes and cells (M3b.26), ours, not compared with Outlook; boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
+**Status:** revision 23 · 2026-10-13 · metafiles are drawn in full, from the specifications and not compared (M3b.28); an RTF highlight is a marker colour as in the one case seen (M3b.27); borders round text within a line and rounded corners on boxes and cells (M3b.26), ours, not compared with Outlook; boxes inside one another, tables inside blocks and a colour behind the whole body in the reading pane (M3b.25), ours, not compared with Outlook; several pictures at the sides of a paragraph and paper behind dark see-through pictures in the dark pane (M3b.24), ours, not compared with Outlook; the print window has a zoom and Table Style's columns, headings and rows (M3b.22); side-by-side looks at the Mail module in both ribbon layouts, and at eight message bodies; layout only.
 
 How OpenMailClient's window compares with Outlook Classic's, from window captures of both at the same size.
 Outlook captures hold private mail, stay on the dev machine and are never committed; this page records
@@ -123,6 +123,7 @@ Outlook's print pane was not observed.
 
 ## Revision history
 
+- 23 · 2026-10-13 — metafiles draw parts of bitmaps, mirrored, turned and run-packed ones, raster operations, hatched and patterned brushes and regions (M3b.28). Drawn from [MS-WMF] and [MS-EMF]; no metafile was compared with Outlook's showing of it.
 - 22 · 2026-10-13 — an RTF highlight is shown as one of sixteen marker colours: the pale yellow of the receipt message is bright yellow, as Outlook shows it (M3b.27). Other colours are chosen by hue, which is ours and was not compared.
 - 21 · 2026-10-13 — text within a line is drawn in its border; boxes and cells have rounded corners (M3b.26). Not compared with Outlook.
 - 20 · 2026-10-13 — boxes inside one another; a table inside the block it was written in; a body colour fills the reading pane (M3b.25). Not compared with Outlook.

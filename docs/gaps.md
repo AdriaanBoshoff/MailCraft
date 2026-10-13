@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 69 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 70 · 2026-10-12 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -39,7 +39,7 @@
    (`\objattph`, [MS-OXRTFEX] 2.2.3.4: an attached object by the best picture it has, [MS-OLEDS]
    2.3.4 and 2.3.6, any other as a card with its name and size that a click saves),
    paragraph borders and the room paragraphs ask for above and below,
-   and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; not yet in a metafile: a part of a bitmap, one mirrored, turned, packed in runs or not copied as it is, a patterned brush, or text that needs shaping
+   and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; a metafile draws a part of a bitmap, one mirrored, turned or packed in runs, every way of mixing, hatched and patterned brushes and regions (M3b.28); not yet in a metafile: copies with a mask or see-through ones, pens that mix, palette colours, or text that needs shaping
    (a placeholder). List numbers follow what an override changes (`\lfolevel`) and a highlight is one of the sixteen marker colours (M3b.27). OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 70 · 2026-10-13 — M3b.28: metafiles draw parts of bitmaps, mirrored, turned and run-packed ones, every way of mixing, hatched and patterned brushes, and regions.
 - 69 · 2026-10-13 — M3b.27: an RTF highlight is one of the sixteen marker colours, and list numbers follow what their override changes.
 - 68 · 2026-10-13 — M3b.26: text within a line is drawn in its border, and boxes and cells have rounded corners, in the window, on paper and in the PDF.
 - 67 · 2026-10-13 — M3b.25: boxes stand inside one another, a table stands inside its block, and a body has its colour behind it, in the window and on paper.

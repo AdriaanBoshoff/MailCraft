@@ -1147,16 +1147,15 @@ fn a_metafile_that_cannot_be_drawn_whole_is_not_drawn() {
         wmf_picture(&wmf(&records), None)
     };
     assert!(with((0x0102, words(&[1]))).is_some());
-    // Text, a bitmap of which no part is taken, a pen that inverts, a region cut out, a hatched brush
-    // that is filled with, a colour that is a number in a palette.
+    // Text, a pen that inverts, a brush of a kind nobody here knows that is filled with, a
+    // hatching that is none of the six, a colour that is a number in a palette.
     assert_eq!(with((0x0A32, words(&[10, 10, 1, 0, 0x41]))), None);
-    assert_eq!(with(stretch(&small_dib())), None);
     assert_eq!(with((0x0104, words(&[6]))), None);
-    assert_eq!(with((0x0415, words(&[50, 50, 0, 0]))), None);
-    assert_eq!(
-        wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x02FC, vec![2, 0, 255, 0, 0, 0, 0, 0]), (0x012D, words(&[0])), boxed.clone()]), None),
-        None
-    );
+    for brush in [vec![3, 0, 255, 0, 0, 0, 0, 0], vec![2, 0, 255, 0, 0, 0, 6, 0]] {
+        assert_eq!(wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x02FC, brush), (0x012D, words(&[0])), boxed.clone()]), None), None);
+    }
+    // A bitmap that goes to a box of no size draws nothing, and is no reason to draw nothing.
+    assert!(with(stretch(&small_dib())).is_some());
     assert_eq!(wmf_picture(&wmf(&[(0x020C, words(&[100, 100])), (0x02FC, vec![0, 0, 5, 0, 0, 1, 0, 0]), boxed.clone()]), None), None);
     // Nothing drawn, no window to draw in, a window of no size, an object that was never made,
     // a state put back that was never saved.
@@ -1335,18 +1334,19 @@ fn an_enhanced_metafile_that_cannot_be_drawn_whole_is_not_drawn() {
         emf_picture(&emf_of(&records), None)
     };
     assert!(with((18, longs(&[1]))).is_some());
-    // Text, a bitmap whose record is cut short, a region filled, a pen that inverts, a mapping mode in
-    // parts of a millimetre, a box cut out, a drawing from right to left.
+    // Text, a bitmap whose record is cut short, a region that is not there, a pen that
+    // inverts, a mapping mode in parts of a millimetre, a drawing from right to left.
     assert_eq!(with(emf_text((10, 40), "A", 0)), None);
-    assert_eq!(with((81, vec![0; 72])), None);
+    assert_eq!(with((81, vec![0; 40])), None);
     assert_eq!(with((71, vec![0; 24])), None);
     assert_eq!(with((20, longs(&[6]))), None);
     assert_eq!(with((17, longs(&[2]))), None);
-    assert_eq!(with((29, longs(&[0, 0, 10, 10]))), None);
     assert_eq!(with((115, longs(&[1]))), None);
-    // A hatched brush that is filled with; an object that was never made; a state put back
-    // that was never saved; a path that is cut to and is no box.
-    let mut hatched = longs(&[2, 2]);
+    // A bitmap that goes to a box of no size draws nothing, and is no reason to draw nothing.
+    assert!(with((81, vec![0; 72])).is_some());
+    // A brush of a pattern that is not there, filled with; an object that was never made; a
+    // state put back that was never saved; a path that is cut to and was never made.
+    let mut hatched = longs(&[2, 3]);
     hatched.extend([0; 8]);
     assert_eq!(emf_picture(&emf_of(&[(39, hatched), (37, longs(&[2])), (43, longs(&[20, 20, 80, 80]))]), None), None);
     assert_eq!(with((37, longs(&[9]))), None);
@@ -2514,9 +2514,10 @@ fn a_bitmaps_pixels_are_read_in_every_plain_way_they_are_kept() {
     // The oldest header, of twelve bytes.
     assert_eq!(colours(&[12, 0, 0, 0, 1, 0, 1, 0, 1, 0, 24, 0, 9, 8, 7, 0]).unwrap(), ((1, 1), vec![[7, 8, 9]]));
 
-    // Not read: packed in runs, bits to the pixel nobody keeps, fields for a bitmap that has
-    // none, too large a side, more pixels than may be had, no pixels, rows that are not there.
-    assert_eq!(read(&dib_of((2, 1), 8, 1, 2, &table, &[2, 1, 0, 0])), None);
+    // Packed in runs: two pixels of the second colour.
+    assert_eq!(colours(&dib_of((2, 1), 8, 1, 2, &table, &[2, 1, 0, 0])).unwrap().1, [[3, 2, 1]; 2]);
+    // Not read: bits to the pixel nobody keeps, fields for a bitmap that has none, too large
+    // a side, more pixels than may be had, no pixels, rows that are not there.
     assert_eq!(read(&dib_of((2, 1), 2, 0, 0, &table, &[0; 4])), None);
     assert_eq!(read(&dib_of((1, 1), 24, 3, 0, &fields, &[0; 4])), None);
     assert_eq!(read(&dib_of((5000, 1), 1, 0, 0, &two, &[0; 628])), None);
@@ -2581,32 +2582,38 @@ fn a_bitmap_beside_a_drawing_is_drawn_with_it() {
     let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
     assert_eq!(at(&bmp, [(25, 25), (75, 25), (25, 75), (75, 75)]), [RED, WHITE, WHITE, WHITE]);
 
-    // Not drawn, and so no picture: a part of the bitmap, a bitmap turned over or mirrored,
-    // colours that are numbers in a palette, a copy that is not a plain one, pixels packed in
-    // runs, a bitmap that is cut short, and no window to draw in.
+    // A part of the bitmap, its rows counted from the bottom as the bitmap keeps them: the
+    // bottom row, the top one, the right-hand column. A part alone is a drawing too.
     let one = |record: (u16, Vec<u8>)| {
         let mut records = window.clone();
-        records.extend([(0x0213, words(&[50, 50])), record]);
+        records.extend([(0x0213, words(&[0, 0])), record]);
         wmf_picture(&wmf(&records), Some((50, 50)))
     };
-    assert!(one(stretched(&dib, all, [40, 40, 10, 10])).is_some());
-    assert_eq!(one(stretched(&dib, [1, 2, 0, 0], [40, 40, 10, 10])), None);
-    assert_eq!(one(stretched(&dib, [2, 2, 0, 1], [40, 40, 10, 10])), None);
-    assert_eq!(one(stretched(&dib, all, [-40, 40, 50, 10])), None);
-    assert_eq!(one(stretched(&dib, all, [40, -40, 10, 50])), None);
-    let mut numbered = stretched(&dib, all, [40, 40, 10, 10]);
-    numbered.1[4] = 1;
-    assert_eq!(one(numbered), None);
-    let mut inverted = stretched(&dib, all, [40, 40, 10, 10]);
-    inverted.1[0] = 0x21;
-    assert_eq!(one(inverted), None);
-    let runs = dib_of((2, 1), 8, 1, 2, &[0; 8], &[2, 1, 0, 0]);
-    assert_eq!(one(stretched(&runs, [1, 2, 0, 0], [40, 40, 10, 10])), None);
-    assert_eq!(one(stretched(&dib[..dib.len() - 2], all, [40, 40, 10, 10])), None);
+    let to = [40, 40, 10, 10];
+    let mut alone = window.clone();
+    alone.push(stretched(&dib, [1, 2, 0, 0], to));
+    assert_eq!(at(&wmf_picture(&wmf(&alone), Some((50, 50))).unwrap(), quarters), [BLUE, GREEN, BLUE, GREEN]);
+    assert_eq!(at(&one(stretched(&dib, [1, 2, 0, 0], to)).unwrap(), quarters), [BLUE, GREEN, BLUE, GREEN]);
+    assert_eq!(at(&one(stretched(&dib, [1, 2, 1, 0], to)).unwrap(), quarters), [RED, WHITE, RED, WHITE]);
+    assert_eq!(at(&one(stretched(&dib, [2, 1, 0, 1], to)).unwrap(), quarters), [WHITE, WHITE, GREEN, GREEN]);
+    // A width or a height below nothing mirrors it.
+    assert_eq!(at(&one(stretched(&dib, all, [40, -40, 10, 50])).unwrap(), quarters), [WHITE, RED, GREEN, BLUE]);
+    assert_eq!(at(&one(stretched(&dib, all, [-40, 40, 50, 10])).unwrap(), quarters), [BLUE, GREEN, RED, WHITE]);
+    // Pixels packed in runs; a part that starts one column in is the rest of the row.
+    let runs = dib_of((2, 1), 8, 1, 2, &[0, 0, 0, 0, 0, 255, 0, 0], &[2, 1, 0, 0]);
+    assert_eq!(at(&one(stretched(&runs, [1, 2, 0, 0], to)).unwrap(), quarters), [GREEN; 4]);
     let mut moved = third.clone();
     moved[6] = 1;
-    assert_eq!(both(second, moved), None);
-    assert_eq!(wmf_picture(&wmf(&[stretched(&dib, all, [40, 40, 10, 10]), stretched(&dib, all, [40, 40, 10, 10])]), Some((50, 50))), None);
+    let bmp = both(second.clone(), moved).unwrap();
+    assert_eq!(at(&bmp, [(60, 60), (61, 60), (60, 61), (61, 61)]), [WHITE, WHITE, GREEN, WHITE]);
+
+    // Not drawn, and so no picture: colours that are numbers in a palette, a bitmap that is
+    // cut short, and no window to draw in.
+    let mut numbered = stretched(&dib, all, to);
+    numbered.1[4] = 1;
+    assert_eq!(one(numbered), None);
+    assert_eq!(one(stretched(&dib[..dib.len() - 2], all, to)), None);
+    assert_eq!(wmf_picture(&wmf(&[stretched(&dib, [1, 2, 0, 0], to), stretched(&dib, all, to)]), Some((50, 50))), None);
 }
 
 #[test]
@@ -2643,14 +2650,23 @@ fn a_bitmap_beside_an_enhanced_drawing_is_drawn_with_it() {
     let bmp = draw(vec![(54, longs(&[0, 0])), (30, longs(&[0, 0, 100, 50])), emf_stretched(&dib, [0, 0, 100, 100], all)]).unwrap();
     assert_eq!(at(&bmp, [(25, 25), (75, 25), (25, 75), (75, 75)]), [RED, WHITE, WHITE, WHITE]);
 
-    // Not drawn, and so no picture: a world that is turned round, a part of the bitmap, one
-    // mirrored, colours that are numbers in a palette, a copy that is not a plain one, pixels
-    // packed in runs, and parts that are not in the record.
+    // A world that is turned a quarter round: so is the bitmap, its top now at the right.
     let turned: Vec<u8> = [0.0f32, 1.0, -1.0, 0.0, 100.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
-    assert_eq!(draw(vec![boxed.clone(), (35, turned), placed.clone()]), None);
-    assert_eq!(draw(vec![boxed.clone(), emf_stretched(&dib, [10, 10, 40, 40], [0, 0, 1, 2])]), None);
-    assert_eq!(draw(vec![boxed.clone(), emf_stretched(&dib, [10, 10, 40, 40], [1, 0, 2, 2])]), None);
-    assert_eq!(draw(vec![boxed.clone(), emf_stretched(&dib, [50, 10, -40, 40], all)]), None);
+    let bmp = draw(vec![(54, longs(&[0, 0])), (35, turned), placed.clone()]).unwrap();
+    assert_eq!(at(&bmp, [(80, 20), (80, 40), (60, 20), (60, 40)]), [RED, WHITE, BLUE, GREEN]);
+    assert_eq!(pixel(&bmp, 20, 20), WHITE);
+    // A part of the bitmap (the bottom row, counted from the bottom; the right-hand column),
+    // one mirrored, and one whose pixels are packed in runs. A part alone is a drawing too.
+    let to = [10, 10, 40, 40];
+    assert_eq!(at(&draw(vec![emf_stretched(&dib, to, [0, 0, 2, 1])]).unwrap(), quarters), [BLUE, GREEN, BLUE, GREEN]);
+    assert_eq!(at(&draw(vec![emf_stretched(&dib, to, [0, 1, 2, 1])]).unwrap(), quarters), [RED, WHITE, RED, WHITE]);
+    assert_eq!(at(&draw(vec![emf_stretched(&dib, to, [1, 0, 1, 2])]).unwrap(), quarters), [WHITE, WHITE, GREEN, GREEN]);
+    assert_eq!(at(&draw(vec![emf_stretched(&dib, [50, 10, -40, 40], all)]).unwrap(), quarters), [WHITE, RED, GREEN, BLUE]);
+    let runs = dib_of((2, 1), 8, 1, 2, &[0, 0, 0, 0, 0, 255, 0, 0], &[2, 1, 0, 0]);
+    assert_eq!(at(&draw(vec![(54, longs(&[0, 0])), emf_stretched(&runs, to, [0, 0, 2, 1])]).unwrap(), quarters), [GREEN; 4]);
+
+    // Not drawn, and so no picture: colours that are numbers in a palette, and parts that
+    // are not in the record.
     let change = |at: usize, to: i32| {
         let mut record = placed.clone();
         record.1[at - 8..at - 4].copy_from_slice(&to.to_le_bytes());
@@ -2658,11 +2674,11 @@ fn a_bitmap_beside_an_enhanced_drawing_is_drawn_with_it() {
     };
     assert!(change(64, 0).is_some());
     assert_eq!(change(64, 1), None);
-    assert_eq!(change(68, 0x0066_0046), None);
     assert_eq!(change(48, 4000), None);
     assert_eq!(change(60, 4000), None);
-    let runs = dib_of((2, 1), 8, 1, 2, &[0; 8], &[2, 1, 0, 0]);
-    assert_eq!(draw(vec![boxed, emf_stretched(&runs, [10, 10, 40, 40], [0, 0, 2, 1])]), None);
+    // A copy that is not a plain one: each pixel is what was there or the bitmap's, not both.
+    let bmp = change(68, 0x0066_0046).unwrap();
+    assert_eq!(at(&bmp, quarters), [[0, 255, 255], [0; 3], [255, 255, 0], [255, 255, 0]]);
 }
 
 #[test]
@@ -3140,4 +3156,456 @@ fn rtf_highlights_are_marker_colours_and_list_numbers_follow_their_overrides() {
         ParaKind::Item(marker) => marker.chars().count() <= 400,
         _ => true,
     }));
+}
+
+/// META_PATBLT: the brush copied onto a box (left, top, wide, high), mixed the way `how` says.
+fn pat(how: u32, [left, top, wide, high]: [i16; 4]) -> (u16, Vec<u8>) {
+    let mut body = how.to_le_bytes().to_vec();
+    body.extend(words(&[high, wide, top, left]));
+    (0x061D, body)
+}
+
+/// META_CREATEREGION of these scans: top, bottom, and the ends of each line (left, right).
+fn wmf_region(scans: &[(i16, i16, &[i16])]) -> (u16, Vec<u8>) {
+    let mut body = words(&[0, 6, 0, 0, 0, i16::try_from(scans.len()).unwrap(), 0, 0, 0, 100, 100]);
+    for (top, bottom, ends) in scans {
+        let count = i16::try_from(ends.len()).unwrap();
+        body.extend(words(&[count, *top, *bottom]));
+        body.extend(words(ends));
+        body.extend(words(&[count]));
+    }
+    (0x06FF, body)
+}
+
+/// A region's data in an enhanced metafile: a header, and boxes (left, top, right, bottom).
+fn emf_region(boxes: &[[i32; 4]]) -> Vec<u8> {
+    let count = i32::try_from(boxes.len()).unwrap();
+    let mut data = longs(&[32, 1, count, 16 * count, 0, 0, 100, 100]);
+    for one in boxes {
+        data.extend(longs(one));
+    }
+    data
+}
+
+/// EMR_BITBLT (or, with the size of the part taken, EMR_STRETCHBLT) of `dib` onto a box.
+fn emf_blt(dib: Option<&[u8]>, to: [i32; 4], how: u32, from: (i32, i32), part: Option<(i32, i32)>) -> (u32, Vec<u8>) {
+    let start = if part.is_some() { 108 } else { 100 };
+    let mut body = longs(&[0, 0, 0, 0, to[0], to[1], to[2], to[3], how.cast_signed(), from.0, from.1]);
+    body.extend([1.0f32, 0.0, 0.0, 1.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()));
+    let (header, pixels) = dib.map_or((0, 0), |dib| (40, i32::try_from(dib.len() - 40).unwrap()));
+    body.extend(longs(&[0, 0, if dib.is_some() { start } else { 0 }, header, if dib.is_some() { start + 40 } else { 0 }, pixels]));
+    if let Some((wide, high)) = part {
+        body.extend(longs(&[wide, high]));
+    }
+    body.extend_from_slice(dib.unwrap_or(&[]));
+    (if part.is_some() { 77 } else { 76 }, body)
+}
+
+const BLACK: [u8; 3] = [0; 3];
+const CYAN: [u8; 3] = [0, 255, 255];
+const MAGENTA: [u8; 3] = [255, 0, 255];
+const YELLOW: [u8; 3] = [255, 255, 0];
+const PATCOPY: u32 = 0x00F0_0021;
+
+#[test]
+fn pixels_packed_in_runs_are_unpacked() {
+    use crate::metafile::dib_pixels;
+    let table = [0, 0, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0];
+    let colours = |dib: &[u8]| dib_pixels(dib, 10_000).map(|(size, rgba)| (size, rgba.chunks(4).map(|p| [p[0], p[1], p[2]]).collect::<Vec<_>>()));
+    let read = |size, bits, packed, runs: &[u8]| colours(&dib_of(size, bits, packed, 4, &table, runs));
+    // Eight bits: the bottom row is three reds, a step to the next, then two numbers as they
+    // are (green, blue) made up to a word, and the end. What no run reaches is the first colour.
+    let runs = [3, 1, 0, 0, 0, 3, 2, 3, 1, 0, 0, 1];
+    assert_eq!(read((3, 2), 8, 1, &runs).unwrap(), ((3, 2), vec![GREEN, BLUE, RED, RED, RED, RED]));
+    assert_eq!(read((3, 2), 8, 1, &[1, 2, 0, 1]).unwrap().1, [BLACK, BLACK, BLACK, GREEN, BLACK, BLACK]);
+    // A step to the right and up, and then a run there.
+    assert_eq!(read((3, 2), 8, 1, &[0, 2, 1, 1, 2, 3, 0, 1]).unwrap().1, [BLACK, BLUE, BLUE, BLACK, BLACK, BLACK]);
+    // Four bits: a run is two numbers by turns; numbers as they are come two to a byte.
+    assert_eq!(read((4, 1), 4, 2, &[4, 0x12, 0, 1]).unwrap().1, [RED, GREEN, RED, GREEN]);
+    assert_eq!(read((4, 1), 4, 2, &[0, 3, 0x32, 0x10, 1, 0x20, 0, 1]).unwrap().1, [BLUE, GREEN, RED, GREEN]);
+    // A run that goes past the side is cut off there, and one that ends early leaves the rest.
+    assert_eq!(read((2, 1), 8, 1, &[200, 1]).unwrap().1, [RED, RED]);
+    assert_eq!(read((2, 2), 8, 1, &[]).unwrap().1, [BLACK; 4]);
+    // Not read: numbers as they are that are not all there, a step that is cut short, runs for
+    // a bitmap kept from the top down, runs for bits that are not packed that way.
+    assert_eq!(read((3, 1), 8, 1, &[0, 3, 1]), None);
+    assert_eq!(read((3, 1), 8, 1, &[0, 2, 1]), None);
+    assert_eq!(read((2, -1), 8, 1, &[2, 1]), None);
+    assert_eq!(read((2, 1), 4, 1, &[2, 1]), None);
+    assert_eq!(read((2, 1), 8, 2, &[2, 1]), None);
+    // Steps and runs that would go anywhere: nothing is written outside the bitmap.
+    for runs in [&[0u8, 2, 255, 255, 255, 1][..], &[255, 1, 255, 2, 0, 0, 255, 3], &[0, 255], &[0, 2], &[0; 64], &[255; 64]] {
+        for bits in [8, 4] {
+            let _ = read((3, 2), bits, if bits == 8 { 1 } else { 2 }, runs);
+        }
+    }
+}
+
+#[test]
+fn a_bitmap_is_mixed_with_what_is_there_and_with_the_brush() {
+    use crate::canvas::{mix_needs, mixed};
+    use crate::metafile::wmf_picture;
+    // The table of a way of mixing has a bit for each of the eight things three bits can be.
+    assert_eq!((mixed(0xCC, 9, 0x5A, 7), mixed(0xF0, 9, 0x5A, 7), mixed(0xAA, 9, 0x5A, 7)), (0x5A, 9, 7));
+    assert_eq!((mixed(0x66, 0, 0xF0, 0xFF), mixed(0x88, 0, 0xF0, 0x3C), mixed(0xEE, 0, 0xF0, 0x0F)), (0x0F, 0x30, 0xFF));
+    assert_eq!((mixed(0, 1, 2, 3), mixed(0xFF, 1, 2, 3), mixed(0x55, 1, 2, 0xF0)), (0, 255, 0x0F));
+    assert_eq!(
+        [0xCC, 0xF0, 0x55, 0xC0, 0, 0xFF].map(mix_needs),
+        [(true, false), (false, true), (false, false), (true, true), (false, false), (false, false)]
+    );
+
+    let dib = small_dib();
+    let at = |bmp: &[u8], points: [(usize, usize); 4]| points.map(|(x, y)| pixel(bmp, x, y));
+    let quarters = [(20, 20), (40, 20), (20, 40), (40, 40)];
+    // A red page (the brush copied over all of it), and the bitmap laid on it each way.
+    let over = |how: u32| {
+        let mut record = stretched(&dib, [2, 2, 0, 0], [40, 40, 10, 10]);
+        record.1[..4].copy_from_slice(&how.to_le_bytes());
+        let mut records = red_window();
+        records.extend([pat(PATCOPY, [0, 0, 100, 100]), record]);
+        let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+        assert_eq!(pixel(&bmp, 70, 70), RED, "{how:#x}");
+        at(&bmp, quarters)
+    };
+    assert_eq!(over(0x00CC_0020), [RED, WHITE, BLUE, GREEN]);
+    assert_eq!(over(0x0066_0046), [BLACK, CYAN, MAGENTA, YELLOW]);
+    assert_eq!(over(0x0088_00C6), [RED, RED, BLACK, BLACK]);
+    assert_eq!(over(0x00EE_0086), [RED, WHITE, MAGENTA, YELLOW]);
+    assert_eq!(over(0x0033_0008), [CYAN, BLACK, YELLOW, MAGENTA]);
+    // With the brush too: the bitmap where the brush is.
+    assert_eq!(over(0x00C0_00CA), [RED, RED, BLACK, BLACK]);
+
+    // No bitmap: the brush, what is there turned over, black, white, the brush or what is
+    // there but not both. A record of a bitmap that has none does the same.
+    let on = |records: Vec<(u16, Vec<u8>)>| {
+        let mut all = red_window();
+        all.push(pat(PATCOPY, [0, 0, 50, 100]));
+        all.extend(records);
+        let bmp = wmf_picture(&wmf(&all), Some((50, 50))).unwrap();
+        [pixel(&bmp, 25, 50), pixel(&bmp, 75, 50), pixel(&bmp, 25, 95), pixel(&bmp, 75, 95)]
+    };
+    let band = [0, 0, 100, 90];
+    assert_eq!(on(vec![]), [RED, WHITE, RED, WHITE]);
+    assert_eq!(on(vec![pat(0x0055_0009, band)]), [CYAN, BLACK, RED, WHITE]);
+    assert_eq!(on(vec![pat(0x0000_0042, band)]), [BLACK, BLACK, RED, WHITE]);
+    assert_eq!(on(vec![pat(0x00FF_0062, band)]), [WHITE, WHITE, RED, WHITE]);
+    assert_eq!(on(vec![pat(0x005A_0049, band)]), [BLACK, CYAN, RED, WHITE]);
+    let mut bare = 0x0055_0009u32.to_le_bytes().to_vec();
+    bare.extend(words(&[0, 0, 0, 0, 0, 90, 100, 0, 0]));
+    assert_eq!(on(vec![(0x0B41, bare)]), [CYAN, BLACK, RED, WHITE]);
+    let mut bare = 0x0055_0009u32.to_le_bytes().to_vec();
+    bare.extend(words(&[0, 0, 0, 90, 100, 0, 0]));
+    assert_eq!(on(vec![(0x0940, bare)]), [CYAN, BLACK, RED, WHITE]);
+    // A way that needs a bitmap, with none; and one that needs a brush, with one nobody knows.
+    let mut records = red_window();
+    records.push(pat(0x00CC_0020, band));
+    assert_eq!(wmf_picture(&wmf(&records), Some((50, 50))), None);
+    let unknown = vec![(0x020C, words(&[100, 100])), (0x02FC, vec![3, 0, 0, 0, 0, 0, 0, 0]), (0x012D, words(&[0])), pat(PATCOPY, band)];
+    assert_eq!(wmf_picture(&wmf(&unknown), Some((50, 50))), None);
+}
+
+#[test]
+fn brushes_of_a_hatching_and_of_a_pattern_are_filled_with() {
+    use crate::metafile::{emf_picture, wmf_picture};
+    let all = [0, 0, 100, 100];
+    // Lines across, red, drawn at twice the size: every eighth pair of rows. Between them is
+    // the paper's colour, or (when what is behind shows through) what was there.
+    let hatched = |kind: u8, through: bool| {
+        let mut records = vec![(0x020B, words(&[0, 0])), (0x020C, words(&[100, 100]))];
+        records.extend([(0x02FC, vec![0, 0, 0, 0, 255, 0, 0, 0]), (0x02FC, vec![2, 0, 255, 0, 0, 0, kind, 0])]);
+        records.extend([(0x012D, words(&[0])), pat(PATCOPY, all), (0x012D, words(&[1])), (0x0102, words(&[if through { 1 } else { 2 }]))]);
+        records.push(pat(PATCOPY, all));
+        wmf_picture(&wmf(&records), Some((50, 50))).unwrap()
+    };
+    let bmp = hatched(0, false);
+    assert_eq!([pixel(&bmp, 50, 6), pixel(&bmp, 50, 7), pixel(&bmp, 50, 10), pixel(&bmp, 50, 22)], [RED, RED, WHITE, RED]);
+    let bmp = hatched(0, true);
+    assert_eq!([pixel(&bmp, 50, 6), pixel(&bmp, 50, 10)], [RED, BLUE]);
+    // Lines down, lines that fall and that rise to the right, and the two grids.
+    let bmp = hatched(1, true);
+    assert_eq!([pixel(&bmp, 6, 50), pixel(&bmp, 10, 50), pixel(&bmp, 22, 50)], [RED, BLUE, RED]);
+    assert_eq!([pixel(&hatched(2, true), 4, 4), pixel(&hatched(2, true), 4, 10)], [RED, BLUE]);
+    assert_eq!([pixel(&hatched(3, true), 4, 10), pixel(&hatched(3, true), 4, 4)], [RED, BLUE]);
+    let bmp = hatched(4, true);
+    assert_eq!([pixel(&bmp, 6, 50), pixel(&bmp, 50, 6), pixel(&bmp, 10, 10)], [RED, RED, BLUE]);
+    let bmp = hatched(5, true);
+    assert_eq!([pixel(&bmp, 4, 4), pixel(&bmp, 4, 10), pixel(&bmp, 8, 2)], [RED, RED, BLUE]);
+
+    // A bitmap laid side by side, each of its pixels two of the page's each way.
+    let mut tile = words(&[5, 0]);
+    tile.extend_from_slice(&small_dib());
+    let window = vec![(0x020B, words(&[0, 0])), (0x020C, words(&[100, 100]))];
+    let mut records = window.clone();
+    records.extend([(0x0142, tile.clone()), (0x012D, words(&[0])), pat(PATCOPY, all)]);
+    let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+    assert_eq!(
+        [pixel(&bmp, 0, 0), pixel(&bmp, 1, 1), pixel(&bmp, 2, 0), pixel(&bmp, 0, 2), pixel(&bmp, 2, 2), pixel(&bmp, 4, 0)],
+        [RED, RED, WHITE, BLUE, GREEN, RED]
+    );
+    // A shape is filled with it as a box is.
+    let mut records = window.clone();
+    records.extend([(0x0142, tile.clone()), (0x012D, words(&[0])), (0x041B, words(&[80, 80, 20, 20]))]);
+    let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+    assert_eq!([pixel(&bmp, 40, 40), pixel(&bmp, 42, 40), pixel(&bmp, 40, 42), pixel(&bmp, 10, 10)], [RED, WHITE, BLUE, WHITE]);
+    // The oldest kind of pattern: a bit to the pixel, set for white.
+    let mut old = words(&[0, 8, 2, 2]);
+    old.extend([1, 1]);
+    old.extend([0; 22]);
+    old.extend([0xF0, 0, 0x0F, 0]);
+    let mut records = window.clone();
+    records.extend([(0x01F9, old), (0x012D, words(&[0])), pat(PATCOPY, all)]);
+    let bmp = wmf_picture(&wmf(&records), Some((50, 50))).unwrap();
+    assert_eq!(
+        [pixel(&bmp, 2, 0), pixel(&bmp, 10, 0), pixel(&bmp, 2, 2), pixel(&bmp, 10, 2), pixel(&bmp, 10, 4)],
+        [WHITE, BLACK, BLACK, WHITE, BLACK]
+    );
+    // A pattern whose colours are numbers in a palette, or that is cut short, is not known.
+    for bad in [words(&[5, 1]).into_iter().chain(small_dib()).collect::<Vec<u8>>(), tile[..tile.len() - 3].to_vec()] {
+        let mut records = window.clone();
+        records.extend([(0x0142, bad), (0x012D, words(&[0])), pat(PATCOPY, all)]);
+        assert_eq!(wmf_picture(&wmf(&records), Some((50, 50))), None);
+    }
+
+    // Enhanced: lines down in green on the paper's white, and a bitmap side by side.
+    let mut brush = longs(&[2, 2]);
+    brush.extend([0, 255, 0, 0, 1, 0, 0, 0]);
+    let fill = vec![(37, longs(&[2])), (37, 0x8000_0008u32.to_le_bytes().to_vec()), (43, longs(&[0, 0, 100, 100]))];
+    let mut records = vec![(39, brush)];
+    records.extend(fill.clone());
+    let bmp = emf_picture(&emf_of(&records), Some((50, 50))).unwrap();
+    assert_eq!([pixel(&bmp, 3, 50), pixel(&bmp, 4, 50), pixel(&bmp, 11, 50)], [GREEN, WHITE, GREEN]);
+    let dib = small_dib();
+    let mut pattern = longs(&[2, 0, 32, 40, 72, 16]);
+    pattern.extend_from_slice(&dib);
+    let mut records = vec![(94, pattern.clone())];
+    records.extend(fill.clone());
+    let bmp = emf_picture(&emf_of(&records), Some((50, 50))).unwrap();
+    assert_eq!(
+        [pixel(&bmp, 10, 10), pixel(&bmp, 11, 10), pixel(&bmp, 10, 11), pixel(&bmp, 11, 11), pixel(&bmp, 12, 12)],
+        [RED, WHITE, BLUE, GREEN, RED]
+    );
+    // One whose bitmap is not in the record is not known, and nothing is filled with it.
+    pattern[12..16].copy_from_slice(&4000i32.to_le_bytes());
+    let mut records = vec![(94, pattern)];
+    records.extend(fill);
+    assert_eq!(emf_picture(&emf_of(&records), Some((50, 50))), None);
+}
+
+#[test]
+fn regions_are_filled_framed_turned_over_and_cut_to() {
+    use crate::metafile::{emf_picture, wmf_picture};
+    // A box at the top left, and under it one line of two boxes.
+    let region = wmf_region(&[(10, 30, &[10, 30]), (50, 70, &[10, 30, 60, 90])]);
+    let spots = [(20, 20), (20, 60), (75, 60), (45, 60), (20, 40)];
+    let draw = |more: Vec<(u16, Vec<u8>)>| {
+        let mut records = red_window();
+        records.push(region.clone());
+        records.extend(more);
+        wmf_picture(&wmf(&records), Some((50, 50)))
+    };
+    let at = |bmp: &[u8]| spots.map(|(x, y)| pixel(bmp, x, y));
+    // Painted with the brush there is; filled with one that is named; turned over.
+    assert_eq!(at(&draw(vec![(0x012B, words(&[1]))]).unwrap()), [RED, RED, RED, WHITE, WHITE]);
+    let blue = (0x02FC, vec![0, 0, 0, 0, 255, 0, 0, 0]);
+    assert_eq!(at(&draw(vec![blue.clone(), (0x0228, words(&[1, 2]))]).unwrap()), [BLUE, BLUE, BLUE, WHITE, WHITE]);
+    assert_eq!(at(&draw(vec![(0x012A, words(&[1]))]).unwrap()), [BLACK, BLACK, BLACK, WHITE, WHITE]);
+    // Framed: a rim two units wide and high, inside it.
+    let bmp = draw(vec![(0x0429, words(&[1, 0, 2, 2]))]).unwrap();
+    assert_eq!(
+        [pixel(&bmp, 11, 20), pixel(&bmp, 20, 11), pixel(&bmp, 28, 20), pixel(&bmp, 20, 20), pixel(&bmp, 61, 60), pixel(&bmp, 8, 20)],
+        [RED, RED, RED, WHITE, RED, WHITE]
+    );
+    // Cut to: the brush copied over all the page stays inside the region, by either record.
+    for select in [0x012C, 0x012D] {
+        let bmp = draw(vec![(select, words(&[1])), pat(PATCOPY, [0, 0, 100, 100])]).unwrap();
+        assert_eq!(at(&bmp), [RED, RED, RED, WHITE, WHITE], "{select:#x}");
+        assert_eq!([pixel(&bmp, 5, 5), pixel(&bmp, 95, 95)], [WHITE, WHITE]);
+    }
+    // A box that is kept out of; and one kept out of what was a box already.
+    let bmp = draw(vec![(0x0415, words(&[60, 60, 40, 40])), pat(PATCOPY, [0, 0, 100, 100])]).unwrap();
+    assert_eq!([pixel(&bmp, 50, 50), pixel(&bmp, 20, 20), pixel(&bmp, 80, 50)], [WHITE, RED, RED]);
+    let bmp = draw(vec![(0x0416, words(&[100, 50, 0, 0])), (0x0415, words(&[60, 60, 40, 40])), pat(PATCOPY, [0, 0, 100, 100])]).unwrap();
+    assert_eq!([pixel(&bmp, 45, 50), pixel(&bmp, 20, 20), pixel(&bmp, 80, 50)], [WHITE, RED, WHITE]);
+    // A state that is saved and put back has the page whole again.
+    let bmp = draw(vec![(0x001E, Vec::new()), (0x012C, words(&[1])), (0x0127, words(&[-1])), pat(PATCOPY, [0, 0, 100, 100])]).unwrap();
+    assert_eq!(pixel(&bmp, 45, 60), RED);
+    // A region that was never made, an object that is no region, a brush that is none.
+    assert_eq!(draw(vec![(0x012B, words(&[5]))]), None);
+    assert_eq!(draw(vec![(0x012B, words(&[0]))]), None);
+    assert_eq!(draw(vec![(0x0228, words(&[1, 1]))]), None);
+
+    // Enhanced: the same region, in the drawing's units.
+    let data = emf_region(&[[10, 10, 30, 30], [10, 50, 30, 70], [60, 50, 90, 70]]);
+    let size = i32::try_from(data.len()).unwrap();
+    let with = |head: &[i32]| {
+        let mut body = longs(&[0, 0, 100, 100, size]);
+        body.extend(longs(head));
+        body.extend_from_slice(&data);
+        body
+    };
+    let draw = |more: Vec<(u32, Vec<u8>)>| {
+        let mut records = red_brush();
+        records.extend(more);
+        emf_picture(&emf_of(&records), Some((50, 50)))
+    };
+    assert_eq!(at(&draw(vec![(74, with(&[]))]).unwrap()), [RED, RED, RED, WHITE, WHITE]);
+    assert_eq!(at(&draw(vec![(73, with(&[]))]).unwrap()), [BLACK, BLACK, BLACK, WHITE, WHITE]);
+    assert_eq!(at(&draw(vec![(71, with(&[0x8000_0004u32.cast_signed()]))]).unwrap()), [BLACK, BLACK, BLACK, WHITE, WHITE]);
+    let bmp = draw(vec![(72, with(&[1, 2, 2]))]).unwrap();
+    assert_eq!([pixel(&bmp, 11, 20), pixel(&bmp, 20, 11), pixel(&bmp, 20, 20)], [RED, RED, WHITE]);
+    assert!(pixel(&bmp, 61, 60)[1] < 8 && pixel(&bmp, 64, 60) == WHITE);
+    // Cut to, in the device's units; then a box kept out of, and one joined to it.
+    let cut = |mode: i32| {
+        let mut body = longs(&[size, mode]);
+        body.extend_from_slice(&data);
+        (75, body)
+    };
+    let page = (43, longs(&[0, 0, 100, 100]));
+    assert_eq!(at(&draw(vec![cut(5), page.clone()]).unwrap()), [RED, RED, RED, WHITE, WHITE]);
+    let bmp = draw(vec![cut(5), (29, longs(&[15, 15, 25, 25])), page.clone()]).unwrap();
+    assert_eq!([pixel(&bmp, 20, 20), pixel(&bmp, 12, 12), pixel(&bmp, 20, 60)], [WHITE, RED, RED]);
+    // Either (the half page or the region), one and not the other, the half page without it.
+    let half = (30, longs(&[0, 0, 50, 100]));
+    let joined = |mode: i32| {
+        let bmp = draw(vec![half.clone(), cut(mode), page.clone()]).unwrap();
+        [pixel(&bmp, 20, 20), pixel(&bmp, 40, 40), pixel(&bmp, 75, 60), pixel(&bmp, 75, 20)]
+    };
+    assert_eq!(joined(1), [RED, WHITE, WHITE, WHITE]);
+    assert_eq!(joined(2), [RED, RED, RED, WHITE]);
+    assert_eq!(joined(3), [WHITE, RED, RED, WHITE]);
+    assert_eq!(joined(4), [WHITE, RED, WHITE, WHITE]);
+    assert_eq!(draw(vec![half.clone(), cut(6), page.clone()]), None);
+    // No region at all is the whole page again.
+    let bmp = draw(vec![cut(5), (75, longs(&[0, 5])), page.clone()]).unwrap();
+    assert_eq!(pixel(&bmp, 45, 60), RED);
+    // A path that is no box is cut to as it would be filled: a triangle.
+    let path = vec![(59, Vec::new()), (27, longs(&[10, 10])), (54, longs(&[90, 10])), (54, longs(&[50, 90])), (61, Vec::new()), (60, Vec::new())];
+    let mut records = path.clone();
+    records.extend([(67, longs(&[1])), page.clone()]);
+    let bmp = draw(records).unwrap();
+    assert_eq!([pixel(&bmp, 50, 30), pixel(&bmp, 12, 80), pixel(&bmp, 88, 80), pixel(&bmp, 50, 5)], [RED, WHITE, WHITE, WHITE]);
+    // More boxes than a region may have, and boxes that are not in the record.
+    let mut many = longs(&[0, 0, 100, 100, 32, 32, 1, 5000, 0, 0, 0, 100, 100]);
+    many.extend(vec![0; 64]);
+    assert_eq!(draw(vec![(74, many)]), None);
+    let mut short = with(&[]);
+    short.truncate(short.len() - 4);
+    assert_eq!(draw(vec![(74, short)]), None);
+}
+
+#[test]
+fn an_enhanced_drawing_copies_bitmaps_from_one_place_to_another() {
+    use crate::metafile::emf_picture;
+    let dib = small_dib();
+    let draw = |more: Vec<(u32, Vec<u8>)>| {
+        let mut records = red_brush();
+        records.extend(more);
+        emf_picture(&emf_of(&records), Some((50, 50)))
+    };
+    let at = |bmp: &[u8], points: [(usize, usize); 4]| points.map(|(x, y)| pixel(bmp, x, y));
+    // A pixel of the bitmap to one of the device: its rows are counted from the top.
+    let bmp = draw(vec![emf_blt(Some(&dib), [10, 10, 2, 2], 0x00CC_0020, (0, 0), None)]).unwrap();
+    assert_eq!(at(&bmp, [(10, 10), (11, 10), (10, 11), (11, 11)]), [RED, WHITE, BLUE, GREEN]);
+    assert_eq!([pixel(&bmp, 12, 12), pixel(&bmp, 9, 9)], [WHITE, WHITE]);
+    // Stretched: all of it, and its bottom row alone.
+    let quarters = [(20, 20), (40, 20), (20, 40), (40, 40)];
+    let bmp = draw(vec![emf_blt(Some(&dib), [10, 10, 40, 40], 0x00CC_0020, (0, 0), Some((2, 2)))]).unwrap();
+    assert_eq!(at(&bmp, quarters), [RED, WHITE, BLUE, GREEN]);
+    let bmp = draw(vec![emf_blt(Some(&dib), [10, 10, 40, 40], 0x00CC_0020, (0, 1), Some((2, 1)))]).unwrap();
+    assert_eq!(at(&bmp, quarters), [BLUE, GREEN, BLUE, GREEN]);
+    // No bitmap: the brush, and what is there turned over.
+    let bmp = draw(vec![emf_blt(None, [0, 0, 50, 100], PATCOPY, (0, 0), None), emf_blt(None, [0, 0, 100, 50], 0x0055_0009, (0, 0), None)]).unwrap();
+    assert_eq!(at(&bmp, [(25, 25), (75, 25), (25, 75), (75, 75)]), [CYAN, BLACK, RED, WHITE]);
+    // Mixed with what is there: the bitmap where the red is.
+    let bmp =
+        draw(vec![emf_blt(None, [0, 0, 100, 100], PATCOPY, (0, 0), None), emf_blt(Some(&dib), [10, 10, 40, 40], 0x0088_00C6, (0, 0), Some((2, 2)))])
+            .unwrap();
+    assert_eq!(at(&bmp, quarters), [RED, RED, BLACK, BLACK]);
+    // Not drawn: a way that needs a bitmap, with none; colours that are numbers in a palette;
+    // the bitmap's own units turned round; a record that is cut short.
+    assert_eq!(draw(vec![emf_blt(None, [0, 0, 50, 50], 0x00CC_0020, (0, 0), None)]), None);
+    let whole = emf_blt(Some(&dib), [10, 10, 40, 40], 0x00CC_0020, (0, 0), Some((2, 2)));
+    let change = |at: usize, bytes: [u8; 4]| {
+        let mut record = whole.clone();
+        record.1[at - 8..at - 4].copy_from_slice(&bytes);
+        draw(vec![record])
+    };
+    assert!(change(80, [0; 4]).is_some());
+    assert_eq!(change(80, 1u32.to_le_bytes()), None);
+    assert_eq!(change(56, 1.0f32.to_le_bytes()), None);
+    assert_eq!(change(84, 4000u32.to_le_bytes()), None);
+    assert_eq!(draw(vec![(77, whole.1[..60].to_vec())]), None);
+}
+
+#[test]
+fn hostile_brushes_regions_and_copies_never_panic() {
+    use crate::metafile::{emf_picture, wmf_picture};
+    // Every record this reads, cut to every length and filled with every kind of junk: 13
+    // kinds, 12 lengths, 4 fillings, each on a page of a hundred pixels a side.
+    let fillings = [0u8, 1, 0x7F, 0xFF];
+    for function in [0x0F43u16, 0x0B41, 0x0940, 0x061D, 0x06FF, 0x012C, 0x0228, 0x012B, 0x012A, 0x0429, 0x0415, 0x0142, 0x01F9] {
+        for len in [0usize, 2, 4, 8, 10, 16, 18, 22, 28, 40, 64, 120] {
+            for fill in fillings {
+                let mut records = red_window();
+                records.extend([
+                    (0x041B, words(&[80, 80, 20, 20])),
+                    (function, vec![fill; len]),
+                    (0x012D, words(&[1])),
+                    pat(PATCOPY, [0, 0, 100, 100]),
+                ]);
+                let _ = wmf_picture(&wmf(&records), Some((50, 50)));
+            }
+        }
+    }
+    for kind in [29u32, 30, 39, 67, 71, 72, 73, 74, 75, 76, 77, 81, 93, 94] {
+        for len in [0usize, 4, 8, 16, 24, 32, 40, 56, 72, 92, 100, 160] {
+            for fill in fillings {
+                let mut records = red_brush();
+                records.extend([(43, longs(&[20, 20, 80, 80])), (kind, vec![fill; len]), (37, longs(&[2])), (43, longs(&[0, 0, 100, 100]))]);
+                let _ = emf_picture(&emf_of(&records), Some((50, 50)));
+            }
+        }
+    }
+    // Boxes and bitmaps as far out and as large as their numbers go, mirrored and not.
+    let dib = small_dib();
+    for far in [i16::MIN, -1, 0, 1, i16::MAX] {
+        let mut records = red_window();
+        records.extend([
+            stretched(&dib, [far, far, far, far], [40, 40, 10, 10]),
+            stretched(&dib, [2, 2, 0, 0], [far, far, far, far]),
+            pat(0x005A_0049, [far, far, far, far]),
+        ]);
+        records.extend([
+            wmf_region(&[(far, far, &[far, far]), (far, 0, &[0, far, far, 0])]),
+            (0x012B, words(&[1])),
+            (0x0429, words(&[1, 0, far, far])),
+        ]);
+        let _ = wmf_picture(&wmf(&records), Some((50, 50)));
+    }
+    for far in [i32::MIN, -1, 0, 1, 70_000, i32::MAX] {
+        let data = emf_region(&[[far, far, far, far], [0, far, far, 0]]);
+        let mut cut = longs(&[i32::try_from(data.len()).unwrap(), 2]);
+        cut.extend_from_slice(&data);
+        let mut frame = longs(&[0, 0, 0, 0, 0, 1, far, far]);
+        frame.extend_from_slice(&data);
+        let turn: Vec<u8> = [far as f32, 1.0e30, f32::NAN, -0.0, f32::INFINITY, 0.5].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let records = vec![
+            emf_stretched(&dib, [far, far, far, far], [0, 0, 2, 2]),
+            emf_stretched(&dib, [10, 10, 40, 40], [far, far, far, far]),
+            emf_blt(Some(&dib), [far, far, far, far], 0x0066_0046, (far, far), Some((far, far))),
+            emf_blt(Some(&dib), [10, 10, far, far], 0x00CC_0020, (far, far), None),
+            (75, cut),
+            (72, frame),
+            (29, longs(&[far, far, far, far])),
+            (35, turn),
+            emf_stretched(&dib, [10, 10, 40, 40], [0, 0, 2, 2]),
+            (29, longs(&[0, 0, 10, 10])),
+        ];
+        let _ = emf_picture(&emf_of(&records), Some((50, 50)));
+    }
+    // What is cut to, over and over: each costs the page once, and the work runs out.
+    let mut records = red_window();
+    records.extend(std::iter::repeat_n((0x0415, words(&[60, 60, 40, 40])), 3000));
+    records.push(pat(PATCOPY, [0, 0, 100, 100]));
+    let _ = wmf_picture(&wmf(&records), Some((50, 50)));
 }
