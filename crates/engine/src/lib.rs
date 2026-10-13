@@ -225,6 +225,9 @@ pub struct Session {
     pub unread_only: bool,
     pub reading_pane: ReadingPane,
     pub folder_pane: bool,
+    /// Whether the file as it was stays beside a data file the first time it is saved
+    /// (`file.keepOriginal`). It does until the owner says otherwise.
+    pub keep_original: bool,
     pub compose: Option<Draft>,
     pub status: String,
     /// Minutes east of UTC for dates shown and written into reply headers. Set by the host.
@@ -272,6 +275,7 @@ impl Session {
             unread_only: false,
             reading_pane: ReadingPane::Right,
             folder_pane: true,
+            keep_original: true,
             compose: None,
             status: String::new(),
             tz_offset_min: 0,

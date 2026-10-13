@@ -172,6 +172,22 @@ impl Enc {
                 self.u8(4);
                 self.u64(f.to_bits());
             }
+            PropValue::Float32(f) => {
+                self.u8(13);
+                self.u32(f.to_bits());
+            }
+            PropValue::Currency(n) => {
+                self.u8(14);
+                self.u64(n.cast_unsigned());
+            }
+            PropValue::FloatTime(f) => {
+                self.u8(15);
+                self.u64(f.to_bits());
+            }
+            PropValue::Error(n) => {
+                self.u8(16);
+                self.u32(n.cast_unsigned());
+            }
             PropValue::String(s) => {
                 self.u8(5);
                 self.str(s)?;
@@ -451,6 +467,10 @@ impl Dec<'_> {
                 PropValue::MultiBinary((0..n).map(|_| self.bytes()).collect::<Option<_>>()?)
             }
             12 => PropValue::Other { ty: self.u16()?, raw: self.bytes()? },
+            13 => PropValue::Float32(f32::from_bits(self.u32()?)),
+            14 => PropValue::Currency(self.u64()?.cast_signed()),
+            15 => PropValue::FloatTime(f64::from_bits(self.u64()?)),
+            16 => PropValue::Error(self.u32()?.cast_signed()),
             _ => return None,
         })
     }

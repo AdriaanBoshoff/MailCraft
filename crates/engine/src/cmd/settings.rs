@@ -65,6 +65,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
             ReadingPane::Off => "off",
         },
         "folderPane": s.folder_pane,
+        "keepOriginal": s.keep_original,
         "dataFiles": files,
     });
     if let Some(ui) = ui.filter(|ui| ui.is_object() && ui.to_string().len() <= MAX_UI) {
@@ -148,6 +149,12 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(v.is_boolean());
         if let Some(show) = v.as_bool() {
             s.folder_pane = show;
+        }
+    }
+    if let Some(v) = all.get("keepOriginal") {
+        took(v.is_boolean());
+        if let Some(keep) = v.as_bool() {
+            s.keep_original = keep;
         }
     }
     let (mut opened, mut missing) = (0u32, 0u32);

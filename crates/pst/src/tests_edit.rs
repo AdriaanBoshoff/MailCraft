@@ -140,6 +140,40 @@ fn changes_are_kept_when_saved() {
 }
 
 #[test]
+fn a_saved_file_goes_on_from_the_counters_of_the_one_it_replaces() {
+    let mut store = open();
+    let before = store.ndb.counters;
+    // The newest message is deleted: its id is free in the tree, and is not given out again.
+    let inbox = folder(&mut store, "Inbox");
+    let last = store.list(inbox.id).unwrap().iter().map(|s| s.id).max().unwrap();
+    let highest = store.ndb.nbt.keys().filter(|n| *n & 0x1F == 0x04).map(|n| n >> 5).max().unwrap();
+    assert!(before.1[0x04] > highest, "{} {highest}", before.1[0x04]);
+    store.remove(inbox.id, ItemId(last)).unwrap();
+    let mut after = saved(&mut store);
+    assert_eq!(after.ndb.counters.0, before.0.wrapping_add(1), "the header says it was written once more");
+    for (kind, (was, is)) in before.1.iter().zip(after.ndb.counters.1).enumerate() {
+        assert!(is >= *was, "kind {kind:#x}: {is} < {was}");
+    }
+    // A message added now takes an id no message of the file ever had.
+    let inbox = folder(&mut after, "Inbox");
+    let mut item = Item::default();
+    item.props.set_str(pid::SUBJECT, "New");
+    let new = after.add(inbox.id, item).unwrap();
+    let mut again = saved(&mut after);
+    let inbox = folder(&mut again, "Inbox");
+    let ids: Vec<u64> = again.list(inbox.id).unwrap().iter().map(|s| s.id).collect();
+    assert!(ids.iter().all(|id| (*id as u32) >> 5 != (last as u32) >> 5 || *id == last), "{ids:?}");
+    assert!(ids.iter().any(|id| (*id as u32) >> 5 > highest), "{ids:?} {highest} {new:?}");
+    // Counters that make no sense carry nothing a file cannot hold.
+    let mut wild = open();
+    wild.ndb.counters = (u32::MAX, [u32::MAX; 32]);
+    let item = Item::default();
+    let inbox = folder(&mut wild, "Inbox");
+    let _ = wild.add(inbox.id, item);
+    let _ = wild.save_to(Cursor::new(Vec::new()), UID);
+}
+
+#[test]
 fn what_this_program_does_not_understand_is_kept() {
     // A file with what our own writer never makes: a hidden (associated) message in the Inbox,
     // a property with an id no name stands for, and a folder property the model has no place for.

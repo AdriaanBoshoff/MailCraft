@@ -59,6 +59,12 @@ pub(super) fn mailbox() -> MemStore {
     first.named.push((NamedKey { guid: pset::PS_PUBLIC_STRINGS, name: NameId::Name("Another".into()) }, PropValue::Int32(7)));
     first.props.set(0x6001, PropValue::Other { ty: 0x00FB, raw: vec![1, 2, 3, 4, 5] });
     first.props.set(pid::FLAG_STATUS, PropValue::Int32(2));
+    // Kinds that share their bytes with another kind and keep their own.
+    first.props.set(0x6002, PropValue::Float32(2.5));
+    first.props.set(0x6003, PropValue::Currency(-12_345_600));
+    first.props.set(0x6004, PropValue::FloatTime(45_000.25));
+    first.props.set(0x6005, PropValue::Error(0x8004_010Fu32.cast_signed()));
+    first.props.set(0x6006, PropValue::Float64(-0.1));
     first.props.set(pid::IMPORTANCE, PropValue::Int32(2));
     first.attachments.push(Attachment::file("numbers.csv", "text/csv", b"a,b\r\n1,2\r\n".to_vec()));
     // Larger than a heap holds, and larger than one block.

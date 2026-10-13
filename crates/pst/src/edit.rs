@@ -583,6 +583,7 @@ impl PstStore {
     ) -> Result<(W, Written), PstError> {
         // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
         let mut o = Out { w: NdbWriter::new(out, 1)?, names: Names::seeded(&self.names), uid: seed, serial: 0 };
+        o.w.carry(self.ndb.counters);
         let mut budget = self.ndb.block_count().saturating_mul(16).saturating_add(4096);
         let root = self.root;
         let none: &[EFolder] = &[];
@@ -1228,9 +1229,10 @@ impl PstStore {
         drop(old);
         // The first time a data file is replaced, the file as it was stays beside it under
         // another name: a second name for the same bytes, so it costs no copying.
+        let keep = self.keep_before;
         let moved = free_to_replace(path).and_then(|()| {
             let kept = original_beside(path);
-            if !kept.exists() {
+            if keep && !kept.exists() {
                 let _ = std::fs::hard_link(path, &kept);
             }
             std::fs::rename(tmp, path)

@@ -175,6 +175,8 @@ pub(crate) struct NdbWriter<W: Read + Write + Seek> {
     next_page: u64,
     /// The highest index used so far for each of the 32 kinds of node id.
     last: [u32; 32],
+    /// dwUnique of the file this one takes the place of.
+    unique: u32,
 }
 
 impl<W: Read + Write + Seek> NdbWriter<W> {
@@ -197,6 +199,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             next_block: 1,
             next_page: 1,
             last: [0; 32],
+            unique: 0,
         };
         w.open_section();
         Ok(w)
@@ -455,6 +458,17 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         }
     }
 
+    /// Carry on from the counters of the file this one takes the place of: no node id that
+    /// file gave out, to a node since deleted or not, is given out again, and the header's
+    /// count of its writings goes on.
+    pub(crate) fn carry(&mut self, counters: (u32, [u32; 32])) {
+        self.unique = counters.0;
+        for (last, next) in self.last.iter_mut().zip(counters.1) {
+            // An index has 27 bits; a counter beyond that is not one.
+            *last = (*last).max(next.saturating_sub(1).min((1 << 27) - 1));
+        }
+    }
+
     fn note(&mut self, nid: u32) {
         if let Some(last) = self.last.get_mut((nid & 0x1F) as usize) {
             *last = (*last).max(nid >> 5);
@@ -594,7 +608,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         put(&mut head, 12, &19u16.to_le_bytes());
         put(&mut head, 14, &[1, 1]);
         put(&mut head, 32, &self.next_page.to_le_bytes());
-        put(&mut head, 40, &1u32.to_le_bytes());
+        put(&mut head, 40, &self.unique.wrapping_add(1).to_le_bytes());
         // rgnid: for each kind of node id, where the next one starts.
         for kind in 0..32usize {
             let start: u32 = match kind {

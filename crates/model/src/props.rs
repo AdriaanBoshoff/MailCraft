@@ -135,6 +135,14 @@ pub enum PropValue {
     Int64(i64),
     Bool(bool),
     Float64(f64),
+    /// A 32-bit float, kept as one so that it is written as it was read.
+    Float32(f32),
+    /// Currency: a count of ten-thousandths ([MS-OXCDATA] 2.11.1).
+    Currency(i64),
+    /// A time as days since the end of 1899, with the time of day as a fraction.
+    FloatTime(f64),
+    /// An error code standing where a value could not be given.
+    Error(i32),
     String(String),
     Binary(Vec<u8>),
     /// UTC FILETIME ticks: 100 ns since 1601-01-01.
@@ -158,6 +166,10 @@ impl PropValue {
             Self::Int64(_) => ptype::INT64,
             Self::Bool(_) => ptype::BOOL,
             Self::Float64(_) => ptype::FLOAT64,
+            Self::Float32(_) => ptype::FLOAT32,
+            Self::Currency(_) => ptype::CURRENCY,
+            Self::FloatTime(_) => ptype::FLOATTIME,
+            Self::Error(_) => ptype::ERROR,
             Self::String(_) => ptype::STRING,
             Self::Binary(_) => ptype::BINARY,
             Self::Time(_) => ptype::TIME,
@@ -176,10 +188,13 @@ impl PropValue {
         Some(match ty {
             ptype::INT16 => Self::Int16(i16::from_le_bytes(b.get(..2)?.try_into().ok()?)),
             ptype::BOOL => Self::Bool(*b.first()? != 0),
-            ptype::INT32 | ptype::ERROR => Self::Int32(i32::from_le_bytes(le32(b)?)),
-            ptype::FLOAT32 => Self::Float64(f64::from(f32::from_le_bytes(le32(b)?))),
-            ptype::FLOAT64 | ptype::FLOATTIME => Self::Float64(f64::from_le_bytes(le64(b)?)),
-            ptype::INT64 | ptype::CURRENCY => Self::Int64(i64::from_le_bytes(le64(b)?)),
+            ptype::INT32 => Self::Int32(i32::from_le_bytes(le32(b)?)),
+            ptype::ERROR => Self::Error(i32::from_le_bytes(le32(b)?)),
+            ptype::FLOAT32 => Self::Float32(f32::from_le_bytes(le32(b)?)),
+            ptype::FLOAT64 => Self::Float64(f64::from_le_bytes(le64(b)?)),
+            ptype::FLOATTIME => Self::FloatTime(f64::from_le_bytes(le64(b)?)),
+            ptype::INT64 => Self::Int64(i64::from_le_bytes(le64(b)?)),
+            ptype::CURRENCY => Self::Currency(i64::from_le_bytes(le64(b)?)),
             ptype::TIME => Self::Time(i64::from_le_bytes(le64(b)?)),
             ptype::GUID => Self::Guid(b.get(..16)?.try_into().ok()?),
             _ => return None,
@@ -191,10 +206,11 @@ impl PropValue {
         let mut out = [0u8; 8];
         match self {
             Self::Int16(v) => out.get_mut(..2)?.copy_from_slice(&v.to_le_bytes()),
-            Self::Int32(v) => out.get_mut(..4)?.copy_from_slice(&v.to_le_bytes()),
+            Self::Int32(v) | Self::Error(v) => out.get_mut(..4)?.copy_from_slice(&v.to_le_bytes()),
+            Self::Float32(v) => out.get_mut(..4)?.copy_from_slice(&v.to_le_bytes()),
             Self::Bool(v) => out[0] = u8::from(*v),
-            Self::Int64(v) | Self::Time(v) => out = v.to_le_bytes(),
-            Self::Float64(v) => out = v.to_le_bytes(),
+            Self::Int64(v) | Self::Time(v) | Self::Currency(v) => out = v.to_le_bytes(),
+            Self::Float64(v) | Self::FloatTime(v) => out = v.to_le_bytes(),
             _ => return None,
         }
         Some(out)
@@ -314,9 +330,19 @@ mod tests {
 
     #[test]
     fn fixed_values_round_trip() {
-        for v in
-            [PropValue::Int32(-7), PropValue::Bool(true), PropValue::Time(133_000_000_000_000_000), PropValue::Int16(-2), PropValue::Int64(1 << 40)]
-        {
+        for v in [
+            PropValue::Int32(-7),
+            PropValue::Bool(true),
+            PropValue::Time(133_000_000_000_000_000),
+            PropValue::Int16(-2),
+            PropValue::Int64(1 << 40),
+            PropValue::Float64(-0.1),
+            // The kinds that share their bytes with another keep their own type.
+            PropValue::Float32(1.5),
+            PropValue::Currency(12_345_600),
+            PropValue::FloatTime(45_000.25),
+            PropValue::Error(0x8004_010Fu32.cast_signed()),
+        ] {
             let b = v.fixed_bytes().unwrap();
             assert_eq!(PropValue::from_fixed(v.ty(), &b), Some(v));
         }

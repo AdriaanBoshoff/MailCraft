@@ -53,6 +53,9 @@ pub(crate) struct Ndb<'a> {
     crypt: u8,
     pub nbt: HashMap<u32, NbtEntry>,
     bbt: HashMap<u64, BbtEntry>,
+    /// dwUnique and rgnid of the header ([MS-PST] 2.2.2.6): how often the header was
+    /// written, and for each kind of node id the next one to give out.
+    pub counters: (u32, [u32; 32]),
 }
 
 pub(crate) fn u16_at(b: &[u8], at: usize) -> Option<u16> {
@@ -74,7 +77,7 @@ fn damaged(what: &str) -> PstError {
 impl<'a> Ndb<'a> {
     pub(crate) fn open(mut src: Box<dyn Source + 'a>) -> Result<Self, PstError> {
         let len = src.seek(SeekFrom::End(0))?;
-        let mut ndb = Self { src, len, ver: Ver::Unicode, crypt: 0, nbt: HashMap::new(), bbt: HashMap::new() };
+        let mut ndb = Self { src, len, ver: Ver::Unicode, crypt: 0, nbt: HashMap::new(), bbt: HashMap::new(), counters: (0, [0; 32]) };
         let head = ndb.read_at(0, 564.min(usize::try_from(len).unwrap_or(564)))?;
         // dwMagic "!BDN" and wMagicClient "SM" ([MS-PST] 2.2.2.6). Offline stores (.ost) carry
         // "SO" there instead (observed in files; the NDB layout is otherwise the same).
@@ -93,6 +96,12 @@ impl<'a> Ndb<'a> {
             Ver::Ansi => (u32_at(&head, 188).map(u64::from), u32_at(&head, 196).map(u64::from), 461),
             _ => (u64_at(&head, 224), u64_at(&head, 240), 513),
         };
+        // dwUnique, then rgnid: after the 8-byte ids of a Unicode file, the 4-byte ones of an ANSI.
+        let unique_at = if ndb.ver == Ver::Ansi { 32 } else { 40 };
+        ndb.counters.0 = u32_at(&head, unique_at).unwrap_or(0);
+        for (kind, next) in ndb.counters.1.iter_mut().enumerate() {
+            *next = u32_at(&head, unique_at + 4 + kind * 4).unwrap_or(0);
+        }
         ndb.crypt = head.get(crypt_at).copied().ok_or_else(|| damaged("the header is cut short"))?;
         if ndb.crypt > 2 {
             // 0x10 is Windows Information Protection: the blocks are encrypted with a key we do not have.

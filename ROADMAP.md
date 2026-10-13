@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 67 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 68 · 2026-10-12
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 283, all passing |
+| Tests | 285, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -102,7 +102,8 @@
 51. Done: the structure check looks inside the nodes: every heap, index, property list and table is held against the specification (M3b.13).
 52. Done: an export of a data file runs on a thread of its own, with progress and a way to stop it (M3b.14).
 53. Done: an exported file names the Calendar, Contacts, Tasks, Notes, Journal and Drafts folders by id on its root and its Inbox (M3b.15).
-54. Next: M3b.16: the small things left in the writer: the node-id counters of the header, 32-bit floats, currency and error values keeping their type, and a choice not to keep the file as it was beside a data file on its first save.
+54. Done: the small things left in the writer: values keep their kind, a rewritten file goes on from the header's counters, and the file as it was need not be kept (M3b.16).
+55. Next: M3b.17: an attachment whose contents were changed keeps what is stored on it, and a stored attachment that cannot be read is carried as it is; table cells whose type differs from the column's.
 
 ## Do later (from M2)
 
@@ -144,8 +145,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
 | Working out again which search folders a changed message belongs to (its rows are brought up to date; a row is not added or taken away) | M5 |
 | Changes to an ANSI `.pst` and a 4K-page file kept; an `.ost` stays read-only for good (it is a server's copy) | M3b, with writing those kinds |
-| The node-id counters of a file's header carried into the rewritten file | M3b |
-| A choice not to keep the file as it was beside a data file on its first save | M3b |
+| ~~The node-id counters of a file's header carried into the rewritten file~~ | done: M3b.16 |
+| ~~A choice not to keep the file as it was beside a data file on its first save~~ | done: M3b.16 (`file.keepOriginal`) |
 | ~~The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`~~ | done: M3b.15 |
 | ~~Export off the UI thread, with progress and a way to stop~~ | done: M3b.14, for a Unicode `.pst` copied as stored |
 | Export off the UI thread for a mailbox written through the model (the sample, an `.ost`, an ANSI `.pst`, a 4K-page file); the structure check hearing Stop | M3b |
@@ -153,7 +154,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | The structure check for ANSI and 4K-page (`.ost`) files | M3b |
 | ~~The structure check reaching into heaps, property lists and tables~~ | done: M3b.13 |
 | The structure check comparing a heap's fill levels with its free space; the check run on a 512-byte-page `.pst` written by Outlook | M3b |
-| 32-bit floats, currency and error values keeping their type when an item is written from the model (a value that was not changed keeps it since M3.4) | M3b |
+| ~~32-bit floats, currency and error values keeping their type when an item is written from the model~~ | done: M3b.16 |
 | A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
 | Writing ANSI and 4K-page data files (a re-saved file keeps its kind) | M3b |
@@ -1043,3 +1044,21 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   says which folder mail is delivered to), so an Inbox with another name is a mail folder
   like any other; written from the specification alone, as the rest of an exported file is
   until one is opened in Outlook.
+- **2026-10-13** - M3b.16: three small things in the writer. (1) Values keep their kind. A 32-bit
+  float was read as a 64-bit one, currency as a whole number, a time kept as days as a
+  float, and an error code as a number, and each was written back as what it had been read
+  as when an item was written from the model: another type, and for a float another size.
+  The model now has a kind for each (`PropValue::Float32`, `Currency`, `FloatTime`,
+  `Error`), so a `.pst`, a `.msg` and the journal of unsaved changes write them as they
+  were. Made better on the way: an error code standing where a value could not be given is
+  no longer taken for a number by what reads a property as one. (2) A file rewritten by a
+  save goes on from the counters of the header it replaces ([MS-PST] 2.2.2.6): the next
+  node id of each kind is never lower than it was, so the id of a deleted message is not
+  given to a new one (a program holding the old id would have found another message
+  under it), and the count of how often the header was written goes up by one where it was
+  set back to one. Counters that make no sense are held to what a node id can be. (3)
+  `file.keepOriginal` chooses whether the file as it was stays beside a data file on its
+  first save; it does until told otherwise, and the choice is kept with the settings. 2
+  tests, and more in three that were there. Not done: `file.keepOriginal` has no place on
+  a settings page (there is none yet; M5); a file kept before is not removed when the
+  choice is turned off.

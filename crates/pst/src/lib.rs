@@ -99,6 +99,8 @@ pub struct PstStore {
     saving: Option<edit::Beside>,
     /// Where a save says how far it is, and where it is told to stop.
     progress: Option<std::sync::Arc<openmailclient_model::Progress>>,
+    /// Whether the file as it was stays beside this one the first time a save replaces it.
+    keep_before: bool,
 }
 
 impl PstStore {
@@ -134,6 +136,7 @@ impl PstStore {
             journal: journal::Journal::default(),
             saving: None,
             progress: None,
+            keep_before: true,
         };
         // The message store node ([MS-PST] 2.4.3): display name and the entry ids of the special folders.
         if let Ok((bag, _)) = store.node_props(NID_MESSAGE_STORE) {
@@ -424,6 +427,10 @@ impl Store for PstStore {
 
     fn copy_to(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::Copied>, StoreError> {
         self.e_copy_to(to, seed)
+    }
+
+    fn keep_original(&mut self, keep: bool) {
+        self.keep_before = keep;
     }
 
     fn copy_begin(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::CopyWork>, StoreError> {

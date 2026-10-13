@@ -127,10 +127,7 @@ impl Names {
 fn write_props(cf: &mut Cf, base: &Path, header: &[u8], props: &[(u16, PropValue)]) -> std::io::Result<()> {
     let mut stream = header.to_vec();
     for (id, v) in props {
-        let ty = match v {
-            PropValue::Float64(_) => ptype::FLOAT64,
-            other => other.ty(),
-        };
+        let ty = v.ty();
         let mut entry = (u32::from(*id) << 16 | u32::from(ty)).to_le_bytes().to_vec();
         entry.extend_from_slice(&FLAGS.to_le_bytes());
         let name = value_stream(*id, ty);

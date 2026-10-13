@@ -649,6 +649,9 @@ pub trait Store {
     fn copy_to(&mut self, _to: &std::path::Path, _seed: [u8; 16]) -> Result<Option<Copied>, StoreError> {
         Ok(None)
     }
+    /// Whether the file as it was stays beside a data file the first time a save replaces
+    /// it. It does unless this says otherwise; a store that is in no file has nothing to keep.
+    fn keep_original(&mut self, _keep: bool) {}
     /// `copy_to` as work to be done on a thread of its own: it reads the data file through a
     /// handle of its own and copies the mailbox as it stood when this was asked, so the store
     /// goes on being read and changed meanwhile. `None` when this store cannot.

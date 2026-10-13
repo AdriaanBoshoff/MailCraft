@@ -2210,6 +2210,35 @@ fn an_export_that_is_not_waited_for_copies_the_mailbox_as_it_stood() {
 }
 
 #[test]
+fn the_file_as_it_was_is_kept_beside_a_first_save_unless_asked_not_to() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-keep-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for keep in [true, false] {
+        let path = dir.join(if keep { "kept.pst" } else { "alone.pst" });
+        run(&mut session(), "file.export", json!({"path": path}));
+        let first = std::fs::read(&path).unwrap();
+        let mut s = Session::new();
+        s.now = now();
+        assert!(s.keep_original);
+        assert_eq!(run(&mut s, "file.keepOriginal", json!({"on": keep}))["on"], keep);
+        run(&mut s, "file.open", json!({"path": path}));
+        run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+        run(&mut s, "mail.delete", Value::Null);
+        run(&mut s, "file.save", Value::Null);
+        let beside = openmailclient_pst::original_beside(&path);
+        assert_eq!(beside.exists(), keep);
+        if keep {
+            assert_eq!(std::fs::read(&beside).unwrap(), first);
+        }
+        assert_ne!(std::fs::read(&path).unwrap(), first);
+    }
+    // Two data files, and the one file kept.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn changes_to_an_open_pst_are_saved_into_it() {
     let dir = std::env::temp_dir().join(format!("openmailclient-save-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -2305,6 +2334,7 @@ fn settings_are_kept_between_runs() {
     run(&mut s, "file.pageSetup", json!({"paper": "letter", "orientation": "landscape", "margins": {"top": 12.5, "left": 30}, "footer": "[Page]"}));
     run(&mut s, "view.readingPane", json!({"position": "bottom"}));
     run(&mut s, "view.folderPane", json!({"show": false}));
+    assert_eq!(run(&mut s, "file.keepOriginal", Value::Null)["on"], false);
     let mut save = at(&file);
     save["ui"] = json!({"theme": "dark"});
     run(&mut s, "settings.save", save);
@@ -2320,6 +2350,7 @@ fn settings_are_kept_between_runs() {
     assert_eq!(took["ui"], json!({"theme": "dark"}));
     assert!(next.stores.is_empty());
     assert_eq!((&next.page_setup, next.reading_pane, next.folder_pane), (&s.page_setup, crate::ReadingPane::Bottom, false));
+    assert!(!next.keep_original);
     let mut again = at(&file);
     again["reopen"] = json!(true);
     let took = run(&mut next, "settings.load", again.clone());

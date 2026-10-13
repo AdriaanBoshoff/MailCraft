@@ -54,6 +54,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: save,
         },
         CommandSpec {
+            id: "file.keepOriginal",
+            label: "Keep the File as It Was on First Save",
+            tab: "File",
+            group: "Save",
+            shortcut: "",
+            params: r#"{"on": bool}; default: the other way. On (as it is at first), the first save of a data file leaves the file as it was beside it, under a name ending in .before-openmailclient.pst; off, it does not. A file kept before stays. Kept with the settings; returns {"on"}"#,
+            enabled: always,
+            run: keep_original,
+        },
+        CommandSpec {
             id: "file.stopSave",
             label: "Stop Saving",
             tab: "File",
@@ -163,6 +173,16 @@ fn stop_save(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "stopping": stopping }))
 }
 
+fn keep_original(s: &mut Session, p: &Value) -> CmdResult {
+    s.keep_original = p_bool(p, "on").unwrap_or(!s.keep_original);
+    s.status = if s.keep_original {
+        "The first save of a data file keeps the file as it was beside it".to_string()
+    } else {
+        "A save keeps no copy of the data file as it was".to_string()
+    };
+    Ok(json!({ "on": s.keep_original }))
+}
+
 /// Start the long part of a save on a thread of its own. False when this store has no such
 /// part, or no thread can be had: it is saved the plain way then.
 fn save_elsewhere(s: &mut Session, idx: usize, id: [u8; 16]) -> Result<bool, EngineError> {
@@ -213,6 +233,10 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
             }
             Some(st) if st.unsaved() && !st.saving() => {}
             _ => continue,
+        }
+        let keep = s.keep_original;
+        if let Some(store) = s.stores.get_mut(idx) {
+            store.keep_original(keep);
         }
         if !wait && save_elsewhere(s, idx, id)? {
             started += 1;
