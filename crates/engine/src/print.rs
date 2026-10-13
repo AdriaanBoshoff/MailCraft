@@ -6,7 +6,7 @@ use openmailclient_formats::links::{self, Concern};
 use openmailclient_formats::rich::{Block, Doc, Para, Picture, Run, Script, Style as Look};
 use openmailclient_layout::{Column, Fonts, LayoutError, Line, Listed, MM, Memo, Paper, Printed, Row, Setup};
 use openmailclient_model::{Flag, FolderKind, Item, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, time};
-use openmailclient_pdf::{Piece, Stroke, Writer};
+use openmailclient_pdf::{Piece, Said, Stroke, Writer};
 use serde_json::{Value, json};
 
 use crate::pictures::{self, Pixels};
@@ -585,6 +585,7 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
         }
         for text in &page.texts {
             if let Some(Some(font)) = fonts.get(text.face) {
+                let actual: Vec<Said> = text.actual.iter().map(|s| Said { from: s.from, count: s.count, text: &s.text }).collect();
                 writer.text(Piece {
                     font: *font,
                     size: text.size,
@@ -593,7 +594,7 @@ pub fn write(printed: &Printed, pictures: &Pictures, title: &str) -> Result<Vec<
                     color: text.color,
                     glyphs: &text.glyphs,
                     kerns: &text.kerns,
-                    actual: text.actual.as_deref(),
+                    actual: &actual,
                     bold: text.bold,
                     slant: text.slant,
                 });

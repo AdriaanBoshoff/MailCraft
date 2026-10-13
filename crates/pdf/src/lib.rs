@@ -34,6 +34,9 @@ const MAX_IMAGE_BYTES: usize = 512 << 20;
 const MAX_PAGE_BYTES: usize = 16 << 20;
 /// Glyphs in one piece of text.
 const MAX_PIECE: usize = 4096;
+/// The most stretches of one piece that say what they stand for; the glyphs after them are
+/// taken for the characters the file says they are.
+const MAX_SAID: usize = 256;
 /// The largest measure written, in points; a page is far smaller.
 const MAX_MEASURE: f32 = 14_400.0;
 
@@ -68,6 +71,18 @@ pub enum Stroke {
     Dotted,
 }
 
+/// Glyphs of a piece that are not one character each, and what they stand for together:
+/// letters drawn as one glyph, a letter drawn as several.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Said<'a> {
+    /// The first of the glyphs, counted in the piece.
+    pub from: usize,
+    /// How many glyphs.
+    pub count: usize,
+    /// What they stand for, in the order it is read; nothing for a mark read with its letter.
+    pub text: &'a str,
+}
+
 /// One piece of text: glyphs of one font, in one size and colour, on one baseline.
 #[derive(Clone, Copy, Debug)]
 pub struct Piece<'a> {
@@ -84,9 +99,11 @@ pub struct Piece<'a> {
     /// Kerning: how much further than its own width each glyph moves on before the next, in
     /// points. Empty, or shorter than the glyphs, where none is moved.
     pub kerns: &'a [f32],
-    /// What the glyphs say, where that is not their characters one after another (letters
-    /// drawn as one glyph, text written from the right): a reader finds and copies this.
-    pub actual: Option<&'a str>,
+    /// The glyphs that are not one character each, from the first on, none of them twice.
+    /// Text written from the right is not among them: its glyphs are given in the order they
+    /// are seen, as every reader expects them, and the reader turns them round itself (one
+    /// that was tried turned a line round twice when the line said how it is read).
+    pub actual: &'a [Said<'a>],
     /// Thicken the glyphs: the face has no bold of its own.
     pub bold: bool,
     /// Lean the glyphs: the face has no italic of its own.
@@ -246,43 +263,36 @@ impl Writer {
         if piece.glyphs.is_empty() {
             return;
         }
-        // Glyphs are shown as one string; where one is kerned the string is cut, with the
-        // amount between the parts in thousandths of the size, taken off the way on (9.4.3,
-        // the `TJ` operator).
         let count = piece.glyphs.len().min(MAX_PIECE);
-        let mut hex = String::with_capacity(count * 4 + 2);
-        let mut kerned = false;
-        hex.push('<');
-        for (i, (glyph, ch)) in piece.glyphs.iter().take(count).enumerate() {
-            font.used.entry(*glyph).or_insert(*ch);
-            let _ = write!(hex, "{glyph:04X}");
-            let kern = piece.kerns.get(i).copied().filter(|k| k.is_finite()).unwrap_or(0.0);
-            let off = (-kern / size * 1000.0).clamp(-2000.0, 2000.0).round();
-            if off != 0.0 && i + 1 < count {
-                let _ = write!(hex, "> {off} <");
-                kerned = true;
+        // The glyphs in stretches: those that are one character each, and between them those
+        // that say together what they stand for. What is said of glyphs that are not there,
+        // or of glyphs already said, is not heard.
+        let mut stretches: Vec<(usize, usize, Option<String>)> = Vec::new();
+        let mut said = piece.actual.iter().take(MAX_SAID).peekable();
+        let mut own = 0usize;
+        let mut at = 0usize;
+        let mut units = 0usize;
+        while at < count {
+            while said.next_if(|s| s.from < at || s.count == 0 || s.from.checked_add(s.count).is_none_or(|end| end > count)).is_some() {}
+            let (to, text) = match said.peek() {
+                Some(s) if s.from == at => (at + s.count, Some(s.text.to_string())),
+                // A glyph the file already says is another character says here what it is.
+                _ => match piece.glyphs.get(at) {
+                    Some((glyph, ch)) if own < MAX_SAID && font.used.get(glyph).is_some_and(|was| was != ch) => {
+                        own += 1;
+                        (at + 1, Some(ch.to_string()))
+                    }
+                    _ => (at + 1, None),
+                },
+            };
+            match (stretches.last_mut(), &text) {
+                (Some((_, end, None)), None) => *end = to,
+                _ => stretches.push((at, to, text)),
             }
+            at = to;
         }
-        hex.push('>');
-        let show = if kerned { format!("[{hex}] TJ") } else { format!("{hex} Tj") };
         let color = rgb(piece.color);
         let ops = &mut page.ops;
-        // The text the glyphs stand for, around the whole text object: in UTF-16 with its mark
-        // of order before it (14.9.4 replacement text, 7.9.2.2 text strings, 14.6 marked content).
-        if let Some(actual) = piece.actual {
-            ops.push_str("/Span << /ActualText <FEFF");
-            // Never half of a character that takes two units.
-            let mut units = 0usize;
-            for ch in actual.chars().take_while(|ch| {
-                units += ch.len_utf16();
-                units <= MAX_PIECE
-            }) {
-                for unit in ch.encode_utf16(&mut [0u16; 2]) {
-                    let _ = write!(ops, "{unit:04X}");
-                }
-            }
-            ops.push_str("> >> BDC ");
-        }
         let _ = write!(ops, "BT /F{} {} Tf {color} rg ", piece.font.0, num(size));
         if piece.bold {
             let _ = write!(ops, "{color} RG {} w 2 Tr ", num(size * 0.03));
@@ -290,8 +300,50 @@ impl Writer {
             ops.push_str("0 Tr ");
         }
         let lean = if piece.slant { "0.2" } else { "0" };
-        let closed = if piece.actual.is_some() { " EMC" } else { "" };
-        let _ = writeln!(ops, "1 0 {lean} 1 {} {} Tm {show} ET{closed}", num(piece.x), num(page.height - piece.baseline));
+        let _ = write!(ops, "1 0 {lean} 1 {} {} Tm", num(piece.x), num(page.height - piece.baseline));
+        for (from, to, text) in stretches {
+            // What a stretch stands for, around it: in UTF-16 with its mark of order before it
+            // (14.9.4 replacement text, 7.9.2.2 text strings; 14.6: marked content may stand
+            // inside a text object when it opens and closes there).
+            if let Some(text) = &text {
+                ops.push_str(" /Span << /ActualText <FEFF");
+                // Never half of a character that takes two units, and no more than a piece may say.
+                for ch in text.chars().take_while(|ch| {
+                    units += ch.len_utf16();
+                    units <= MAX_PIECE
+                }) {
+                    for unit in ch.encode_utf16(&mut [0u16; 2]) {
+                        let _ = write!(ops, "{unit:04X}");
+                    }
+                }
+                ops.push_str("> >> BDC");
+            }
+            // Glyphs are shown as one string; where one is kerned the string is cut, with the
+            // amount between the parts in thousandths of the size, taken off the way on (9.4.3,
+            // the `TJ` operator).
+            let mut hex = String::with_capacity((to - from) * 4 + 2);
+            let (mut kerned, mut open) = (false, true);
+            hex.push('<');
+            for (i, (glyph, ch)) in piece.glyphs.iter().enumerate().take(to).skip(from) {
+                font.used.entry(*glyph).or_insert(*ch);
+                let _ = write!(hex, "{glyph:04X}");
+                let kern = piece.kerns.get(i).copied().filter(|k| k.is_finite()).unwrap_or(0.0);
+                let off = (-kern / size * 1000.0).clamp(-2000.0, 2000.0).round();
+                if off != 0.0 && i + 1 < count {
+                    // The last glyph of a stretch moves the next stretch.
+                    let _ = if i + 1 < to { write!(hex, "> {off} <") } else { write!(hex, "> {off}") };
+                    (kerned, open) = (true, i + 1 < to);
+                }
+            }
+            if open {
+                hex.push('>');
+            }
+            let _ = if kerned { write!(ops, " [{hex}] TJ") } else { write!(ops, " {hex} Tj") };
+            if text.is_some() {
+                ops.push_str(" EMC");
+            }
+        }
+        ops.push_str(" ET\n");
     }
 
     /// The finished file. `title` is what a reader's window shows for it.

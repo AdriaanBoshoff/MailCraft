@@ -12,7 +12,7 @@ use openmailclient_formats::rich::{
 };
 
 use crate::fonts::{Fonts, Pick};
-use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Setup, Text};
+use crate::{Fill, MAX_PAGES, Page, Paper, Placed, Rule, Said, Setup, Text};
 use openmailclient_fonts::script;
 
 /// Points to the pixel.
@@ -202,19 +202,38 @@ const CONTEXT: usize = 4;
 /// The most characters a piece of text says it stands for.
 const MAX_SAID: usize = 4_000;
 
-/// What the glyphs of a piece say, where that is not their own characters one after another:
-/// the characters they stand for (each glyph with its character, where that stands in the
-/// paragraph and how many characters it stands for) in the order they are read.
-fn said(run: &[(u16, char, usize, u16)], stored: &[char]) -> Option<String> {
-    let mut read: Vec<(usize, u16)> = run.iter().map(|(_, _, at, span)| (*at, *span)).collect();
-    read.sort_unstable();
-    let mut out = String::new();
-    for (at, span) in read {
-        let chars = stored.get(at..at.saturating_add(usize::from(span))).unwrap_or_default();
-        out.extend(chars.iter().take(MAX_SAID.saturating_sub(out.len())).map(|c| if *c == '\u{a0}' { ' ' } else { *c }));
+/// A space that does not end a line is found and copied as a space.
+fn plain(ch: char) -> char {
+    if ch == '\u{a0}' { ' ' } else { ch }
+}
+
+/// The character a glyph is said to be in a piece of text. In text written from the right
+/// that is the shape that is seen: a bracket that opens is drawn as one that closes, and a
+/// reader of the file that turns the glyphs round turns the brackets with them.
+fn shown(ch: char, rtl: bool) -> char {
+    if rtl { script::mirrored(plain(ch)) } else { plain(ch) }
+}
+
+/// Which glyphs of a piece are not one character each, and what they stand for together.
+/// Each glyph comes with its character, where that stands in the paragraph and how many
+/// characters the glyph stands for; glyphs of one place in the paragraph are read together.
+/// Text written from the right says nothing more for being that: its glyphs are in the order
+/// they are seen in, which is what a reader of the file expects and turns round itself.
+fn said(run: &[(u16, char, usize, u16)], stored: &[char]) -> Vec<Said> {
+    let mut out = Vec::new();
+    let (mut from, mut room) = (0usize, MAX_SAID);
+    while let Some((_, ch, at, _)) = run.get(from).copied() {
+        let count = run.get(from..).unwrap_or_default().iter().take_while(|g| g.2 == at).count().max(1);
+        let span = run.get(from..from + count).unwrap_or_default().iter().map(|g| usize::from(g.3)).max().unwrap_or(0);
+        let chars = stored.get(at..at.saturating_add(span)).unwrap_or_default();
+        if count != 1 || chars.len() != 1 || chars.first().map(|c| plain(*c)) != Some(plain(ch)) {
+            let text: String = chars.iter().take(room).map(|c| plain(*c)).collect();
+            room = room.saturating_sub(chars.len());
+            out.push(Said { from, count, text });
+        }
+        from += count;
     }
-    let same = run.iter().map(|(_, ch, ..)| *ch).eq(out.chars());
-    (!same).then_some(out)
+    out
 }
 
 /// Where the line that starts at `start` ends when it has `width` of room, and where the next
@@ -935,7 +954,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                         let kerns = std::mem::take(kerns);
                         let run = std::mem::take(run);
                         let Some(starts) = run.iter().map(|(_, _, at, _)| *at).min() else { return };
-                        let glyphs: Vec<(u16, char)> = run.iter().map(|(glyph, ch, ..)| (*glyph, *ch)).collect();
+                        let glyphs: Vec<(u16, char)> = run.iter().map(|(glyph, ch, ..)| (*glyph, shown(*ch, first.level % 2 == 1))).collect();
                         set.push((
                             starts,
                             Text {
@@ -945,6 +964,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                                 size: look.size,
                                 color: look.color,
                                 actual: said(&run, &stored),
+                                rtl: first.level % 2 == 1,
                                 glyphs,
                                 width: to - from,
                                 kerns: if moved { kerns } else { Vec::new() },
@@ -1122,7 +1142,8 @@ impl<'f, 'l> Flow<'f, 'l> {
                         size,
                         color: BLACK,
                         actual: said(&run, &stored),
-                        glyphs: run.iter().map(|(glyph, ch, ..)| (*glyph, *ch)).collect(),
+                        rtl: first.level % 2 == 1,
+                        glyphs: run.iter().map(|(glyph, ch, ..)| (*glyph, shown(*ch, first.level % 2 == 1))).collect(),
                         width: to - from,
                         kerns: if moved { kerns } else { Vec::new() },
                         bold: first.pick.bold,

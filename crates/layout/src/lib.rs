@@ -202,7 +202,8 @@ pub struct Text {
     pub face: usize,
     pub size: f32,
     pub color: Rgb,
-    /// Each glyph with the character it stands for.
+    /// Each glyph with the character it stands for: in text written from the right, the
+    /// shape that is seen (a bracket that opens is drawn as one that closes).
     pub glyphs: Vec<(u16, char)>,
     /// The width the glyphs take.
     pub width: f32,
@@ -215,15 +216,56 @@ pub struct Text {
     pub slant: bool,
     /// How far above the baseline the glyphs are drawn: a mark the font places over a letter.
     pub lift: f32,
-    /// What the glyphs say, where that is not their characters one after another: letters
-    /// drawn as one glyph, or text written from the right, whose glyphs are in the order
-    /// they are seen in. Nothing for a mark that is read with its letter.
-    pub actual: Option<String>,
+    /// The glyphs that are not one character each, from the first on: letters drawn as one
+    /// glyph, a letter drawn as several, a mark that is read with its letter.
+    pub actual: Vec<Said>,
+    /// The glyphs are of text written from the right: they are in the order they are seen
+    /// in, and the last of them is read first.
+    pub rtl: bool,
+}
+
+/// Glyphs of a piece of text that are not one character each, and what they stand for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Said {
+    /// The first of the glyphs, counted in the piece.
+    pub from: usize,
+    /// How many glyphs.
+    pub count: usize,
+    /// What they stand for together, in the order it is read.
+    pub text: String,
+}
+
+impl Text {
+    /// What the piece says, in the order it is read.
+    pub fn said(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let mut said = self.actual.iter().peekable();
+        let mut at = 0usize;
+        while at < self.glyphs.len() {
+            while said.next_if(|s| s.from < at || s.count == 0).is_some() {}
+            match said.peek() {
+                Some(s) if s.from == at => {
+                    parts.push(s.text.clone());
+                    at = at.saturating_add(s.count);
+                }
+                _ => {
+                    // In text written from the right a bracket is said as it is seen.
+                    let read = |ch: char| if self.rtl { openmailclient_fonts::script::mirrored(ch) } else { ch };
+                    parts.extend(self.glyphs.get(at).map(|(_, ch)| read(*ch).to_string()));
+                    at += 1;
+                }
+            }
+        }
+        if self.rtl {
+            parts.reverse();
+        }
+        parts.concat()
+    }
 }
 
 impl Page {
-    /// The page's text, piece after piece in the order it was set, pieces on one baseline
-    /// joined; for tests and for looking at a layout.
+    /// The page's text, piece after piece in the order it was set and each in the order it is
+    /// read, pieces on one baseline joined; for tests and for looking at a layout.
     pub fn text(&self) -> String {
         let mut out = String::new();
         let mut last: Option<f32> = None;
@@ -231,10 +273,7 @@ impl Page {
             if last.is_some_and(|y| (y - piece.y).abs() > 0.01) {
                 out.push('\n');
             }
-            match &piece.actual {
-                Some(actual) => out.push_str(actual),
-                None => out.extend(piece.glyphs.iter().map(|(_, ch)| *ch)),
-            }
+            out.push_str(&piece.said());
             last = Some(piece.y);
         }
         out

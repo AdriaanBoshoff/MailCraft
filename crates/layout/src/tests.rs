@@ -1059,8 +1059,14 @@ fn right_to_left_text_is_printed_from_the_right() {
     let lines = seen_lines(&printed.pages[0]);
     assert_eq!(lines[0], "ab \u{5d2}\u{5d1}\u{5d0} cd");
     assert_eq!(lines[1], "\u{5d3}\u{5d2} ab 12 \u{5d1}\u{5d0}");
-    // The characters are the ones stored; the glyph of the bracket is the other one.
-    assert_eq!(lines[2], ")\u{5d1}(\u{5d0}");
+    // A bracket is said as it is seen, as its glyph is: a reader of the file that turns the
+    // glyphs round turns the brackets with them. Read as the page reads it, it is the one stored.
+    assert_eq!(lines[2], "(\u{5d1})\u{5d0}");
+    // Text written from the right says nothing more than its glyphs for being that: a reader
+    // that was tried turned a line round twice when the line said how it is read.
+    let turned: Vec<&Text> = printed.pages[0].texts.iter().filter(|t| t.rtl).collect();
+    assert!(turned.len() >= 4 && turned.iter().all(|t| t.actual.is_empty()), "{turned:?}");
+    assert!(turned.iter().any(|t| t.said() == "\u{5d0}(\u{5d1})"));
     assert_eq!(
         lines[3],
         "\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2}\u{5d2} \u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1}\u{5d1} \u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}\u{5d0}"
@@ -1071,7 +1077,8 @@ fn right_to_left_text_is_printed_from_the_right() {
     let (open, close) = (BOTH_WAYS.chars().position(|c| c == '(').unwrap(), BOTH_WAYS.chars().position(|c| c == ')').unwrap());
     let brackets: Vec<(u16, char)> = page.texts.iter().flat_map(|t| t.glyphs.iter().copied()).filter(|(_, c)| matches!(c, '(' | ')')).collect();
     let glyph_of = |c: char| brackets.iter().find(|(_, ch)| *ch == c).unwrap().0;
-    assert_eq!(i32::from(glyph_of(')')) - i32::from(glyph_of('(')), open as i32 - close as i32);
+    // The glyph that is drawn is the one of the bracket that is seen.
+    assert_eq!(i32::from(glyph_of(')')) - i32::from(glyph_of('(')), close as i32 - open as i32);
     // A right-to-left line ends at the right margin.
     let has = |t: &&Text| t.glyphs.iter().any(|(_, c)| *c == '\u{5d3}');
     let end_of = |y: f32| page.texts.iter().filter(|t| (t.y - y).abs() < 0.01).map(|t| t.x + t.width).fold(0.0, f32::max);
@@ -1178,10 +1185,13 @@ fn letters_are_drawn_with_the_glyphs_the_font_s_own_tables_give() {
     assert!((line[0].width - wide).abs() < 0.01, "{} {wide}", line[0].width);
     // What the page says is what was written.
     assert_eq!(body_lines(page)[0], "afib baffle");
-    assert_eq!(line[0].actual.as_deref(), Some("afib baffle"));
+    // Only the glyphs that are several letters say so, each for itself.
+    let said: Vec<(usize, usize, &str)> = line[0].actual.iter().map(|s| (s.from, s.count, s.text.as_str())).collect();
+    assert_eq!(said, [(1, 1, "fi"), (6, 1, "ffl")]);
+    assert!(!line[0].rtl);
     // A line with nothing of the kind says nothing more than its glyphs do.
     let printed = print_in(shaped_font(), &doc(vec![Block::Para(para("abc def"))]), SMALL);
-    assert!(printed.pages[0].texts.iter().all(|t| t.actual.is_none() && t.lift == 0.0));
+    assert!(printed.pages[0].texts.iter().all(|t| t.actual.is_empty() && t.lift == 0.0));
     assert_eq!(body_lines(&printed.pages[0])[0], "abc def");
 
     // A word too long for a line is still cut, between glyphs.
@@ -1306,8 +1316,7 @@ fn what_stands_at_a_page_s_head_and_foot_and_before_an_item_is_shaped_as_the_bod
         line
     };
     let glyphs = |line: &[Text]| -> Vec<u16> { line.iter().flat_map(|t| t.glyphs.iter().map(|(g, _)| *g)).collect() };
-    let read =
-        |line: &[Text]| -> String { line.iter().map(|t| t.actual.clone().unwrap_or_else(|| t.glyphs.iter().map(|(_, c)| *c).collect())).collect() };
+    let read = |line: &[Text]| -> String { line.iter().map(Text::said).collect() };
     let body = doc(vec![Block::Para(para("abc"))]);
     let paper = Paper { width: 400.0, height: 300.0, margin: 20.0 };
 
@@ -1323,7 +1332,7 @@ fn what_stands_at_a_page_s_head_and_foot_and_before_an_item_is_shaped_as_the_bod
     assert_eq!(glyphs(&head), of("ba2e 1\u{fe90}\u{fe92}\u{fe91}ab \u{5d2}\u{5d1}\u{5d0} cd"), "{head:?}");
     // What the page says is what was asked for, in the order it is read.
     let texts = &printed.pages[0].texts;
-    let says = |what: &str| texts.iter().any(|t| t.actual.as_deref() == Some(what) || t.glyphs.iter().map(|(_, c)| *c).collect::<String>() == what);
+    let says = |what: &str| texts.iter().any(|t| t.said() == what);
     assert!(says("baffle fi") && says("\u{628}\u{628}\u{628}"), "{texts:?}");
     let foot = line(&printed.pages[0], false);
     // A number after Latin letters is read with them (UAX #9, W7).
@@ -1359,7 +1368,7 @@ fn what_stands_at_a_page_s_head_and_foot_and_before_an_item_is_shaped_as_the_bod
     let page = &printed.pages[0];
     let with = |glyph: char| page.texts.iter().find(|t| t.glyphs.iter().any(|(g, _)| *g == glyph_in(SHAPED, glyph))).unwrap();
     let (one, two) = (with('1'), with('\u{5d0}'));
-    assert_eq!(one.actual.as_deref(), Some("fi."));
+    assert_eq!((one.said(), one.actual.len()), ("fi.".to_string(), 1));
     assert_eq!(two.glyphs.iter().map(|(g, _)| *g).collect::<Vec<u16>>(), of("\u{5d1}\u{5d0}"));
     assert!((two.x + two.width - (one.x + one.width)).abs() < 0.3, "{one:?} {two:?}");
 

@@ -1,6 +1,6 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 61 · 2026-10-12
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; next the do-later batch (M3b) · revision 62 · 2026-10-12
 
 ## Headline numbers
 
@@ -19,7 +19,7 @@
 | M1 | **Data files first**: open `.pst`/`.ost`/`.msg`/`.eml` in an Outlook-Classic-style window; save messages Outlook can reopen | in progress |
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Not yet opened in Outlook |
-| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9) |
+| M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | in progress: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -96,7 +96,8 @@
 45. Done: the journal of unsaved changes is kept in a folder of our own when it cannot be kept beside the data file, is forced to disk once a second, and says exactly how many changes a damaged journal lost when that can be known (M3b.7).
 46. Done: a line that is typed (the search box, a folder's new name, the address and subject lines, a page's head and foot) is seen in the order it is read while it is typed, with the cursor, the selection and a click where the text is seen (M3b.8).
 47. Done: what was left of a paragraph written from the right: tab stops and their leaders are counted from the right, a border's own indent is at the right, text stands beside a picture on the right side of it, the columns of a table written from the right start at the right, and `<bdo>`, `<bdi>`, `dir` on a piece of a line and `unicode-bidi` say which way their text runs, on screen and in print (M3b.9).
-48. Next: M3b.10: the rest of the M3b list (copying text out of our PDFs tried in readers; a save that does not write the whole file again and does not hold the window; what is not understood on an attachment kept).
+48. Done: text copied out of our PDFs was tried in a reader (xpdf's `pdftotext` 4.06) and what it found was put right: text written from the right is given as it is seen, as readers expect it, and only glyphs that are not one letter each say what they stand for (M3b.10).
+49. Next: M3b.11: the rest of the M3b list (a save that does not write the whole file again and does not hold the window; what is not understood on an attachment kept; the cells of a changed message in search-folder tables).
 
 ## Do later (from M2)
 
@@ -108,7 +109,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Right-to-left text (Hebrew, Arabic) in the right order, and Arabic letters joined, on screen and in print~~ | done: M2.41 |
 | ~~Shaping from the font's own tables in print (ligatures, marks placed, Indic and other complex scripts; Arabic joined by the font's tables and across a change of look; copying text out of a PDF in the order it is read)~~ | done: M2.42 |
 | ~~Shaping for the text print sets itself: the name and page number at the head and foot of a page, list markers, the header's field names and values~~ | done: M3b.5 |
-| Copying text out of our PDFs tried in PDF readers (the file says what its glyphs stand for; no reader was tried) | M3b |
+| ~~Copying text out of our PDFs tried in a PDF reader (xpdf's `pdftotext`)~~ | done: M3b.10 |
+| Copying text out of our PDFs tried in the readers people use most (Acrobat, a browser's viewer): none of them gives its text to a script here | when one can be tried without driving a window |
 | ~~Right-to-left text in the message list, the header of the reading pane and folder names~~ | done: M3b.4 |
 | ~~Right-to-left text while it is typed in a field of one line: the search box, a folder's name being changed, the address and subject lines~~ | done: M3b.8 |
 | Right-to-left text while it is typed in the body of a message being written (the toolkit's box draws it as stored; the body gets its own editor with the item windows) | M5 |
@@ -900,3 +902,23 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   be turned letter by letter (an override element or mark inside a link is dropped, and a
   link inside overridden text is set apart from it), so an address that is shown reads as
   it is written. Looked at headlessly, window and page. Not compared with Outlook.
+- **2026-10-13** - M3b.10: copying text out of a printed PDF, tried in a reader. A message of our own with
+  Latin ligatures, Hebrew, Arabic, brackets, numbers and accents was printed and read back
+  with xpdf's `pdftotext` 4.06, the one reader on this machine that gives its text to a
+  script. What it showed: a line of Hebrew or Arabic came out letter for letter backwards.
+  The page said, around each piece of a line, how the piece is read (`/ActualText`); the
+  reader took that and then turned it round as it turns every right-to-left run it meets.
+  Now a piece written from the right is given the way every other PDF gives it: glyphs in
+  the order they are seen, each saying the character whose shape it is (a bracket as it is
+  drawn), and the reader does the turning. Only glyphs that are not one character each say
+  what they stand for, each for itself and inside the text it belongs to: letters drawn as
+  one glyph (fi, ffl, lam-alef), a letter drawn as several, a mark read with its letter.
+  Made better on the way: a glyph the file already says is one character says so itself
+  where it stands for another, so two characters that share a glyph are both copied right.
+  Read back after the change: Hebrew and Arabic words, the ligatures, the accents and the
+  brackets are copied as written, in the order read. Still wrong in that reader, and its
+  own guess, not something the file can say: a full stop or a number in a line written from
+  the right is put on the wrong side of the words, and a space beside a Hebrew word in a
+  Latin line moves to its other side. Its `-raw` mode gives right-to-left text as it is
+  seen, as it does for any PDF. No other reader was tried (none here gives its text to a
+  script, and windows are not driven with keystrokes on this machine).
