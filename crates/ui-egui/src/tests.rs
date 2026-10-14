@@ -1697,3 +1697,104 @@ fn text_within_a_line_is_drawn_in_its_border_and_boxes_have_rounded_corners() {
         assert!(drawn_height(&wild, width).is_finite());
     }
 }
+
+#[test]
+fn accounts_are_added_and_tested_in_their_window_and_the_password_is_never_shown() {
+    const PASSWORD: &str = "not a real password";
+    let fake = openmailclient_net::fake::Fake::default();
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(fake.clone()));
+    assert!(ui.execute("ui.accountSettings", &json!({ "id": "account-9" })).is_err());
+    ui.execute("ui.accountSettings", &Value::Null).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    for _ in 0..3 {
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+    let mut window = ui.account_window.take().unwrap();
+    assert!(window.accounts.is_empty() && window.form.id.is_none(), "with no account the window starts on a new one");
+
+    // What makes no sense is said, and nothing is kept.
+    window.form.email = "pat@example.test".into();
+    window.form.in_host = "mail.example.test".into();
+    window.form.in_port = "70000".into();
+    assert!(ui.save_account(&mut window).is_none());
+    assert!(window.said[0].1 && window.said[0].0.contains("port"), "{:?}", window.said);
+    assert!(ui.session.accounts.is_empty());
+
+    window.form.in_port.clear();
+    window.form.in_sec = "starttls";
+    window.form.out_sec = "starttls";
+    window.form.display_name = "Pat Lee".into();
+    window.form.password = PASSWORD.into();
+    let id = ui.save_account(&mut window).unwrap();
+    assert_eq!(id, "account-1");
+    assert!(window.form.password.is_empty(), "the window forgets the password once it is kept");
+    assert!(window.form.has_password && !window.said[0].1, "{:?}", window.said);
+    let a = &ui.session.accounts[0];
+    assert_eq!((a.incoming.port, a.outgoing.host.as_str(), a.outgoing.port), (143, "mail.example.test", 587));
+
+    // Tested on a thread of its own; what each server said is shown once it ends.
+    ui.test_account(&mut window);
+    assert!(window.testing.is_some(), "{:?}", window.said);
+    ui.account_window = Some(window);
+    let mut waited = 0;
+    while ui.account_window.as_ref().is_some_and(|w| w.testing.is_some()) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        frame(&mut ui, &ctx, Vec::new(), None);
+        waited += 1;
+        assert!(waited < 1000, "the test never ended");
+    }
+    let window = ui.account_window.as_ref().unwrap();
+    assert_eq!(window.said.len(), 2, "{:?}", window.said);
+    assert!(window.said.iter().all(|(words, trouble)| !trouble && words.contains("server")), "{:?}", window.said);
+    assert!(fake.state().submitted.is_empty(), "a test sends nothing");
+
+    // Nothing the window, the session or the settings show holds the password, in either theme.
+    for theme in ["dark", "light"] {
+        ui.execute("ui.theme", &json!({ "theme": theme })).unwrap();
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+    let listed = ui.execute("account.list", &Value::Null).unwrap();
+    for text in [
+        listed.to_string(),
+        ui.session.settings(None).to_string(),
+        ui.session.status.clone(),
+        format!("{:?}", ui.account_window.as_ref().map(|w| &w.said)),
+    ] {
+        assert!(!text.contains(PASSWORD), "{text}");
+    }
+    // Escape closes it.
+    frame(&mut ui, &ctx, vec![key(egui::Key::Escape, egui::Modifiers::NONE)], None);
+    assert!(ui.account_window.is_none());
+}
+
+#[test]
+fn a_password_field_shows_dots_and_gives_nothing_away() {
+    use egui::{Event, Key, Modifiers};
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let id = egui::Id::new("password under test");
+    let mut text = String::new();
+    let run = |text: &mut String, events: Vec<Event>| {
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 200.0))), events, ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            ui.memory_mut(|m| m.request_focus(id));
+            ui.put(Rect::from_min_size(pos2(20.0, 20.0), vec2(300.0, 24.0)), line_edit::LineEdit::new(text, id).password());
+        });
+        output.textures_delta.clear();
+        let copied = output.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(_)));
+        let shown: String = output.shapes.iter().map(|s| format!("{:?}", s.shape)).collect();
+        (copied, shown)
+    };
+    run(&mut text, Vec::new());
+    run(&mut text, vec![Event::Text("secret word".into())]);
+    assert_eq!(text, "secret word");
+    let (copied, shown) = run(&mut text, vec![key(Key::A, Modifiers::COMMAND), Event::Copy, Event::Cut]);
+    assert!(!copied && text == "secret word", "nothing is copied or cut out of it");
+    assert!(!shown.contains("secret"), "only dots are drawn");
+    // Undo does not bring back what was typed before.
+    run(&mut text, vec![key(Key::Backspace, Modifiers::NONE)]);
+    run(&mut text, vec![key(Key::Z, Modifiers::COMMAND)]);
+    assert!(text.is_empty(), "{text}");
+}

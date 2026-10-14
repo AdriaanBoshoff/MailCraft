@@ -6,6 +6,7 @@
 //! live here. Message text is drawn as text: nothing in a message is ever run or fetched.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod accounts;
 mod body;
 mod faces;
 pub mod icons;
@@ -103,6 +104,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         params: r#"{"index": link number from mail.links} or {"address": as the message writes it}; shows where the link goes and asks; nothing is opened until the person answers"#,
     },
     UiCommand { id: "ui.toggleFolder", label: "Expand or Collapse Folder", params: r#"{"store": index, "folderId": id}"# },
+    UiCommand {
+        id: "ui.accountSettings",
+        label: "Account Settings…",
+        params: r#"{"id": the account to show (the first when not given), "new": true for a new one}; the window adds, changes, tests and removes accounts through the account.* commands"#,
+    },
     UiCommand { id: "ui.prompt", label: "Ask for a Name", params: r#"{"command": "folder.new" | "folder.rename"}"# },
     UiCommand {
         id: "ui.menu",
@@ -211,6 +217,7 @@ pub struct MailUi {
     pub(crate) menu: Option<(Menu, Pos2)>,
     pub(crate) menu_fresh: bool,
     pub(crate) prompt: Option<Prompt>,
+    pub(crate) account_window: Option<accounts::AccountsWindow>,
     pub(crate) link_ask: Option<LinkAsk>,
     pub(crate) preview: Option<preview::Preview>,
     pub(crate) scroll_to_selected: bool,
@@ -413,6 +420,7 @@ impl MailUi {
             menu: None,
             menu_fresh: false,
             prompt: None,
+            account_window: None,
             link_ask: None,
             preview: None,
             scroll_to_selected: false,
@@ -652,6 +660,10 @@ impl MailUi {
                     self.collapsed.insert(key);
                 }
             }
+            "ui.accountSettings" => {
+                let new = params.get("new").and_then(Value::as_bool) == Some(true);
+                self.open_accounts(text("id"), new)?;
+            }
             "ui.prompt" => {
                 let (title, command) = match text("command") {
                     Some("folder.new") => ("New folder name", "folder.new"),
@@ -831,6 +843,7 @@ impl MailUi {
         }
         self.menu_popup(&ctx);
         self.prompt_window(&ctx);
+        self.accounts_window(&ctx);
         self.link_window(&ctx);
         self.preview_window(&ctx);
 
@@ -842,7 +855,7 @@ impl MailUi {
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
-        if self.prompt.is_some() || self.link_ask.is_some() || self.preview.is_some() {
+        if self.prompt.is_some() || self.link_ask.is_some() || self.preview.is_some() || self.account_window.is_some() {
             return;
         }
         let typing = ui.ctx().memory(|m| m.focused().is_some());

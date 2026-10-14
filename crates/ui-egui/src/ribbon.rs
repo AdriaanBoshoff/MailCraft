@@ -54,7 +54,12 @@ const HOME: &[Group] = &[
 
 const SEND_RECEIVE: &[Group] = &[(
     "Send & Receive",
-    &[big(Icon::Sync, "Send/Receive\nAll Folders", ""), small(Icon::Sync, "Update Folder", ""), small(Icon::Send, "Send All", "")],
+    &[
+        with(big(Icon::Sync, "Send/Receive\nAll Folders", "mail.sendReceive"), r#"{"wait":false}"#),
+        small(Icon::Sync, "Update Folder", ""),
+        with(small(Icon::Send, "Send All", "mail.sendAll"), r#"{"wait":false}"#),
+        small(Icon::People, "Account Settings", "ui.accountSettings"),
+    ],
 )];
 
 const FOLDER: &[Group] = &[
@@ -469,7 +474,7 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 11] = [
+        let entries: [(Icon, &str, &str, Value); 12] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
@@ -480,6 +485,7 @@ impl MailUi {
             (Icon::Print, "Print…", "ui.printPreview", Value::Null),
             (Icon::Save, "Export to a Data File…", "ui.exportDialog", Value::Null),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
+            (Icon::People, "Account Settings…", "ui.accountSettings", Value::Null),
             (Icon::Junk, "Exit", "ui.quit", Value::Null),
         ];
         for (n, (icon, label, cmd, params)) in entries.into_iter().enumerate() {
@@ -543,7 +549,7 @@ impl MailUi {
         y += 12.0;
         for line in [
             "A data file is not written to until Save Changes; the first save keeps the file as it was beside it.",
-            "Messages can be saved as .msg, .oft or .eml. Sending and accounts are not built yet.",
+            "Messages can be saved as .msg, .oft or .eml. Mail is sent and received through the accounts in Account Settings.",
         ] {
             clip_text(&p, pos2(x, y), width, line, font(12.0), t.text_faint);
             y += 20.0;

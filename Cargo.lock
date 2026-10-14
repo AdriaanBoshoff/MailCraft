@@ -2793,6 +2793,7 @@ dependencies = [
  "openmailclient-formats",
  "openmailclient-layout",
  "openmailclient-model",
+ "openmailclient-net",
  "serde_json",
 ]
 

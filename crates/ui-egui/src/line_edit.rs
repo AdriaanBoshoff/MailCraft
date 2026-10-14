@@ -54,11 +54,23 @@ pub(crate) struct LineEdit<'a> {
     limit: usize,
     frame: bool,
     width: f32,
+    secret: bool,
 }
 
 impl<'a> LineEdit<'a> {
     pub(crate) fn new(text: &'a mut String, id: Id) -> Self {
-        Self { text, id, font: crate::font(13.0), color: None, hint: "", hint_color: None, limit: MAX_CHARS, frame: true, width: f32::INFINITY }
+        Self {
+            text,
+            id,
+            font: crate::font(13.0),
+            color: None,
+            hint: "",
+            hint_color: None,
+            limit: MAX_CHARS,
+            frame: true,
+            width: f32::INFINITY,
+            secret: false,
+        }
     }
 
     pub(crate) fn font(mut self, font: FontId) -> Self {
@@ -91,6 +103,14 @@ impl<'a> LineEdit<'a> {
 
     pub(crate) fn desired_width(mut self, width: f32) -> Self {
         self.width = width;
+        self
+    }
+
+    /// For a password: each character is shown as a dot, nothing is copied out of it, no
+    /// earlier text is remembered to be gone back to, and what it holds is told to nobody,
+    /// readers of the screen included.
+    pub(crate) fn password(mut self) -> Self {
+        self.secret = true;
         self
     }
 }
@@ -339,7 +359,7 @@ impl Edit<'_> {
 
 impl egui::Widget for LineEdit<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let Self { text, id, font, color, hint, hint_color, limit, frame, width } = self;
+        let Self { text, id, font, color, hint, hint_color, limit, frame, width, secret } = self;
         let pad = if frame { vec2(5.0, 3.0) } else { vec2(0.0, 0.0) };
         let row = ui.ctx().fonts_mut(|fonts| fonts.row_height(&font));
         let wide = if width.is_finite() { width } else { ui.available_width() }.max(16.0);
@@ -377,6 +397,7 @@ impl egui::Widget for LineEdit<'_> {
                 let was = (edit.state.cursor, edit.state.anchor, edit.changed);
                 match event {
                     Event::Text(new) | Event::Paste(new) => edit.insert(&new),
+                    Event::Copy | Event::Cut if secret => {}
                     Event::Copy => copied = edit.copy().or(copied),
                     Event::Cut => {
                         if let Some(text) = edit.copy() {
@@ -419,6 +440,7 @@ impl egui::Widget for LineEdit<'_> {
                                 edit.go(0, false);
                                 edit.go(usize::MAX, true);
                             }
+                            Key::Z | Key::Y if secret && modifiers.command => {}
                             Key::Z if modifiers.command && !modifiers.shift => edit.swap(true),
                             Key::Z | Key::Y if modifiers.command => edit.swap(false),
                             Key::Enter => ui.memory_mut(|m| m.surrender_focus(id)),
@@ -438,7 +460,7 @@ impl egui::Widget for LineEdit<'_> {
         // What is drawn: the text, with what an input method is putting together at the cursor.
         let held: Vec<char> = edit.state.preedit.chars().collect();
         let at = edit.state.cursor.min(edit.chars.len());
-        let mut drawn = edit.chars.clone();
+        let mut drawn = if secret { vec!['•'; edit.chars.len()] } else { edit.chars.clone() };
         drawn.splice(at..at, held.iter().copied());
         let measure = |piece: &str| ui.painter().layout_no_wrap(piece.to_string(), font.clone(), color).size().x;
         let seen = line(&drawn, &font, color, measure);
@@ -452,7 +474,8 @@ impl egui::Widget for LineEdit<'_> {
             edit.state.touched = now;
         }
         if response.double_clicked() {
-            (edit.state.anchor, edit.state.cursor) = word_at(&edit.chars, edit.state.cursor);
+            // The words of a password are not to be told apart.
+            (edit.state.anchor, edit.state.cursor) = if secret { (0, edit.chars.len()) } else { word_at(&edit.chars, edit.state.cursor) };
         }
         if response.triple_clicked() {
             (edit.state.anchor, edit.state.cursor) = (0, edit.chars.len());
@@ -512,7 +535,7 @@ impl egui::Widget for LineEdit<'_> {
                 let cursor_rect = Rect::from_min_max(pos2(origin.x + caret, top), pos2(origin.x + caret + 1.0, bottom));
                 ui.ctx().output_mut(|o| {
                     o.ime = Some(egui::output::IMEOutput {
-                        purpose: egui::IMEPurpose::Normal,
+                        purpose: if secret { egui::IMEPurpose::Password } else { egui::IMEPurpose::Normal },
                         rect: to_global * rect,
                         cursor_rect: to_global * cursor_rect,
                         should_interrupt_composition: false,
@@ -527,7 +550,13 @@ impl egui::Widget for LineEdit<'_> {
         if changed {
             response.mark_changed();
         }
-        response.widget_info(|| egui::WidgetInfo::text_edit(true, &before, &*text, hint));
+        if secret {
+            state.undo.clear();
+            state.redo.clear();
+            response.widget_info(|| egui::WidgetInfo::text_edit(true, "", "", hint));
+        } else {
+            response.widget_info(|| egui::WidgetInfo::text_edit(true, &before, &*text, hint));
+        }
         ui.data_mut(|d| d.insert_temp(id, state));
         response
     }

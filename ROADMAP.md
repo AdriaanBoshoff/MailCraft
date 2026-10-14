@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5) · revision 93 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6) · revision 94 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 394, all passing |
+| Tests | 396, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -21,7 +21,7 @@
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
-| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5) |
+| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6) |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
 
@@ -129,7 +129,8 @@
 77. Done: Mail accounts are kept in the engine: added, listed, changed, removed and tested (signing in to both servers and sending nothing), on a thread of their own; kept in the settings file without their passwords, which are in the system's credential store (M4.3).
 78. Done: Mail is sent: Send puts a message in the Outbox and the Outbox goes out through its account's SMTP server on a thread of its own; what went is kept in Sent Items, and what the server did not take stays in the Outbox with the reason (M4.4).
 79. Done: Mail is received: Send/Receive (F9) takes new mail down from every account into the Inbox on a thread of its own, IMAP read without marking it read and POP3 taken off the server only once it is saved here; nothing is taken down twice (M4.5).
-80. Next: M4.6: the window's Account Settings, Send/Receive progress and a server's own certificate trusted on the owner's word; then the check with a real test account (M4.7).
+80. Done: The window has Account Settings (File > Account Settings…, and on the Send / Receive tab): accounts are added, changed, tested and removed there, the password typed into a field that shows dots and gives nothing away; the ribbon's Send/Receive All Folders and Send All work (M4.6).
+81. Next: M4.7: the check with the owner's own test account, the password typed by the owner into Account Settings; then IMAP folders kept in step (M4.8).
 
 ## Do later (from M2)
 
@@ -218,12 +219,12 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes~~ | done: M3b.28 |
 | Pictures on a server, loaded on an explicit command (never by themselves) | M4, with accounts |
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
-| A server's own certificate trusted on the owner's word, and kept for that server only | M4.6, with the window's Account Settings |
+| A server's own certificate trusted on the owner's word, and kept for that server only | M4.7 if the owner's server needs it, else M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | M4.8, with IMAP folders kept in step |
 | IMAP folders kept in step both ways: the server's other folders, read, flagged, moved and deleted messages going back to the server, each account in a data file of its own as Outlook keeps one | M4.8, after the live check |
-| New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | M4.6, with the window's Send/Receive |
-| Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.6, with the window's message options |
+| New mail told of on the desktop and with a sound of our own, Send/Receive on a timer, and its progress shown in a window of its own (Show Progress) | M4.9, after the live check |
+| Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.9, with the window's message options |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
 
@@ -1659,3 +1660,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   past messages that are in the Inbox. At most 300 messages or 256 MB come in one receive and
   the rest wait, said in the status bar; a message that cannot be read as mail is kept whole as
   an attachment. 6 tests against the fake server.
+- **2026-10-14** - M4.6: Account Settings in the window.
+  File > Account Settings… (and a button on the Send / Receive tab) opens a window that lists
+  the accounts and shows one: your name, the address, IMAP or POP3, the incoming and outgoing
+  servers each with their security and port (left empty, the usual port for the security
+  chosen; the outgoing server left empty is the incoming one), the user name, the password, and
+  whether the outgoing server is signed in to and POP3 mail left on the server. Save adds or
+  changes the account through `account.add` and `account.edit`, Test Account Settings… saves
+  and then signs in to both servers on a thread of its own and shows what each said, and
+  Remove asks once more first. Everything the window does is an `account.*` command, so the
+  command line and an agent do the same. The password field (`LineEdit::password`) draws a dot
+  for each character, copies and cuts nothing out, keeps no undo, selects all on a double click,
+  tells the input method it is a password and tells screen readers nothing of what it holds;
+  the window hands what was typed to the system's credential store and writes over its own copy
+  at once. The ribbon's Send/Receive All Folders and Send All now run, on threads of their own.
+  2 tests.
