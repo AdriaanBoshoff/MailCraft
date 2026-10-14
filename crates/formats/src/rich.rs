@@ -407,6 +407,10 @@ pub struct Table {
     pub frame: Edges,
     /// The colour of the lines `border` asks for; `None` is the reader's.
     pub line: Option<Rgb>,
+    /// The table's own background, behind its cells and the room between them.
+    pub fill: Option<Rgb>,
+    /// Rounded corners of its own border and background, in pixels.
+    pub radius: u16,
     /// The table stands right under what is before it, with no room left between them.
     pub snug: bool,
     /// On paper, the first row stands again at the top of each page the table goes on to.
@@ -449,8 +453,8 @@ pub struct Cell {
     pub background: Option<Rgb>,
     /// Width the cell asks for, in pixels; 0 where it gives none.
     pub width: u16,
-    /// The cell's own padding, above and below, then left and right; `None` is the table's.
-    pub padding: Option<(u16, u16)>,
+    /// The cell's own padding, above, right, below and left; `None` is the table's.
+    pub padding: Option<[u16; 4]>,
     /// Width the cell asks for as hundredths of the table's, 1 to 100; 0 where it gives none.
     pub share: u8,
     pub valign: VAlign,

@@ -38,8 +38,11 @@ const MAX_COLUMNS: usize = 12;
 const MAX_TABLE_DEPTH: usize = 6;
 /// Largest cell padding and spacing drawn, whatever the message asks for.
 const MAX_CELL_ROOM: u16 = 64;
-/// A picture that is not drawn gets a frame when it asks for at least this size each way.
+/// A picture that is not drawn gets a frame when it asks for at least this size one way. The
+/// way it does not say is as tall as a line of its words, or as wide as a short name.
 const MIN_FRAME: u16 = 24;
+const FRAME_TALL: f32 = 28.0;
+const FRAME_WIDE: f32 = 160.0;
 const MIN_COLUMN: f32 = 24.0;
 /// Rows of a table, and blocks of a cell, that are measured to size its columns.
 const MEASURED_ROWS: usize = 100;
@@ -67,6 +70,8 @@ const MAX_DASHES: usize = 2048;
 const MAX_LEADERS: usize = 64;
 /// A border colour this close to what is behind it is drawn in the reader's own.
 const EDGE_CONTRAST: f32 = 1.3;
+/// A cell fill at least this light is paper: on the dark pane it is the pane.
+const PALE_FILL: f32 = 0.82;
 /// What is said under a link's address when the pointer rests on it.
 const LINK_HINT: &str = "Click to be asked before it is opened.";
 /// The card of an attachment that stands in the text: how tall it is, the room its mark and its
@@ -304,7 +309,7 @@ fn border(ui: &Ui, rect: Rect, list: &Edges, round: f32, look: Look, unset: Colo
                 return;
             }
             let w = f32::from(edge.width.min(MAX_EDGE)).min(rect.width() / 2.0).min(rect.height() / 2.0);
-            let color = edge.color.map(|c| Color32::from_rgb(c[0], c[1], c[2])).filter(|c| contrast(*c, look.on) >= EDGE_CONTRAST).unwrap_or(unset);
+            let color = edge.color.map_or(unset, |c| ink(c, look));
             ui.painter().rect_stroke(rect, round, (w, color), egui::StrokeKind::Inside);
         }
         _ => edges(ui, rect, list, look, unset),
@@ -369,7 +374,7 @@ fn edges(ui: &Ui, rect: Rect, edges: &Edges, look: Look, unset: Color32) {
         if w <= 0.0 {
             continue;
         }
-        let color = edge.color.map(|c| Color32::from_rgb(c[0], c[1], c[2])).filter(|c| contrast(*c, look.on) >= EDGE_CONTRAST).unwrap_or(unset);
+        let color = edge.color.map_or(unset, |c| ink(c, look));
         // The strip the line fills, and whether it runs across.
         let (strip, across) = match side {
             0 => (Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + w)), true),
@@ -440,7 +445,10 @@ impl Stand<'_> {
     fn natural(&self, run: &Run) -> Vec2 {
         match self {
             Stand::Drawn(picture) => picture.size,
-            Stand::Frame => vec2(f32::from(run.extent.0), f32::from(run.extent.1)),
+            Stand::Frame => {
+                let given = |v: u16, unset: f32| if v > 0 { f32::from(v) } else { unset };
+                vec2(given(run.extent.0, FRAME_WIDE), given(run.extent.1, FRAME_TALL))
+            }
             Stand::File(_) => vec2(MIN_CARD, CARD_TALL),
         }
     }
@@ -458,7 +466,8 @@ fn shown<'a>(run: &'a Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
     if let Some(drawn) = drawn {
         return Some(Stand::Drawn(drawn));
     }
-    (run.extent.0 >= MIN_FRAME && run.extent.1 >= MIN_FRAME).then_some(Stand::Frame)
+    let fits = |v: u16| v == 0 || v >= MIN_FRAME;
+    (run.extent.0.max(run.extent.1) >= MIN_FRAME && fits(run.extent.0) && fits(run.extent.1)).then_some(Stand::Frame)
 }
 
 /// What a picture that is not drawn is called.
@@ -490,9 +499,18 @@ fn frame(ui: &Ui, run: &Run, at: Rect, look: Look) {
     let mark = Rect::from_min_size(at.min + vec2(7.0, 7.0), vec2(14.0, 11.0));
     painter.rect_stroke(mark, 1.5, (1.0, color), egui::StrokeKind::Inside);
     painter.line_segment([mark.left_bottom() + vec2(-2.0, 2.0), mark.right_top() + vec2(2.0, -2.0)], (1.2, color));
+    // A frame too narrow for a word of its name has only the mark; the name is in its tip.
+    if at.width() < 80.0 {
+        return;
+    }
     let what = run.picture.as_ref().map_or("Picture", missing);
     let alt = alt(run);
-    let label = if alt.is_empty() { what.to_string() } else { format!("{what}\n{alt}") };
+    // A frame too short for two lines says what the picture is called, or else what is missing.
+    let label = match (alt.is_empty(), at.height() >= 40.0) {
+        (true, _) => what.to_string(),
+        (false, true) => format!("{what}\n{alt}"),
+        (false, false) => alt,
+    };
     let galley = painter.layout(label, font(11.5), color, (at.width() - 36.0).max(8.0));
     painter.galley(at.min + vec2(28.0, 5.0), galley, color);
 }
@@ -1543,6 +1561,21 @@ fn luminance(c: Color32) -> f32 {
     0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
 }
 
+/// A border's own colour, made only as much darker or lighter as it needs to be seen on what is
+/// behind it: a pale line on white stays a pale line of its own hue, not the colour of text.
+fn ink(c: [u8; 3], look: Look) -> Color32 {
+    let own = Color32::from_rgb(c[0], c[1], c[2]);
+    let toward = look.text();
+    let mut seen = own;
+    for step in 1..=10u8 {
+        if contrast(seen, look.on) >= EDGE_CONTRAST {
+            return seen;
+        }
+        seen = own.lerp_to_gamma(toward, f32::from(step) / 10.0);
+    }
+    seen
+}
+
 fn contrast(a: Color32, b: Color32) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
@@ -1580,15 +1613,34 @@ fn natural_width(ui: &Ui, list: &[Block], look: Look, depth: usize) -> f32 {
     widest
 }
 
-/// Room between a cell's edges and what it holds: left and right, then above and below.
-fn padding(table: &Table, cell: &rich::Cell) -> Vec2 {
-    let (vertical, horizontal) = cell.padding.unwrap_or((table.padding, table.padding));
+/// What a cell is filled with. A message is written for white paper, and a pale fill is drawn
+/// as it is on the light pane; on the dark pane, where nothing else is behind it, it is the pane.
+fn cell_fill(cell: &rich::Cell, look: Look) -> Option<Color32> {
+    fill_on(cell.background?, look)
+}
+
+/// A fill the message chose, as it is drawn on what is behind it.
+fn fill_on(c: rich::Rgb, look: Look) -> Option<Color32> {
+    let c = Color32::from_rgb(c[0], c[1], c[2]);
+    let pale = luminance(c) >= PALE_FILL;
+    (!(pale && look.t.dark && look.on == look.t.surface)).then_some(c)
+}
+
+/// The room a padding takes across: at the right and at the left.
+fn sides(pad: [f32; 4]) -> f32 {
+    pad[1] + pad[3]
+}
+
+/// Room between a cell's edges and what it holds: above, right, below and left.
+fn padding(table: &Table, cell: &rich::Cell) -> [f32; 4] {
+    let [top, right, bottom, left] = cell.padding.unwrap_or([table.padding; 4]);
     // A cell's own lines are drawn inside it: what they take past a hair line is not the text's.
     let line = |a: usize, b: usize| {
         let wide = |i: usize| cell.edges.and_then(|e| e.get(i).map(|e| e.width.min(MAX_EDGE))).unwrap_or(0);
         f32::from(wide(a).max(wide(b)).saturating_sub(1))
     };
-    vec2(f32::from(horizontal.min(MAX_CELL_ROOM)) + line(1, 3), f32::from(vertical.min(MAX_CELL_ROOM)) + line(0, 2))
+    let room = |v: u16| f32::from(v.min(MAX_CELL_ROOM));
+    [room(top) + line(0, 2), room(right) + line(1, 3), room(bottom) + line(0, 2), room(left) + line(1, 3)]
 }
 
 /// Room a table's own border takes on each side when it is thicker than a hair line.
@@ -1648,8 +1700,8 @@ fn natural_columns(ui: &Ui, table: &Table, look: Look, depth: usize) -> Vec<f32>
         for (cell, col) in row.iter().zip(starts) {
             let col = *col;
             let span = usize::from(cell.span.max(1));
-            let on = cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
-            let want = natural_width(ui, &cell.blocks, Look { on, ..look }, depth + 1) + padding(table, cell).x * 2.0;
+            let on = cell_fill(cell, look).unwrap_or(look.on);
+            let want = natural_width(ui, &cell.blocks, Look { on, ..look }, depth + 1) + sides(padding(table, cell));
             if span == 1 {
                 if let Some(a) = asked.get_mut(col) {
                     *a = a.max(f32::from(cell.width));
@@ -1732,7 +1784,8 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         cell: &'a rich::Cell,
         x: f32,
         w: f32,
-        pad: Vec2,
+        /// Its padding: above, right, below and left.
+        pad: [f32; 4],
         /// How tall the cell is with what it holds.
         tall: f32,
     }
@@ -1752,9 +1805,12 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
             slots.push(Slot { row: r, upto, number: c, cell, x, w, pad: padding(table, cell), tall: 0.0 });
         }
     }
-    let on = |cell: &rich::Cell| cell.background.map_or(look.on, |c| Color32::from_rgb(c[0], c[1], c[2]));
+    // What the table is filled with is behind each of its cells that has no fill of its own.
+    let fill = table.fill.and_then(|c| fill_on(c, look));
+    let inner = Look { on: fill.unwrap_or(look.on), ..look };
+    let on = |cell: &rich::Cell| cell_fill(cell, inner).unwrap_or(inner.on);
     let inside =
-        |slot: &Slot, top: f32| Rect::from_min_size(pos2(slot.x + slot.pad.x, top + slot.pad.y), vec2((slot.w - slot.pad.x * 2.0).max(8.0), 0.0));
+        |slot: &Slot, top: f32| Rect::from_min_size(pos2(slot.x + slot.pad[3], top + slot.pad[0]), vec2((slot.w - sides(slot.pad)).max(8.0), 0.0));
 
     // Every cell is laid out once unseen, to learn how tall it is: a row is as tall as its
     // tallest cell, and a cell over several rows makes the last of them tall enough for it.
@@ -1762,7 +1818,7 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         let mut child = ui.new_child(UiBuilder::new().id_salt(("cell size", slot.row, slot.number)).max_rect(inside(slot, table_top)).invisible());
         child.spacing_mut().item_spacing = vec2(0.0, 0.0);
         blocks(&mut child, &slot.cell.blocks, Look { on: on(slot.cell), ..look }, depth + 1);
-        slot.tall = child.min_rect().height() + slot.pad.y * 2.0;
+        slot.tall = child.min_rect().height() + slot.pad[0] + slot.pad[2];
     }
     let mut heights = vec![0.0f32; count];
     for slot in slots.iter().filter(|s| s.upto == s.row) {
@@ -1793,8 +1849,12 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
 
     let whole = Rect::from_min_max(pos2(room_left, table_top), pos2(room_left + available, bottom));
     if ui.is_visible() && ui.is_rect_visible(whole) {
-        let lines =
-            table.line.map(|c| Color32::from_rgb(c[0], c[1], c[2])).filter(|c| contrast(*c, look.on) >= EDGE_CONTRAST).unwrap_or(look.t.text_faint);
+        let lines = table.line.map_or(look.t.text_faint, |c| ink(c, inner));
+        let outer = Rect::from_min_max(pos2(left, table_top), pos2(left + target, bottom));
+        let round = corners(&table.frame, table.radius, outer);
+        if let Some(fill) = fill {
+            ui.painter().rect_filled(outer, round, fill);
+        }
         for slot in &slots {
             let top = first + tops.get(slot.row).copied().unwrap_or(0.0);
             let end = first + tops.get(slot.upto).copied().unwrap_or(0.0) + heights.get(slot.upto).copied().unwrap_or(0.0);
@@ -1802,10 +1862,10 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
             if !ui.is_rect_visible(rect) {
                 continue;
             }
-            let within = Look { on: on(slot.cell), ..look };
+            let within = Look { on: on(slot.cell), ..inner };
             let own = slot.cell.edges.unwrap_or_default();
             let round = corners(&own, slot.cell.radius, rect);
-            if slot.cell.background.is_some() {
+            if cell_fill(slot.cell, look).is_some() {
                 ui.painter().rect_filled(rect, round, within.on);
             }
             let spare = (rect.height() - slot.tall).max(0.0);
@@ -1828,8 +1888,7 @@ fn table(ui: &mut Ui, table: &Table, look: Look, depth: usize) {
         // The table's own border: seen round cells that stand apart, or when it is a border of
         // its own making.
         if any_edge(&table.frame) && (gap > 0.0 || rim > 0.0 || !table.border) {
-            let outer = Rect::from_min_max(pos2(left, table_top), pos2(left + target, bottom));
-            edges(ui, outer, &table.frame, look, if table.border { lines } else { look.text() });
+            border(ui, outer, &table.frame, round, look, if table.border { lines } else { look.text() });
         }
     }
     ui.allocate_rect(whole, Sense::hover());

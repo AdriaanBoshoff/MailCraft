@@ -206,6 +206,9 @@ struct TableBuild {
     line: Option<Rgb>,
     /// The box the table stands inside.
     inside: Option<Arc<Frame>>,
+    /// The table's own background, behind its cells.
+    fill: Option<Rgb>,
+    radius: u16,
     /// Background of the row being read; its cells start from it.
     row_fill: Option<Rgb>,
     row_valign: Option<VAlign>,
@@ -221,7 +224,7 @@ struct CellBuild {
     span: u16,
     background: Option<Rgb>,
     width: u16,
-    padding: Option<(u16, u16)>,
+    padding: Option<[u16; 4]>,
     share: u8,
     valign: VAlign,
     rows: u16,
@@ -603,7 +606,7 @@ impl Builder {
                     .or_else(|| attr(attrs, "bgcolor").and_then(color));
                 let place = css_value(&css, "vertical-align").as_deref().and_then(valign).or_else(|| attr(attrs, "valign").and_then(valign));
                 if let Some(t) = self.tables.last_mut() {
-                    t.row_fill = fill.and_then(page_or);
+                    t.row_fill = fill;
                     t.row_valign = place;
                 }
                 return;
@@ -627,16 +630,16 @@ impl Builder {
                 if name == "th" {
                     self.fmt.style.bold = true;
                 }
-                if row_fill.is_some() {
-                    self.fmt.style.background = row_fill;
-                }
                 self.common(name, attrs);
-                // A background set on the cell, or inherited by it, is the cell's and not its text's.
-                let background = self.fmt.style.background.take();
+                // A background set on the cell or its row is the cell's and not its text's. A pale
+                // one is kept as it is: the cell is drawn on it, as it is on paper.
+                let inherited = self.fmt.style.background.take();
+                let background = self.css_fill.take().or(row_fill).or(inherited);
                 let css = self.sheet.declarations(name, attrs);
                 let css_width = css_value(&css, "width");
                 let asked = css_width.as_deref().or_else(|| attr(attrs, "width")).unwrap_or("");
-                let padding = css_value(&css, "padding").and_then(|v| cell_padding(&v));
+                // Its padding, all four sides or each of them (CSS 2.1 section 8.4).
+                let padding = self.css_padding.take();
                 // What a cell holds stands in the middle of it unless the cell or its row says otherwise.
                 let place = css_value(&css, "vertical-align").as_deref().and_then(valign).or_else(|| attr(attrs, "valign").and_then(valign));
                 let edges = self.css_border.take().filter(any_edge);
@@ -1088,6 +1091,8 @@ impl Builder {
         // Alignment of the table itself is not inherited by its text, which stands at the side
         // it is read from. The table stands at the side the text around it is read from.
         let around = self.fmt.rtl;
+        // A table in a centred cell or block stands in its middle, as a word there would.
+        let centred = self.fmt.align == Align::Center;
         self.fmt.align = if around { Align::Right } else { Align::Left };
         let thick = attr(attrs, "border").and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0);
         let border = thick.is_some();
@@ -1095,6 +1100,12 @@ impl Builder {
         // the table as a whole stands inside it.
         let inside = self.fmt.frame.take();
         self.common("table", attrs);
+        // Its background is behind its cells, not a highlight of the words in them.
+        let fill = self.css_fill.take();
+        if fill.is_some() {
+            self.fmt.style.background = None;
+        }
+        let radius = std::mem::take(&mut self.css_radius);
         let line = attr(attrs, "bordercolor").and_then(color);
         // The table's own border: its style's, or as thick as `border` says.
         let frame = self.css_border.take().filter(any_edge).unwrap_or_else(|| {
@@ -1109,6 +1120,7 @@ impl Builder {
         let table_align = match attr(attrs, "align").and_then(align) {
             Some(a) => a,
             None if auto("margin") || (auto("margin-left") && auto("margin-right")) => Align::Center,
+            None if centred => Align::Center,
             None if around => Align::Right,
             None => Align::Left,
         };
@@ -1123,6 +1135,8 @@ impl Builder {
             frame,
             line,
             inside,
+            fill,
+            radius,
             row_fill: None,
             row_valign: None,
             open_len: self.open.len(),
@@ -1197,12 +1211,13 @@ impl Builder {
         if rows.is_empty() {
             return;
         }
-        // A width, a place on the page or a filled cell is something to draw; without any of them
+        // A width, a place on the page, or a cell filled or padded is something to draw; without them
         // a table with one column is only layout, and its content reads as ordinary blocks.
         let shaped = matches!(t.width, TableWidth::Pixels(_) | TableWidth::Percent(_))
             || t.align != Align::Left
             || any_edge(&t.frame)
-            || rows.iter().flatten().any(|c| c.background.is_some() || c.edges.is_some());
+            || t.fill.is_some()
+            || rows.iter().flatten().any(|c| c.background.is_some() || c.edges.is_some() || c.padding.is_some_and(|p| p.iter().any(|v| *v > 0)));
         if !shaped && rows.iter().all(|r| r.iter().filter(|c| !c.blocks.is_empty()).count() <= 1) {
             // What it held stands in the box the table stood in, where it has none of its own.
             for cell in rows.drain(..).flatten() {
@@ -1216,6 +1231,9 @@ impl Builder {
                 }
             }
         } else {
+            // A table has no margin of its own (CSS 2.1 section 17.4): one right under another
+            // touches it, as a column of tables in a message is drawn.
+            let snug = matches!(self.sinks.last().and_then(|s| s.last()), Some(Block::Table(_)));
             self.push_block(Block::Table(Table {
                 rows,
                 border: t.border,
@@ -1225,7 +1243,9 @@ impl Builder {
                 spacing: t.spacing,
                 frame: t.frame,
                 line: t.line,
-                snug: false,
+                fill: t.fill,
+                radius: t.radius,
+                snug,
                 repeat: false,
                 rtl: t.rtl,
                 inside: t.inside,
@@ -1513,18 +1533,6 @@ fn edge(v: &str) -> Edge {
 fn cell_room(v: &str) -> Option<u16> {
     let n = v.trim().trim_end_matches("px").trim_end().parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
     Some(n.round().min(MAX_CELL_ROOM) as u16)
-}
-
-/// A cell's `padding`: above and below, then left and right. Lengths that depend on the text
-/// size, and percentages, are not understood.
-fn cell_padding(v: &str) -> Option<(u16, u16)> {
-    let mut parts = v.split_whitespace();
-    let vertical = pad_length(parts.next()?)?;
-    let horizontal = match parts.next() {
-        Some(part) => pad_length(part)?,
-        None => vertical,
-    };
-    Some((vertical, horizontal))
 }
 
 /// One length of a `padding`, in pixels.

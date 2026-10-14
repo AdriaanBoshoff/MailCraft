@@ -1304,7 +1304,7 @@ impl Level {
             blocks,
             span: 1,
             width,
-            padding: Some((1, beside)),
+            padding: Some([1, beside, 1, beside]),
             background: def.fill,
             valign: def.valign,
             edges: any_edge(&edges).then_some(edges),

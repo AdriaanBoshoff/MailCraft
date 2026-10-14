@@ -60,7 +60,8 @@ pub(crate) fn owner(name: &str) -> Para {
 
 fn head(memo: &Memo) -> Vec<Block> {
     let owner = owner(memo.owner);
-    let cell = |para: Para, width: u16| Cell { blocks: vec![Block::Para(para)], span: 1, rows: 1, width, padding: Some((1, 0)), ..Cell::default() };
+    let cell =
+        |para: Para, width: u16| Cell { blocks: vec![Block::Para(para)], span: 1, rows: 1, width, padding: Some([1, 0, 1, 0]), ..Cell::default() };
     let rows: Vec<Vec<Cell>> = memo
         .fields
         .iter()

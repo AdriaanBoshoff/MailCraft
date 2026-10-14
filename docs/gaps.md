@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 85 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 86 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -83,6 +83,7 @@
 
 ## Revision history
 
+- 86 · 2026-10-14 — M4.7: HTML messages laid out as Outlook lays them out (centring, padding, fills, rounded tables, picture boxes).
 - 85 · 2026-10-14 — M4.7: each account keeps its mail in a data file of its own; Account Settings laid out anew.
 - 84 · 2026-10-14 — M4.6: accounts are added, changed and tested in the window's Account Settings.
 - 83 · 2026-10-14 — M4.5: mail is received by POP3 and from the IMAP Inbox into the data file's Inbox.

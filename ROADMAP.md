@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account (M4.7) · revision 95 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7) · revision 96 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 398, all passing |
+| Tests | 402, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -131,7 +131,8 @@
 79. Done: Mail is received: Send/Receive (F9) takes new mail down from every account into the Inbox on a thread of its own, IMAP read without marking it read and POP3 taken off the server only once it is saved here; nothing is taken down twice (M4.5).
 80. Done: The window has Account Settings (File > Account Settings…, and on the Send / Receive tab): accounts are added, changed, tested and removed there, the password typed into a field that shows dots and gives nothing away; the ribbon's Send/Receive All Folders and Send All work (M4.6).
 81. Done: Each account keeps its mail in a data file of its own, as Outlook keeps one per account: received mail goes in its Inbox, what it sent in its Sent Items, and the file is saved on its own once mail is in it; Account Settings is laid out anew, and the live check against a real IMAP and SMTP server passed (M4.7).
-82. Next: M4.8: IMAP folders kept in step both ways, with a copy of what was sent put in the server's Sent folder.
+82. Done: HTML messages laid out as Outlook lays them out: a column of tables centred in its cell, each side of a cell's padding, pale fills and a table's own fill drawn, rounded table corners, tables standing flush under one another, a pale border kept pale, and a picture not downloaded shown as a box of the size it asks for (M4.7, from the live check).
+83. Next: M4.10: pictures on a server downloaded when asked for, from the info bar or a right-click on a picture, over HTTPS only and never by themselves; then M4.8.
 
 ## Do later (from M2)
 
@@ -218,7 +219,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Borders on text within a line; rounded corners~~ | done: M3b.26 |
 | ~~Outlook's highlight colours; list numbers an override changes (`\lfolevel`)~~ | done: M3b.27 |
 | ~~Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes~~ | done: M3b.28 |
-| Pictures on a server, loaded on an explicit command (never by themselves) | M4, with accounts |
+| Pictures on a server, loaded on an explicit command (never by themselves): from the info bar and a right-click on a picture | M4.10, next |
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
 | A server's own certificate trusted on the owner's word, and kept for that server only | M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
@@ -1689,3 +1690,15 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   Account Settings is laid out anew: the accounts as cards with their kind and address, the
   form in parts with headings whose fields line up, a tick or a cross for what each server
   said, where the account's mail is kept, and Save as the main button. 2 tests.
+- **2026-10-14** - M4.7: messages laid out as Outlook lays them out.
+  A newsletter received in the live check was drawn unlike Outlook draws it. Compared side by
+  side on a synthetic copy of its layout: a table in a centred cell now stands in the middle
+  (`fmt.align` before the table's own); a cell's padding is kept for each side (`Cell::padding`
+  is `[u16; 4]`, from `padding` and `padding-top` and the rest), and a table whose cells are
+  padded is drawn and not taken apart as layout; pale fills of cells, rows and tables are kept
+  (on the dark pane a pale fill is still the pane); a table has its own fill and rounded
+  corners (`Table::fill` and `Table::radius`), on screen and on paper; a table right under
+  another touches it, as CSS gives tables no margin; a pale border is drawn in its own hue,
+  made only as much darker as it needs to be seen, where before it fell back to the colour of
+  text and showed black; and a picture not downloaded that gives only its width is a box of
+  that width, as Outlook draws one, rather than words in brackets. 3 tests.

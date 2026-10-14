@@ -219,15 +219,8 @@ fn a_table_longer_than_a_page_goes_on_with_its_lines_and_frames() {
 fn nested(depth: usize) -> Block {
     let mut block = Block::Para(para("deep"));
     for _ in 0..depth {
-        let cell = Cell {
-            blocks: vec![block],
-            span: 60_000,
-            rows: 60_000,
-            width: u16::MAX,
-            share: 255,
-            padding: Some((u16::MAX, u16::MAX)),
-            ..Cell::default()
-        };
+        let cell =
+            Cell { blocks: vec![block], span: 60_000, rows: 60_000, width: u16::MAX, share: 255, padding: Some([u16::MAX; 4]), ..Cell::default() };
         block = Block::Table(Table {
             rows: vec![vec![cell]],
             border: true,

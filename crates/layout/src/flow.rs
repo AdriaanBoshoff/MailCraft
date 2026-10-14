@@ -285,15 +285,16 @@ fn frame_room(frame: &Frame) -> ((f32, f32), (f32, f32)) {
     ((clear(side(3), left), side(0) + above), (clear(side(1), right), side(2) + below))
 }
 
-/// Room between a cell's edge and what it holds, in points: at the sides, then above and below.
-fn padding(table: &Table, cell: &Cell) -> (f32, f32) {
-    let (vertical, horizontal) = cell.padding.unwrap_or((table.padding, table.padding));
+/// Room between a cell's edge and what it holds, in points: above, right, below and left.
+fn padding(table: &Table, cell: &Cell) -> [f32; 4] {
+    let [top, right, bottom, left] = cell.padding.unwrap_or([table.padding; 4]);
     // A cell's own lines are drawn inside it: what they take past a hair line is not the text's.
     let line = |a: usize, b: usize| {
         let wide = |i: usize| cell.edges.and_then(|e| e.get(i).map(|e| e.width.min(MAX_EDGE))).unwrap_or(0);
         px(u16::from(wide(a).max(wide(b)).saturating_sub(1)))
     };
-    (px(horizontal.min(MAX_CELL_ROOM)) + line(1, 3), px(vertical.min(MAX_CELL_ROOM)) + line(0, 2))
+    let room = |v: u16| px(v.min(MAX_CELL_ROOM));
+    [room(top) + line(0, 2), room(right) + line(1, 3), room(bottom) + line(0, 2), room(left) + line(1, 3)]
 }
 
 /// Give the columns that ask for a share of the table's width that share of `room`, and the
@@ -1367,7 +1368,8 @@ impl<'f, 'l> Flow<'f, 'l> {
         for (row, starts) in table.rows.iter().zip(places).take(MEASURED_ROWS) {
             for (cell, col) in row.iter().zip(starts) {
                 let (least, most) = self.wants(&cell.blocks, depth + 1);
-                let pad = padding(table, cell).0 * 2.0;
+                let pad = padding(table, cell);
+                let pad = pad[1] + pad[3];
                 let (least, most, ask) = (least + pad, most + pad, px(cell.width));
                 if cell.span <= 1 {
                     if let (Some(a), Some(b), Some(c)) = (mins.get_mut(*col), maxs.get_mut(*col), asked.get_mut(*col)) {
@@ -1606,8 +1608,9 @@ impl<'f, 'l> Flow<'f, 'l> {
             let Some(left) = lefts.get(table.left_column(*col, span, lefts.len())).copied() else { continue };
             let wide: f32 = widths.iter().skip(*col).take(span).sum::<f32>() + gap * (span.saturating_sub(1) as f32);
             let pad = padding(table, cell);
-            let below = self.blocks(&cell.blocks, left + pad.0, (wide - pad.0 * 2.0).max(6.0), At { page: at.page, y: at.y + pad.1 }, depth + 1);
-            end = later(end, At { page: below.page, y: below.y + pad.1 });
+            let below =
+                self.blocks(&cell.blocks, left + pad[3], (wide - pad[1] - pad[3]).max(6.0), At { page: at.page, y: at.y + pad[0] }, depth + 1);
+            end = later(end, At { page: below.page, y: below.y + pad[2] });
             set.push((cell, left, wide));
         }
         for (cell, left, wide) in set {
@@ -1699,15 +1702,15 @@ impl<'f, 'l> Flow<'f, 'l> {
                 let wide: f32 = widths.iter().skip(*col).take(span).sum::<f32>() + gap * (span.saturating_sub(1) as f32);
                 let pad = padding(table, cell);
                 let before = self.mark(row_start.page);
-                let inner = At { page: row_start.page, y: row_start.y + pad.1 };
-                let end = self.blocks(&cell.blocks, left + pad.0, (wide - pad.0 * 2.0).max(6.0), inner, depth + 1);
+                let inner = At { page: row_start.page, y: row_start.y + pad[0] };
+                let end = self.blocks(&cell.blocks, left + pad[3], (wide - pad[1] - pad[3]).max(6.0), inner, depth + 1);
                 let after = self.mark(row_start.page);
                 waiting.push(Waiting {
                     cell,
                     x: left,
                     width: wide,
                     start: row_start,
-                    end: At { page: end.page, y: end.y + pad.1 },
+                    end: At { page: end.page, y: end.y + pad[2] },
                     last_row: r.saturating_add(usize::from(cell.rows.max(1)) - 1).min(rows.saturating_sub(1)),
                     before,
                     after,
@@ -1736,7 +1739,8 @@ impl<'f, 'l> Flow<'f, 'l> {
             at = At { page: row_end.page, y: row_end.y + gap };
         }
         let end = At { page: at.page, y: at.y + rim };
-        self.boxed(start, end, x, target, &table.frame, None, 0, false);
+        self.round = table.radius;
+        self.boxed(start, end, x, target, &table.frame, table.fill, 0, false);
         end
     }
 }

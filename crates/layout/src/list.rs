@@ -57,7 +57,7 @@ fn cell(words: &str, bold: bool, column: &Column, share: u8, under: Edge) -> Cel
         span: 1,
         rows: 1,
         share,
-        padding: Some((2, 3)),
+        padding: Some([2, 3, 2, 3]),
         edges: Some([Edge::default(), Edge::default(), under, Edge::default()]),
         ..Cell::default()
     }
@@ -95,7 +95,7 @@ pub fn list(list: &Listed, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result
                     span: u16::try_from(columns.len()).unwrap_or(1),
                     rows: 1,
                     share: 100,
-                    padding: Some((4, 3)),
+                    padding: Some([4, 3, 4, 3]),
                     background: Some([238, 238, 238]),
                     edges: Some([Edge::default(), Edge::default(), light, Edge::default()]),
                     ..Cell::default()

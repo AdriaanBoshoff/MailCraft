@@ -146,7 +146,7 @@ fn nothing_active_survives_and_remote_content_is_only_counted() {
 }
 
 #[test]
-fn near_white_backgrounds_are_the_page() {
+fn near_white_backgrounds_fill_their_cells_and_not_the_text() {
     let doc = parse(
         "<body bgcolor=\"#FFFFFF\"><table><tr><td bgcolor=\"#1F4E79\"><font color=white>Banner</font></td><td style=\"background:#fafafa\">Side</td></tr></table></body>",
     );
@@ -156,7 +156,7 @@ fn near_white_backgrounds_are_the_page() {
         _ => panic!("expected text"),
     };
     assert_eq!((run(0).background, run(0).color), (None, Some([255, 255, 255])), "the colour fills the cell, not the text");
-    assert_eq!((t.rows[0][0].background, t.rows[0][1].background), (Some([0x1F, 0x4E, 0x79]), None));
+    assert_eq!((t.rows[0][0].background, t.rows[0][1].background), (Some([0x1F, 0x4E, 0x79]), Some([0xfa, 0xfa, 0xfa])));
     assert_eq!(run(1).background, None);
 }
 
@@ -367,7 +367,7 @@ fn cells_keep_their_room_their_fills_and_their_places() {
         "<table cellpadding=12 cellspacing=\"0px\"><tr><td>a<td style=\"padding:16px 32px 4px\">b<td style=\"padding:6pt\">c<td style=\"padding:1em\">d</table>",
     );
     assert_eq!((t.padding, t.spacing), (12, 0));
-    assert_eq!(t.rows[0].iter().map(|c| c.padding).collect::<Vec<_>>(), [None, Some((16, 32)), Some((8, 8)), None]);
+    assert_eq!(t.rows[0].iter().map(|c| c.padding).collect::<Vec<_>>(), [None, Some([16, 32, 4, 32]), Some([8, 8, 8, 8]), None]);
     let t = table("<table cellpadding=99999 cellspacing=-4 style=\"border-collapse:collapse\"><tr><td>a<td>b</table>");
     assert_eq!((t.padding, t.spacing), (64, 0));
     let t = table("<table cellspacing=1e39><tr><td>a<td>b</table>");
@@ -892,11 +892,11 @@ fn rtf_cells_keep_their_lines_fills_places_and_merges() {
     assert_eq!(edges.map(|e| e.width), [4, 1, 3, 1], "twips to pixels; a double line is three wide");
     assert_eq!(edges.map(|e| e.line), [Line::Solid, Line::Dashed, Line::Double, Line::Solid]);
     assert_eq!((edges[1].color, edges[0].color), (Some([204, 0, 0]), None));
-    assert_eq!((a.background, a.valign, a.padding), (Some([255, 230, 153]), VAlign::Bottom, Some((1, 7))));
+    assert_eq!((a.background, a.valign, a.padding), (Some([255, 230, 153]), VAlign::Bottom, Some([1, 7, 1, 7])));
     // The line between two cells is drawn once, and no line is no line; widths are capped.
     let b = &t.rows[0][1];
     assert_eq!(b.edges.map(|e| e.map(|e| e.width)), Some([0, 0, 12, 0]));
-    assert_eq!((b.valign, b.padding), (VAlign::Middle, Some((1, 7))));
+    assert_eq!((b.valign, b.padding), (VAlign::Middle, Some([1, 7, 1, 7])));
     // A line under every cell of a row is the line above the next one.
     assert_eq!(t.rows[1][0].edges.map(|e| e.map(|e| e.width)), Some([0, 0, 2, 0]), "top shared; bottom is the last part's");
     assert_eq!(t.rows[1][1].edges, None, "its only line was the one it shares: {:?}", t.rows[1][1].edges);
@@ -937,7 +937,7 @@ fn hostile_rtf_pictures_and_tables_are_capped() {
                     for cell in t.rows.iter().flatten() {
                         assert!(cell.rows <= 1000 && cell.width <= 4096);
                         assert!(cell.edges.is_none_or(|e| e.iter().all(|e| e.width <= 12)));
-                        assert!(cell.padding.is_some_and(|(v, h)| v <= 64 && h <= 64));
+                        assert!(cell.padding.is_some_and(|p| p.iter().all(|v| *v <= 64)));
                         check(&cell.blocks);
                     }
                 }
@@ -1861,7 +1861,7 @@ fn rtf_tables_stand_in_the_cells_of_tables() {
     assert_eq!(doc.text(), "before one\ttwo three\tfour\t after\tright\nbelow");
     // The row of the outer table keeps its own settings: the inner rows did not take them.
     let cell = &outer.rows[0][0];
-    assert_eq!((cell.width, cell.padding, cell.edges.map(|e| e.map(|e| e.width))), (200, Some((1, 7)), Some([1, 0, 0, 0])));
+    assert_eq!((cell.width, cell.padding, cell.edges.map(|e| e.map(|e| e.width))), (200, Some([1, 7, 1, 7]), Some([1, 0, 0, 0])));
     assert_eq!(outer.rows[0][1].width, 200);
     // What the cell holds, in the order it was written: a paragraph, the table, a paragraph.
     let kinds: Vec<&str> = cell.blocks.iter().map(|b| if matches!(b, Block::Table(_)) { "table" } else { "para" }).collect();
@@ -1873,7 +1873,7 @@ fn rtf_tables_stand_in_the_cells_of_tables() {
         [vec![(1, 66), (2, 99)], vec![(1, 66), (1, 66), (1, 33)]]
     );
     let one = &inner.rows[0][0];
-    assert_eq!((one.background, one.padding, one.edges.map(|e| e.map(|e| e.width))), (Some([204, 0, 0]), Some((1, 2)), Some([0, 0, 2, 0])));
+    assert_eq!((one.background, one.padding, one.edges.map(|e| e.map(|e| e.width))), (Some([204, 0, 0]), Some([1, 2, 1, 2]), Some([0, 0, 2, 0])));
 
     // Three deep, and a table that ends with its cell where nothing says so.
     let doc = crate::rtf::parse(
@@ -3608,4 +3608,33 @@ fn hostile_brushes_regions_and_copies_never_panic() {
     records.extend(std::iter::repeat_n((0x0415, words(&[60, 60, 40, 40])), 3000));
     records.push(pat(PATCOPY, [0, 0, 100, 100]));
     let _ = wmf_picture(&wmf(&records), Some((50, 50)));
+}
+
+#[test]
+fn a_pale_padded_column_in_a_centred_cell_keeps_its_fill_its_padding_and_its_place() {
+    let doc = crate::html::parse(
+        r##"<table width="100%"><tr><td align="center"><table width="640" bgcolor="#faf9f5"><tr><td style="padding:18px 36px 36px">Welcome</td></tr></table></td></tr></table>"##,
+    );
+    let Some(Block::Table(t)) = doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table: {:?}", doc.blocks) };
+    assert_eq!((t.width, t.align), (crate::rich::TableWidth::Pixels(640), Align::Center));
+    let cell = &t.rows[0][0];
+    assert_eq!((t.fill, cell.background, cell.padding), (Some([0xfa, 0xf9, 0xf5]), None, Some([18, 36, 36, 36])));
+}
+
+#[test]
+fn a_table_keeps_its_fill_and_round_corners_and_stands_flush_under_another() {
+    let doc = crate::html::parse(
+        r##"<table width="100%" bgcolor="#faf9f5"><tr><td>Top</td></tr></table><table width="100%" style="background-color:#FFFFFF;border:1px solid #E8E5DB;border-radius:12px"><tr><td>Code</td></tr></table>"##,
+    );
+    let tables: Vec<&crate::rich::Table> = doc.blocks.iter().filter_map(|b| if let Block::Table(t) = b { Some(t) } else { None }).collect();
+    assert_eq!(tables.len(), 2, "{:?}", doc.blocks);
+    assert_eq!((tables[0].fill, tables[0].snug, tables[0].rows[0][0].background), (Some([0xfa, 0xf9, 0xf5]), false, None));
+    assert_eq!((tables[1].fill, tables[1].radius, tables[1].snug), (Some([255, 255, 255]), 12, true));
+}
+
+#[test]
+fn a_cell_padded_on_one_side_is_a_table_and_not_only_layout() {
+    let doc = crate::html::parse(r#"<table width="100%"><tr><td style="padding:0;padding-top:12px;padding-right:24px">Steps</td></tr></table>"#);
+    let Some(Block::Table(t)) = doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table: {:?}", doc.blocks) };
+    assert_eq!(t.rows[0][0].padding, Some([12, 24, 0, 0]));
 }
