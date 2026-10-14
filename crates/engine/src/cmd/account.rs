@@ -126,10 +126,15 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
     if s.accounts.iter().any(|a| a.email.eq_ignore_ascii_case(&account.email)) {
         return Err(EngineError::BadParams(format!("there is an account for {} already", account.email)));
     }
-    s.status = format!("Added the account {}", account.name);
     let id = account.id.clone();
-    let value = account.to_json();
+    let name = account.name.clone();
     s.accounts.push(account);
+    s.status = match account_store(s, s.accounts.len().saturating_sub(1)) {
+        Ok(Some(_)) => format!("Added the account {name}, with a data file of its own for its mail"),
+        Ok(None) => format!("Added the account {name}"),
+        Err(e) => format!("Added the account {name}; its data file could not be made ({e}), and is tried again when mail comes"),
+    };
+    let value = s.accounts.last().map(Account::to_json).unwrap_or_default();
     let kept = matches!(given, Some(Some(_))) && keep(s, &id, given.flatten());
     Ok(json!({ "id": id, "account": value, "passwordKept": kept }))
 }
@@ -167,10 +172,72 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "account": value, "passwordKept": kept }))
 }
 
+/// The data file the account `at` keeps its mail in, opened, as Outlook keeps one for each
+/// account so that its mail is never mixed with another's: made, with the folders a mailbox
+/// has, the first time it is needed, in the program's own folder. `None` where the host keeps
+/// no such folder and the account has no data file yet: its mail then goes where new mail goes.
+pub(crate) fn account_store(s: &mut Session, at: usize) -> Result<Option<usize>, EngineError> {
+    let Some(account) = s.accounts.get(at) else { return Ok(None) };
+    let path = match (&account.data_file, &s.account_dir) {
+        (Some(p), _) => p.clone(),
+        (None, Some(dir)) => dir.join(accounts::data_file_name(account)),
+        (None, None) => return Ok(None),
+    };
+    let name = account.name.clone();
+    let real = std::fs::canonicalize(&path).ok();
+    let open = s.stores.iter().position(|st| real.is_some() && st.path().and_then(|p| std::fs::canonicalize(p).ok()) == real);
+    let idx = match open {
+        Some(idx) => idx,
+        None => {
+            if !path.exists() {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                let mut mailbox = openmailclient_model::MemStore::with_default_folders(&name);
+                crate::io::save_store(&mut mailbox, &path, crate::io::new_store_id(s.now))?;
+            }
+            match crate::io::open_path(&path)? {
+                crate::io::Opened::Store(mut store) => {
+                    if let Some(dir) = &s.journal_dir {
+                        store.journal_elsewhere(dir);
+                    }
+                    // Unsaved mail of a run that ended comes back, as with any data file.
+                    let _ = store.recover();
+                    s.add_store(store)
+                }
+                crate::io::Opened::Item(_) => return Err(EngineError::Format(format!("{} is not a data file", path.display()))),
+            }
+        }
+    };
+    if !s.stores.get(idx).is_some_and(|st| st.writable()) {
+        return Err(EngineError::Format(format!("the data file of {name} cannot be written: {}", path.display())));
+    }
+    if let Some(a) = s.accounts.get_mut(at) {
+        a.data_file = Some(path);
+    }
+    Ok(Some(idx))
+}
+
+/// Open the data files of the accounts that have one, as the settings left them; those no
+/// longer there are made again when mail next comes.
+pub(crate) fn open_account_stores(s: &mut Session) -> Vec<String> {
+    let mut trouble = Vec::new();
+    for at in 0..s.accounts.len() {
+        let there = s.accounts.get(at).and_then(|a| a.data_file.as_ref()).is_some_and(|p| p.exists());
+        if there && let Err(e) = account_store(s, at) {
+            trouble.push(e.to_string());
+        }
+    }
+    trouble
+}
+
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let at = find(s, p)?;
     let account = s.accounts.remove(at);
-    s.status = format!("Removed the account {}", account.name);
+    s.status = match &account.data_file {
+        Some(file) => format!("Removed the account {}; its mail stays in {}", account.name, file.display()),
+        None => format!("Removed the account {}", account.name),
+    };
     if let Err(e) = s.vault.forget(&account.id) {
         s.status = format!("Removed the account {}; its password could not be taken out of the credential store: {e}", account.name);
     }

@@ -183,3 +183,97 @@ fn send_and_receive_runs_on_threads_of_their_own() {
     assert_eq!(inbox(&s).0, total + 1);
     assert!(fake.state().submitted.is_empty(), "a draft is not sent");
 }
+
+fn settle(s: &mut Session) {
+    let mut waited = 0;
+    while !(s.jobs.is_empty() && s.saves.is_empty()) {
+        s.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+        assert!(waited < 1000, "never settled: {}", s.status);
+    }
+}
+
+fn count_in(s: &Session, store: usize, name: &str) -> u32 {
+    s.folders[store].iter().find(|f| f.name == name).map_or(0, |f| f.total)
+}
+
+#[test]
+fn an_account_keeps_its_mail_in_a_data_file_of_its_own() {
+    let dir = std::env::temp_dir().join(format!("omc-account-files-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = Fake::default();
+    add(&fake, "one", &[]);
+    add(&fake, "two", &[]);
+    let mut s = Session::new();
+    s.add_store(Box::new(crate::sample::sample_store(s.now)));
+    s.connector = Some(Arc::new(fake.clone()));
+    s.account_dir = Some(dir.join("Accounts"));
+    s.journal_dir = Some(dir.join("journals"));
+    let sample_inbox = inbox(&s);
+    s.run(
+        "account.add",
+        &json!({ "email": "pat@example.test", "kind": "pop3", "leaveOnServer": false,
+                 "incoming": { "host": "mail.example.test", "security": "starttls" },
+                 "outgoing": { "host": "mail.example.test", "security": "starttls" }, "password": "not a real password" }),
+    )
+    .unwrap();
+    assert!(s.status.contains("data file of its own"), "{}", s.status);
+    let file = s.accounts[0].data_file.clone().unwrap();
+    assert_eq!(file, dir.join("Accounts").join("pat@example.test.pst"));
+    assert!(file.exists() && s.stores.len() == 2);
+
+    // The mail goes in the account's own Inbox, never in the data file that was open.
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 2);
+    assert_eq!(inbox(&s), sample_inbox, "the sample keeps only its own mail");
+    assert_eq!(count_in(&s, 1, "Inbox"), 2);
+    // Saved on its own, so POP3 mail can leave the server on the next receive.
+    settle(&mut s);
+    assert!(!s.stores[1].unsaved(), "{}", s.status);
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0);
+    assert!(fake.state().mailboxes[0].messages.is_empty());
+
+    // What went is kept in the account's own Sent Items.
+    s.run("mail.new", &Value::Null).unwrap();
+    s.run("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    s.run("compose.setField", &json!({ "field": "subject", "value": "Mine" })).unwrap();
+    let sent_before = count_in(&s, 0, "Sent Items");
+    assert_eq!(s.run("compose.send", &json!({ "anyway": true })).unwrap()["sent"], 1);
+    assert_eq!((count_in(&s, 0, "Sent Items"), count_in(&s, 1, "Sent Items")), (sent_before, 1));
+    settle(&mut s);
+
+    // Next run: the settings name the file, and it opens again with what it holds.
+    let settings = s.settings(None);
+    assert_eq!(settings["accounts"][0]["dataFile"], file.display().to_string(), "{settings}");
+    let path = dir.join("settings.json");
+    s.run("settings.save", &json!({ "path": path.display().to_string() })).unwrap();
+    let mut again = Session::new();
+    again.account_dir = Some(dir.join("Accounts"));
+    again.run("settings.load", &json!({ "path": path.display().to_string() })).unwrap();
+    assert_eq!(again.stores.len(), 1, "{}", again.status);
+    assert_eq!((count_in(&again, 0, "Inbox"), count_in(&again, 0, "Sent Items")), (2, 1));
+
+    // Removing the account keeps its mail.
+    again.run("account.remove", &json!({ "id": "account-1" })).unwrap();
+    assert!(again.status.contains("its mail stays"), "{}", again.status);
+    assert!(file.exists());
+    again.run("file.closeStore", &json!({ "discard": true })).unwrap();
+    s.run("file.closeStore", &json!({ "store": 1, "discard": true })).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_data_file_named_in_the_settings_must_be_a_pst_by_its_full_path() {
+    let mut s = Session::new();
+    for bad in ["relative.pst", "C:/x/mail.txt", "/x/mail.txt", "\u{0}.pst"] {
+        let settings = json!({ "accounts": [{ "id": "account-1", "email": "pat@example.test", "kind": "imap", "incoming": { "host": "h.test" }, "dataFile": bad }] });
+        let dir = std::env::temp_dir().join(format!("omc-bad-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, settings.to_string()).unwrap();
+        s.run("settings.load", &json!({ "path": path.display().to_string() })).unwrap();
+        assert!(s.accounts.first().is_none_or(|a| a.data_file.is_none()), "{bad}");
+        assert!(s.stores.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

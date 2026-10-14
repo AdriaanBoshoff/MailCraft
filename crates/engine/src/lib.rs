@@ -309,6 +309,10 @@ pub struct Session {
     /// A folder of the program's own where the journal of a data file's unsaved changes is
     /// kept when it cannot be kept beside the file. Set by the host; `None` keeps none there.
     pub journal_dir: Option<std::path::PathBuf>,
+    /// A folder of the program's own where each account's data file is made. Set by the
+    /// host; `None` (tests, a run that keeps no settings) puts an account's mail where new
+    /// mail goes.
+    pub account_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Session {
@@ -357,6 +361,7 @@ impl Session {
             set_aside: Vec::new(),
             page_setup: openmailclient_layout::Setup::default(),
             journal_dir: None,
+            account_dir: None,
             print_style: print::Style::default(),
             print_list: print::Listing::default(),
         }

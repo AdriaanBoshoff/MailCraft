@@ -198,6 +198,9 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         ignored += left_out;
         if v.is_array() {
             s.accounts = kept;
+            for e in super::account::open_account_stores(s) {
+                s.status = format!("A data file of an account could not be opened: {e}");
+            }
         }
     }
     let (mut opened, mut missing) = (0u32, 0u32);

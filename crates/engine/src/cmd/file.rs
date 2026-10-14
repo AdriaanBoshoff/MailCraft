@@ -322,6 +322,11 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "saved": saved.len(), "inPlace": in_place, "started": started, "kept": kept }))
 }
 
+/// Save one data file as `file.save` does, on a thread of its own where it can be.
+pub(super) fn save_in_background(s: &mut Session, store: usize) -> CmdResult {
+    save(s, &json!({ "store": store, "wait": false }))
+}
+
 /// Open a data file as `file.open` does.
 pub(super) fn open_data_file(s: &mut Session, path: &str) -> Result<(), EngineError> {
     open(s, &json!({ "path": path })).map(|_| ())

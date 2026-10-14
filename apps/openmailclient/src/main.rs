@@ -249,6 +249,9 @@ fn main() -> ExitCode {
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
     // Journals that cannot be kept beside their data file go beside the settings.
     session.journal_dir = settings_path().and_then(|p| p.parent().map(|dir| dir.join("journals")));
+    // Each account's mail is kept in a data file of its own beside the settings, as Outlook
+    // keeps one per account, apart from any data file opened.
+    session.account_dir = settings_path().and_then(|p| p.parent().map(|dir| dir.join("Accounts")));
     let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None, started: std::time::Instant::now() };
     if let Some(path) = app.settings.clone() {
         // The data files of last time are opened again unless this run names what to open.

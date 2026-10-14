@@ -1,5 +1,7 @@
 //! Receiving: new mail is taken down from each account's incoming server into the Inbox of the
-//! data file new mail is kept in, on a thread of its own. Nothing is taken down twice: an
+//! account's own data file (`account::account_store`), or, where the host keeps none, of the
+//! data file new mail is kept in, on a thread of its own. An account's own data file is saved
+//! once mail has come into it. Nothing is taken down twice: an
 //! account remembers what it took (`accounts::Received`), and that is moved on only once the
 //! message is in the Inbox.
 //!
@@ -118,6 +120,15 @@ struct Took {
     error: Option<NetError>,
 }
 
+/// Where an account's new mail goes: the Inbox of a data file, and whether the file is the
+/// account's own.
+#[derive(Clone, Copy)]
+struct Target {
+    store: usize,
+    folder: FolderId,
+    own: bool,
+}
+
 /// The data file and Inbox new mail goes in.
 fn inbox(s: &Session) -> Option<(usize, FolderId)> {
     let store = s.writable_store()?;
@@ -131,18 +142,36 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
     if s.jobs.iter().any(|j| j.what.starts_with(RECEIVING)) {
         return Err(EngineError::Format("mail is being received already".into()));
     }
-    let (store, folder) = inbox(s).ok_or_else(|| EngineError::Format("there is no Inbox in a data file that can be written".into()))?;
-    // Taken off a POP3 server only what is kept for good: the data file is a file, and holds
-    // no change that is not saved.
-    let saved = s.stores.get(store).is_some_and(|st| st.path().is_some() && !st.unsaved());
     let mut taking = Vec::new();
+    let mut targets: Vec<(String, Target)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     for at in 0..s.accounts.len() {
         if one.is_some_and(|o| o != at) {
             continue;
         }
+        let target = match super::account::account_store(s, at) {
+            Ok(Some(store)) => s.find_folder(store, FolderKind::Inbox).map(|folder| Target { store, folder, own: true }),
+            Ok(None) => inbox(s).map(|(store, folder)| Target { store, folder, own: false }),
+            Err(e) => {
+                let name = s.accounts.get(at).map(|a| a.name.clone()).unwrap_or_default();
+                skipped.push(format!("{name}: its data file could not be opened ({e})"));
+                continue;
+            }
+        };
         let Some(account) = s.accounts.get(at) else { continue };
+        let Some(target) = target else {
+            skipped.push(format!("{}: there is no Inbox in a data file that can be written", account.name));
+            continue;
+        };
+        // Taken off a POP3 server only what is kept for good: the data file is a file, and
+        // holds no change that is not saved.
+        let saved = s.stores.get(target.store).is_some_and(|st| st.path().is_some() && !st.unsaved());
         let (received, take_off) = (account.received.clone(), !account.leave_on_server && saved);
+        targets.push((account.id.clone(), target));
         taking.push(Taking { reach: Reach::of(s, at)?, received, take_off });
+    }
+    if taking.is_empty() {
+        return Err(EngineError::Format(skipped.first().cloned().unwrap_or_else(|| "there is no account to receive from".into())));
     }
     let what = match taking.as_slice() {
         [one] => format!("{RECEIVING} from {}", one.reach.account.name),
@@ -161,7 +190,7 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
             });
             progress.step();
         }
-        let step: Ended = Box::new(move |s: &mut Session| ended(s, store, folder, took));
+        let step: Ended = Box::new(move |s: &mut Session| ended(s, &targets, took, skipped));
         step
     })
 }
@@ -272,7 +301,7 @@ fn item_of(got: &Got, now: i64) -> Item {
 
 /// Take back what a receive came to: each message into the Inbox, and the account moved on
 /// past it only once it is there.
-fn ended(s: &mut Session, store: usize, folder: FolderId, took: Vec<Took>) -> (String, Value) {
+fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said: Vec<String>) -> (String, Value) {
     let now = s.now.max(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -282,9 +311,10 @@ fn ended(s: &mut Session, store: usize, folder: FolderId, took: Vec<Took>) -> (S
     );
     let mut all = 0usize;
     let mut unread = 0usize;
-    let mut said: Vec<String> = Vec::new();
     let mut accounts = Vec::new();
+    let mut touched: Vec<Target> = Vec::new();
     for t in took {
+        let Some(&(_, Target { store, folder, own })) = targets.iter().find(|(id, _)| *id == t.id) else { continue };
         let mut received = s.accounts.iter().find(|a| a.id == t.id).map(|a| a.received.clone()).unwrap_or_default();
         if let Some(v) = t.uid_validity
             && v != received.uid_validity
@@ -329,13 +359,27 @@ fn ended(s: &mut Session, store: usize, folder: FolderId, took: Vec<Took>) -> (S
             a.received = received;
         }
         all += kept;
+        if !touched.iter().any(|x| x.store == store) {
+            touched.push(Target { store, folder, own: own && kept > 0 });
+        } else if let Some(x) = touched.iter_mut().find(|x| x.store == store) {
+            x.own |= own && kept > 0;
+        }
         if let Some(why) = &trouble {
             said.push(format!("{}: {why}", t.name));
         }
         accounts.push(json!({ "id": t.id, "received": kept, "waiting": t.waiting, "said": trouble }));
     }
-    s.refresh_folders(store);
+    for x in &touched {
+        s.refresh_folders(x.store);
+    }
     let _ = s.reload_rows();
+    // An account's own data file is saved once mail is in it, on a thread of its own: the
+    // owner is never asked to save mail that only came, and POP3 mail can leave the server.
+    for x in touched.iter().filter(|x| x.own) {
+        let status = std::mem::take(&mut s.status);
+        let _ = super::file::save_in_background(s, x.store);
+        s.status = status;
+    }
     let mut status = match all {
         0 => "No new mail".to_string(),
         1 => "1 new message".to_string(),

@@ -42,6 +42,8 @@ fn send_all(s: &mut Session, p: &Value) -> CmdResult {
 
 /// A message on its way: where it is, what goes on the wire and what is kept once it went.
 struct Going {
+    /// The account it goes from, whose own data file keeps it once it went.
+    account: String,
     folder: FolderId,
     id: u64,
     subject: String,
@@ -156,7 +158,16 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
         let Some(at) = account_for(s, &item.sender_email()).and_then(|a| s.accounts.iter().position(|b| b.id == a.id)) else { continue };
         let Some(account) = s.accounts.get(at) else { continue };
         let (to, data, kept) = prepare(&item, account, now, n);
-        let going = Going { folder, id: summary.id, subject: summary.subject.clone(), from: account.email.clone(), to, data, kept };
+        let going = Going {
+            account: account.id.clone(),
+            folder,
+            id: summary.id,
+            subject: summary.subject.clone(),
+            from: account.email.clone(),
+            to,
+            data,
+            kept,
+        };
         match batches.iter_mut().find(|b| b.reach.account.id == account.id) {
             Some(b) => b.going.push(going),
             None => batches.push(Batch { reach: Reach::of(s, at)?, going: vec![going] }),
@@ -208,6 +219,9 @@ const SENDING: &str = "Sending";
 /// did not stays, with the reason said.
 fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed: Vec<Value>) -> (String, Value) {
     let sent_folder = s.find_folder(store, FolderKind::Sent);
+    // Each account's Sent Items: in its own data file where it has one, as Outlook keeps it.
+    let mut kept_in: Vec<(String, Option<(usize, FolderId)>)> = Vec::new();
+    let mut touched: Vec<usize> = Vec::new();
     let mut sent = 0usize;
     let mut refused: Vec<Value> = Vec::new();
     let mut unkept = 0usize;
@@ -218,14 +232,37 @@ fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed:
                 for (to, why) in said.refused {
                     refused.push(json!({ "subject": going.subject, "to": to, "said": why }));
                 }
-                let Some(st) = s.stores.get_mut(store) else {
-                    unkept += 1;
-                    continue;
+                let own = match kept_in.iter().find(|(id, _)| *id == going.account) {
+                    Some((_, own)) => *own,
+                    None => {
+                        let own = s
+                            .accounts
+                            .iter()
+                            .position(|a| a.id == going.account)
+                            .and_then(|at| super::account::account_store(s, at).ok().flatten())
+                            .filter(|&at| at != store)
+                            .and_then(|at| Some((at, s.find_folder(at, FolderKind::Sent)?)));
+                        kept_in.push((going.account.clone(), own));
+                        own
+                    }
                 };
                 // Kept first, then taken out of the Outbox: a message that went is never lost.
                 // Where there is no Sent Items it stays in the Outbox, marked as gone, and is
                 // not sent again.
-                let kept = sent_folder.is_some_and(|f| st.add(f, going.kept.clone()).is_ok());
+                let kept = match own {
+                    Some((at, f)) => {
+                        let kept = s.stores.get_mut(at).is_some_and(|st| st.add(f, going.kept.clone()).is_ok());
+                        if kept && !touched.contains(&at) {
+                            touched.push(at);
+                        }
+                        kept
+                    }
+                    None => sent_folder.is_some_and(|f| s.stores.get_mut(store).is_some_and(|st| st.add(f, going.kept.clone()).is_ok())),
+                };
+                let Some(st) = s.stores.get_mut(store) else {
+                    unkept += 1;
+                    continue;
+                };
                 if kept {
                     // Already taken out (by its writer, while it went) is as good.
                     let _ = st.remove(going.folder, ItemId(going.id));
@@ -238,7 +275,16 @@ fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed:
         }
     }
     s.refresh_folders(store);
+    for &at in &touched {
+        s.refresh_folders(at);
+    }
     let _ = s.reload_rows();
+    // An account's own data file is saved once what went is in it, on a thread of its own.
+    for &at in &touched {
+        let status = std::mem::take(&mut s.status);
+        let _ = super::file::save_in_background(s, at);
+        s.status = status;
+    }
     let mut status = match (sent, failed.len()) {
         (0, _) => format!("Nothing was sent: {}", failed.first().and_then(|f| f["said"].as_str()).unwrap_or("the server did not take it")),
         (n, 0) => format!("Sent {n} message{}", if n == 1 { "" } else { "s" }),

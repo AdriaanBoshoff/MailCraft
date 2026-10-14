@@ -113,6 +113,10 @@ pub struct Account {
     pub leave_on_server: bool,
     /// What was taken down so far; kept in the settings, not given by `account.list`.
     pub received: Received,
+    /// The data file the account's mail is kept in, as Outlook keeps one for each account:
+    /// made in the program's own folder the first time it is needed. Set only by the program
+    /// and the settings file, never by a command.
+    pub data_file: Option<std::path::PathBuf>,
 }
 
 fn security_name(s: Security) -> &'static str {
@@ -247,6 +251,7 @@ impl Account {
                 .filter(|w| w.kind == kind && w.incoming.host == incoming.host && w.user == p_user(p, w))
                 .map(|w| w.received.clone())
                 .unwrap_or_default(),
+            data_file: was.and_then(|w| w.data_file.clone()),
             email,
             kind,
             incoming,
@@ -268,6 +273,7 @@ impl Account {
             "outgoing": server(&self.outgoing),
             "signInToSend": self.sign_in_to_send,
             "leaveOnServer": self.leave_on_server,
+            "dataFile": self.data_file.as_ref().map(|p| p.display().to_string()),
         })
     }
 
@@ -309,12 +315,27 @@ pub fn from_settings(v: &Value) -> (Vec<Account>, u32) {
         match kept_id(id, &out).then(|| Account::from_json(a, id, None)) {
             Some(Ok(mut account)) => {
                 account.received = Received::from_json(a.get("received"));
+                account.data_file = a.get("dataFile").and_then(Value::as_str).and_then(data_file_of);
                 out.push(account);
             }
             _ => ignored += 1,
         }
     }
     (out, ignored)
+}
+
+/// A data file as the settings file names it: a whole path to a `.pst`, nothing else.
+fn data_file_of(s: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(s);
+    let pst = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pst"));
+    (s.len() <= 1024 && !s.chars().any(char::is_control) && path.is_absolute() && pst).then_some(path)
+}
+
+/// The name of an account's data file: its address, with what a file name cannot hold left out.
+pub fn data_file_name(account: &Account) -> String {
+    let plain: String = account.email.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '@' | '-' | '_' | '+')).take(120).collect();
+    let plain = plain.trim_matches('.');
+    if plain.is_empty() { format!("{}.pst", account.id) } else { format!("{plain}.pst") }
 }
 
 /// What a test of one server came to, in words fit to show.
@@ -330,7 +351,7 @@ pub(crate) fn changes(p: &Value) -> Value {
     let mut m = Map::new();
     if let Some(all) = p.as_object() {
         for (k, v) in all {
-            if !matches!(k.as_str(), "id" | "password" | "received") {
+            if !matches!(k.as_str(), "id" | "password" | "received" | "dataFile") {
                 m.insert(k.clone(), v.clone());
             }
         }

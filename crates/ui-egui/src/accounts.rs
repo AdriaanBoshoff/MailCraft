@@ -5,6 +5,7 @@
 //! it is never shown, copied out, put in the status line or kept in the settings.
 
 use crate::line_edit::LineEdit;
+use crate::theme::Tokens;
 use crate::{MailUi, bold, font, one_line};
 use egui::{Align2, Color32, vec2};
 use serde_json::{Value, json};
@@ -34,6 +35,8 @@ pub(crate) struct Form {
     pub has_password: bool,
     pub sign_in: bool,
     pub leave: bool,
+    /// The data file its mail is kept in, where it has one of its own.
+    pub data_file: String,
 }
 
 impl Form {
@@ -55,6 +58,7 @@ impl Form {
             has_password: false,
             sign_in: true,
             leave: true,
+            data_file: String::new(),
         }
     }
 
@@ -88,6 +92,7 @@ impl Form {
             has_password: a.get("hasPassword").and_then(Value::as_bool) == Some(true),
             sign_in: a.get("signInToSend").and_then(Value::as_bool) != Some(false),
             leave: a.get("leaveOnServer").and_then(Value::as_bool) != Some(false),
+            data_file: a.get("dataFile").and_then(Value::as_str).map(one_line).unwrap_or_default(),
         }
     }
 
@@ -130,10 +135,18 @@ fn forget(text: &mut String) {
     std::hint::black_box(&bytes);
 }
 
+/// An account in the window's list.
+pub(crate) struct Listed {
+    pub id: String,
+    pub name: String,
+    /// Its kind and address, under its name.
+    pub detail: String,
+}
+
 /// The Account Settings window.
 pub(crate) struct AccountsWindow {
-    /// Each account's id and the name it is shown by, as `account.list` last said.
-    pub accounts: Vec<(String, String)>,
+    /// Each account as `account.list` last said.
+    pub accounts: Vec<Listed>,
     pub form: Form,
     /// What came of the last thing done, and whether it went wrong.
     pub said: Vec<(String, bool)>,
@@ -182,7 +195,11 @@ impl MailUi {
         let all = listed.get("accounts").and_then(Value::as_array).cloned().unwrap_or_default();
         window.accounts = all
             .iter()
-            .filter_map(|a| Some((a.get("id")?.as_str()?.to_string(), one_line(a.get("name").and_then(Value::as_str).unwrap_or("")))))
+            .filter_map(|a| {
+                let text = |key: &str| one_line(a.get(key).and_then(Value::as_str).unwrap_or(""));
+                let kind = if text("kind") == "pop3" { "POP3" } else { "IMAP" };
+                Some(Listed { id: a.get("id")?.as_str()?.to_string(), name: text("name"), detail: format!("{kind} · {}", text("email")) })
+            })
             .collect();
         Ok(all)
     }
@@ -286,176 +303,243 @@ impl MailUi {
         let t = self.tokens.clone();
         let mut ask: Option<Ask> = None;
         let busy = window.testing.is_some();
-        egui::Window::new("Account Settings").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(180.0);
-                    ui.label(egui::RichText::new("Accounts").font(bold(13.0)).color(t.text));
-                    ui.add_space(4.0);
-                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                        for (id, name) in &window.accounts {
-                            let on = window.form.id.as_deref() == Some(id.as_str());
-                            if ui.selectable_label(on, name.as_str()).clicked() && !on {
-                                ask = Some(Ask::Choose(id.clone()));
+        let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18));
+        egui::Window::new("Account Settings").frame(frame).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(
+            ctx,
+            |ui| {
+                ui.label(egui::RichText::new("Email accounts").font(bold(16.0)).color(t.text));
+                ui.label(
+                    egui::RichText::new("Mail is sent and received through these accounts, each with a data file of its own.")
+                        .font(font(12.0))
+                        .color(t.text_dim),
+                );
+                ui.add_space(12.0);
+                ui.horizontal_top(|ui| {
+                    // The accounts, each as a card: its name, its kind and its address.
+                    ui.vertical(|ui| {
+                        ui.set_width(LIST_W);
+                        egui::Frame::new()
+                            .fill(t.surface)
+                            .stroke(egui::Stroke::new(1.0, t.line))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::same(4))
+                            .show(ui, |ui| {
+                                ui.set_min_size(vec2(LIST_W - 10.0, 330.0));
+                                egui::ScrollArea::vertical().max_height(330.0).show(ui, |ui| {
+                                    for a in &window.accounts {
+                                        let on = window.form.id.as_deref() == Some(a.id.as_str());
+                                        if account_card(ui, &t, &a.name, &a.detail, on).clicked() && !on {
+                                            ask = Some(Ask::Choose(a.id.clone()));
+                                        }
+                                    }
+                                    if window.form.id.is_none() {
+                                        let name = if window.form.email.trim().is_empty() { "New account" } else { window.form.email.trim() };
+                                        let _ = account_card(ui, &t, name, "not saved yet", true);
+                                    }
+                                });
+                            });
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(!busy, egui::Button::new("+ New")).on_hover_text("Add another account").clicked() {
+                                ask = Some(Ask::New);
                             }
-                        }
-                        if window.form.id.is_none() {
-                            let _ = ui.selectable_label(true, "New account");
-                        }
-                    });
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui.add_enabled(!busy, egui::Button::new("New…")).clicked() {
-                            ask = Some(Ask::New);
-                        }
-                        let remove = if window.removing { "Remove it" } else { "Remove…" };
-                        if ui.add_enabled(window.form.id.is_some() && !busy, egui::Button::new(remove)).clicked() {
-                            ask = Some(Ask::Remove);
-                        }
-                    });
-                    if window.removing {
-                        ui.add(
-                            egui::Label::new(egui::RichText::new("Mail already taken down stays where it is.").font(font(11.5)).color(t.text_dim))
+                            let remove = if window.removing { "Remove it" } else { "Remove…" };
+                            let button = egui::Button::new(egui::RichText::new(remove).color(if window.removing { t.on_accent } else { t.text }));
+                            let button = if window.removing { button.fill(t.danger) } else { button };
+                            if ui.add_enabled(window.form.id.is_some() && !busy, button).clicked() {
+                                ask = Some(Ask::Remove);
+                            }
+                        });
+                        if window.removing {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new("Click again to remove it. Its mail stays in its data file.")
+                                        .font(font(11.5))
+                                        .color(t.text_dim),
+                                )
                                 .wrap(),
-                        );
-                    }
-                });
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    let f = &mut window.form;
-                    let field = |ui: &mut egui::Ui, text: &mut String, key: &str, hint: &str, limit: usize| {
-                        ui.add(LineEdit::new(text, egui::Id::new(("account-field", key))).desired_width(250.0).char_limit(limit).hint(hint, None))
-                    };
-                    let heading = |ui: &mut egui::Ui, text: &str| {
-                        ui.label(egui::RichText::new(text).font(bold(12.5)).color(t.text));
-                        ui.end_row();
-                    };
-                    let security = |ui: &mut egui::Ui, key: &str, sec: &mut &'static str, port: &mut String| {
-                        let shown = SECURITY.iter().find(|(k, _)| k == sec).map_or("SSL/TLS", |(_, s)| s);
-                        egui::ComboBox::from_id_salt(("account-security", key)).selected_text(shown).width(130.0).show_ui(ui, |ui| {
-                            for (k, label) in SECURITY {
-                                if ui.selectable_label(*sec == k, label).clicked() && *sec != k {
-                                    *sec = k;
-                                    // The usual port for the new security, unless one is typed.
-                                    port.clear();
-                                }
-                            }
-                        });
-                    };
-                    egui::Grid::new("account-form").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-                        heading(ui, "You");
-                        ui.label("Your name");
-                        field(ui, &mut f.display_name, "display", "as mail from you is signed", 200);
-                        ui.end_row();
-                        ui.label("Email address");
-                        let email = field(ui, &mut f.email, "email", "you@example.com", 320);
-                        if window.focus {
-                            email.request_focus();
-                            window.focus = false;
+                            );
                         }
-                        ui.end_row();
-                        ui.label("Shown as");
-                        field(ui, &mut f.name, "name", "the address", 100);
-                        ui.end_row();
+                    });
+                    ui.add_space(18.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(FORM_W);
+                        let f = &mut window.form;
+                        let field = |ui: &mut egui::Ui, text: &mut String, key: &str, hint: &str, limit: usize| {
+                            ui.add(
+                                LineEdit::new(text, egui::Id::new(("account-field", key))).desired_width(FIELD_W).char_limit(limit).hint(hint, None),
+                            )
+                        };
+                        let port = |ui: &mut egui::Ui, text: &mut String, key: &str| {
+                            ui.label(egui::RichText::new("Port").color(t.text_dim));
+                            ui.add(LineEdit::new(text, egui::Id::new(("account-field", key))).desired_width(58.0).char_limit(5).hint("usual", None));
+                        };
+                        let security = |ui: &mut egui::Ui, key: &str, sec: &mut &'static str, port: &mut String| {
+                            let shown = SECURITY.iter().find(|(k, _)| k == sec).map_or("SSL/TLS", |(_, s)| s);
+                            egui::ComboBox::from_id_salt(("account-security", key)).selected_text(shown).width(150.0).show_ui(ui, |ui| {
+                                for (k, label) in SECURITY {
+                                    if ui.selectable_label(*sec == k, label).clicked() && *sec != k {
+                                        *sec = k;
+                                        // The usual port for the new security, unless one is typed.
+                                        port.clear();
+                                    }
+                                }
+                            });
+                        };
 
-                        heading(ui, "Servers");
+                        section(ui, &t, "Your details", "account-you", |ui| {
+                            label(ui, &t, "Your name");
+                            field(ui, &mut f.display_name, "display", "as mail from you is signed", 200);
+                            ui.end_row();
+                            label(ui, &t, "Email address");
+                            let email = field(ui, &mut f.email, "email", "you@example.com", 320);
+                            if window.focus {
+                                email.request_focus();
+                                window.focus = false;
+                            }
+                            ui.end_row();
+                            label(ui, &t, "Shown as");
+                            field(ui, &mut f.name, "name", "the address", 100);
+                            ui.end_row();
+                        });
 
-                        ui.label("Account type");
-                        ui.horizontal(|ui| {
-                            let was = f.pop3;
-                            ui.radio_value(&mut f.pop3, false, "IMAP");
-                            ui.radio_value(&mut f.pop3, true, "POP3");
-                            if was != f.pop3 {
-                                f.in_port.clear();
+                        section(ui, &t, "Servers", "account-servers", |ui| {
+                            label(ui, &t, "Account type");
+                            ui.horizontal(|ui| {
+                                let was = f.pop3;
+                                ui.radio_value(&mut f.pop3, false, "IMAP").on_hover_text("Mail stays on the server and is read from it");
+                                ui.radio_value(&mut f.pop3, true, "POP3").on_hover_text("Mail is taken down and kept here");
+                                if was != f.pop3 {
+                                    f.in_port.clear();
+                                }
+                            });
+                            ui.end_row();
+                            label(ui, &t, "Incoming server");
+                            field(ui, &mut f.in_host, "in-host", if f.pop3 { "pop.example.com" } else { "imap.example.com" }, 253);
+                            ui.end_row();
+                            label(ui, &t, "");
+                            ui.horizontal(|ui| {
+                                security(ui, "in", &mut f.in_sec, &mut f.in_port);
+                                port(ui, &mut f.in_port, "in-port");
+                            });
+                            ui.end_row();
+                            label(ui, &t, "Outgoing (SMTP)");
+                            field(ui, &mut f.out_host, "out-host", "the incoming server", 253);
+                            ui.end_row();
+                            label(ui, &t, "");
+                            ui.horizontal(|ui| {
+                                security(ui, "out", &mut f.out_sec, &mut f.out_port);
+                                port(ui, &mut f.out_port, "out-port");
+                            });
+                            ui.end_row();
+                        });
+
+                        section(ui, &t, "Signing in", "account-sign-in", |ui| {
+                            label(ui, &t, "User name");
+                            field(ui, &mut f.user, "user", "the address", 320);
+                            ui.end_row();
+                            label(ui, &t, "Password");
+                            let hint = if f.has_password { "kept; type to change it" } else { "not kept yet" };
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    LineEdit::new(&mut f.password, egui::Id::new(("account-field", "password")))
+                                        .desired_width(FIELD_W - 26.0)
+                                        .char_limit(500)
+                                        .hint(hint, None)
+                                        .password(),
+                                );
+                                if f.has_password {
+                                    mark(ui, &t, true).on_hover_text("A password is kept in the credential store of this system");
+                                }
+                            });
+                            ui.end_row();
+                            label(ui, &t, "");
+                            ui.checkbox(&mut f.sign_in, "Sign in to the outgoing server the same way");
+                            ui.end_row();
+                            if f.pop3 {
+                                label(ui, &t, "");
+                                ui.checkbox(&mut f.leave, "Leave a copy of each message on the server");
+                                ui.end_row();
                             }
                         });
-                        ui.end_row();
-                        ui.label("Incoming mail server");
-                        field(ui, &mut f.in_host, "in-host", "imap.example.com", 253);
-                        ui.end_row();
-                        ui.label("");
-                        ui.horizontal(|ui| {
-                            security(ui, "in", &mut f.in_sec, &mut f.in_port);
-                            ui.label("Port");
-                            ui.add(
-                                LineEdit::new(&mut f.in_port, egui::Id::new(("account-field", "in-port")))
-                                    .desired_width(60.0)
-                                    .char_limit(5)
-                                    .hint("usual", None),
-                            );
-                        });
-                        ui.end_row();
-                        ui.label("Outgoing mail server (SMTP)");
-                        field(ui, &mut f.out_host, "out-host", "the incoming server", 253);
-                        ui.end_row();
-                        ui.label("");
-                        ui.horizontal(|ui| {
-                            security(ui, "out", &mut f.out_sec, &mut f.out_port);
-                            ui.label("Port");
-                            ui.add(
-                                LineEdit::new(&mut f.out_port, egui::Id::new(("account-field", "out-port")))
-                                    .desired_width(60.0)
-                                    .char_limit(5)
-                                    .hint("usual", None),
-                            );
-                        });
-                        ui.end_row();
 
-                        heading(ui, "Signing in");
-
-                        ui.label("User name");
-                        field(ui, &mut f.user, "user", "the address", 320);
-                        ui.end_row();
-                        ui.label("Password");
-                        let hint = if f.has_password { "kept; type to change it" } else { "not kept yet" };
-                        ui.add(
-                            LineEdit::new(&mut f.password, egui::Id::new(("account-field", "password")))
-                                .desired_width(250.0)
-                                .char_limit(500)
-                                .hint(hint, None)
-                                .password(),
-                        );
-                        ui.end_row();
+                        // Where its mail is kept.
+                        ui.horizontal(|ui| {
+                            ui.add_space(LABEL_W + 10.0);
+                            let (words, full) = match f.data_file.as_str() {
+                                "" if f.id.is_none() => {
+                                    ("Its mail is kept in a data file of its own, made when it is saved".to_string(), String::new())
+                                }
+                                "" => ("Its mail goes in the data file new mail is kept in".to_string(), String::new()),
+                                path => {
+                                    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    (format!("Its mail is kept in {}", one_line(&name)), one_line(path))
+                                }
+                            };
+                            let shown = ui.add(egui::Label::new(egui::RichText::new(words).font(font(11.5)).color(t.text_dim)).wrap());
+                            if !full.is_empty() {
+                                shown.on_hover_text(full);
+                            }
+                        });
                     });
-                    ui.add_space(4.0);
-                    ui.checkbox(&mut f.sign_in, "The outgoing server is signed in to with the same name and password");
-                    if f.pop3 {
-                        ui.checkbox(&mut f.leave, "Leave a copy of each message on the server");
-                    }
                 });
-            });
-            ui.add_space(6.0);
-            if busy {
+
+                // What the last test or save came to: a mark for each server.
+                if busy || !window.said.is_empty() {
+                    ui.add_space(10.0);
+                    egui::Frame::new()
+                        .fill(t.pane)
+                        .stroke(egui::Stroke::new(1.0, t.line))
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            if busy {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(egui::RichText::new("Signing in to both servers; nothing is sent…").font(font(12.5)).color(t.text_dim));
+                                });
+                            }
+                            for (words, trouble) in &window.said {
+                                ui.horizontal(|ui| {
+                                    mark(ui, &t, !*trouble);
+                                    let color: Color32 = if *trouble { t.danger } else { t.text };
+                                    ui.add(egui::Label::new(egui::RichText::new(words.as_str()).font(font(12.5)).color(color)).wrap());
+                                });
+                            }
+                        });
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(egui::RichText::new("Signing in to both servers; nothing is sent…").font(font(12.5)).color(t.text_dim));
+                    ui.label(egui::RichText::new("A test signs in to both servers; nothing is sent.").font(font(11.5)).color(t.text_faint));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            ask = Some(Ask::Close);
+                        }
+                        let can_test = self.session.connector.is_some();
+                        if ui
+                            .add_enabled(!busy && can_test, egui::Button::new("Test Account Settings…"))
+                            .on_disabled_hover_text(if can_test { "A test is under way" } else { "This build cannot reach mail servers" })
+                            .clicked()
+                        {
+                            ask = Some(Ask::Test);
+                        }
+                        let save = egui::Button::new(egui::RichText::new("Save").color(t.on_accent).font(bold(13.0)))
+                            .fill(t.accent)
+                            .min_size(vec2(76.0, 0.0));
+                        if ui.add_enabled(!busy, save).clicked() {
+                            ask = Some(Ask::Save);
+                        }
+                    });
                 });
-            }
-            for (words, trouble) in &window.said {
-                let color: Color32 = if *trouble { t.danger } else { t.text_dim };
-                ui.add(egui::Label::new(egui::RichText::new(words.as_str()).font(font(12.5)).color(color)).wrap());
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!busy, egui::Button::new("Save")).clicked() {
-                    ask = Some(Ask::Save);
-                }
-                let can_test = self.session.connector.is_some();
-                if ui
-                    .add_enabled(!busy && can_test, egui::Button::new("Test Account Settings…"))
-                    .on_disabled_hover_text(if can_test { "A test is under way" } else { "This build cannot reach mail servers" })
-                    .clicked()
-                {
-                    ask = Some(Ask::Test);
-                }
-                if ui.button("Close").clicked() {
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     ask = Some(Ask::Close);
                 }
-            });
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                ask = Some(Ask::Close);
-            }
-        });
+            },
+        );
         if !matches!(ask, Some(Ask::Remove) | None) {
             window.removing = false;
         }
@@ -494,4 +578,66 @@ impl MailUi {
         }
         self.account_window = Some(window);
     }
+}
+
+/// The widths the window is laid out in.
+const LIST_W: f32 = 210.0;
+const FORM_W: f32 = 440.0;
+const LABEL_W: f32 = 120.0;
+const FIELD_W: f32 = 290.0;
+
+/// One account in the list: a round mark with its first letter, its name, and what it is.
+fn account_card(ui: &mut egui::Ui, t: &Tokens, name: &str, detail: &str, on: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), egui::Sense::click());
+    let p = ui.painter();
+    if on {
+        p.rect_filled(rect, 5.0, t.selected);
+        p.rect_filled(egui::Rect::from_min_size(rect.min + vec2(0.0, 8.0), vec2(3.0, rect.height() - 16.0)), 1.5, t.accent);
+    } else if response.hovered() {
+        p.rect_filled(rect, 5.0, t.hover);
+    }
+    let centre = egui::pos2(rect.left() + 22.0, rect.center().y);
+    p.circle_filled(centre, 13.0, if on { t.accent } else { t.line });
+    let letter = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+    p.text(centre, Align2::CENTER_CENTER, letter, bold(12.5), if on { t.on_accent } else { t.text });
+    let clip = egui::Rect::from_min_max(egui::pos2(rect.left() + 42.0, rect.top()), egui::pos2(rect.right() - 4.0, rect.bottom()));
+    let text = p.with_clip_rect(clip);
+    text.text(egui::pos2(clip.left(), rect.center().y - 8.0), Align2::LEFT_CENTER, name, bold(12.5), t.text);
+    text.text(egui::pos2(clip.left(), rect.center().y + 8.0), Align2::LEFT_CENTER, detail, font(11.0), t.text_dim);
+    response.on_hover_text(format!("{name}\n{detail}"))
+}
+
+/// A part of the form: its heading over a line, and its fields in a grid whose label column is
+/// as wide as every other part's, so the fields line up down the window.
+fn section(ui: &mut egui::Ui, t: &Tokens, heading: &str, id: &str, body: impl FnOnce(&mut egui::Ui)) {
+    ui.label(egui::RichText::new(heading).font(bold(12.5)).color(t.accent));
+    let (y, left) = (ui.cursor().top() + 1.0, ui.min_rect().left());
+    ui.painter().hline(left..=left + FORM_W, y, egui::Stroke::new(1.0, t.line));
+    ui.add_space(6.0);
+    egui::Grid::new(id).num_columns(2).min_col_width(LABEL_W).spacing(vec2(10.0, 7.0)).show(ui, body);
+    ui.add_space(10.0);
+}
+
+/// A field's label, set against the field at the right of its column.
+fn label(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+    ui.allocate_ui_with_layout(vec2(LABEL_W, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(egui::RichText::new(text).color(t.text_dim));
+    });
+}
+
+/// A round mark: a tick for what went well, a cross for what did not.
+fn mark(ui: &mut egui::Ui, t: &Tokens, good: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.circle_filled(rect.center(), 8.0, if good { t.ok } else { t.danger });
+    let ink = egui::Stroke::new(1.8, Color32::WHITE);
+    let c = rect.center();
+    if good {
+        p.line_segment([c + vec2(-4.0, 0.2), c + vec2(-1.2, 3.0)], ink);
+        p.line_segment([c + vec2(-1.2, 3.0), c + vec2(4.0, -2.8)], ink);
+    } else {
+        p.line_segment([c + vec2(-3.0, -3.0), c + vec2(3.0, 3.0)], ink);
+        p.line_segment([c + vec2(3.0, -3.0), c + vec2(-3.0, 3.0)], ink);
+    }
+    response
 }
