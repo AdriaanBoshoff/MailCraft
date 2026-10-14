@@ -53,6 +53,46 @@ pub struct Server {
     pub security: Security,
 }
 
+/// What was taken down from an account so far, so nothing is taken down twice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Received {
+    /// IMAP: the Inbox's UIDVALIDITY when its ids were last read; another value means the
+    /// server numbered its messages anew ([RFC 9051] 2.3.1.1).
+    pub uid_validity: u32,
+    /// IMAP: the highest id taken down.
+    pub last_uid: u32,
+    /// POP3: the unique ids of the messages taken down that the server still had last time.
+    pub seen: Vec<String>,
+}
+
+/// POP3 ids remembered at most; the server's list is the bound in practice.
+pub const MAX_SEEN: usize = 100_000;
+
+impl Received {
+    fn to_json(&self) -> Value {
+        json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen })
+    }
+
+    /// As a settings file gives it: what makes no sense is left as nothing taken down yet.
+    fn from_json(v: Option<&Value>) -> Self {
+        let Some(v) = v else { return Self::default() };
+        let n = |key: &str| v.get(key).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+        let seen = v
+            .get("seen")
+            .and_then(Value::as_array)
+            .map(|all| {
+                all.iter()
+                    .take(MAX_SEEN)
+                    .filter_map(Value::as_str)
+                    .filter(|u| !u.is_empty() && u.len() <= 70 && u.bytes().all(|b| (0x21..=0x7E).contains(&b)))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     /// What its password is kept under; never changes once made.
@@ -71,6 +111,8 @@ pub struct Account {
     pub sign_in_to_send: bool,
     /// POP3: a copy of each message is left on the server once taken down.
     pub leave_on_server: bool,
+    /// What was taken down so far; kept in the settings, not given by `account.list`.
+    pub received: Received,
 }
 
 fn security_name(s: Security) -> &'static str {
@@ -158,6 +200,11 @@ fn flag(p: &Value, key: &str) -> Result<Option<bool>, EngineError> {
     }
 }
 
+/// The sign-in name an edit leaves: the one given, else the one before.
+fn p_user<'a>(p: &'a Value, was: &'a Account) -> &'a str {
+    p.get("user").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).unwrap_or(&was.user)
+}
+
 impl Account {
     /// An account made from what is given, or `was` changed by it.
     pub fn from_json(p: &Value, id: &str, was: Option<&Account>) -> Result<Self, EngineError> {
@@ -195,6 +242,11 @@ impl Account {
             user: pick("user", 320, was.map(|w| w.user.as_str()), &email)?,
             sign_in_to_send: flag(p, "signInToSend")?.unwrap_or(was.is_none_or(|w| w.sign_in_to_send)),
             leave_on_server: flag(p, "leaveOnServer")?.unwrap_or(was.is_none_or(|w| w.leave_on_server)),
+            // What was taken down stays with the account while it reads from the same place.
+            received: was
+                .filter(|w| w.kind == kind && w.incoming.host == incoming.host && w.user == p_user(p, w))
+                .map(|w| w.received.clone())
+                .unwrap_or_default(),
             email,
             kind,
             incoming,
@@ -217,6 +269,13 @@ impl Account {
             "signInToSend": self.sign_in_to_send,
             "leaveOnServer": self.leave_on_server,
         })
+    }
+
+    /// The account as the settings file keeps it: with what was taken down so far.
+    pub fn to_settings(&self) -> Value {
+        let mut v = self.to_json();
+        v["received"] = self.received.to_json();
+        v
     }
 
     pub fn incoming_endpoint(&self) -> Endpoint {
@@ -248,7 +307,10 @@ pub fn from_settings(v: &Value) -> (Vec<Account>, u32) {
     for a in v.as_array().map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_ACCOUNTS) {
         let id = a.get("id").and_then(Value::as_str).unwrap_or_default();
         match kept_id(id, &out).then(|| Account::from_json(a, id, None)) {
-            Some(Ok(account)) => out.push(account),
+            Some(Ok(mut account)) => {
+                account.received = Received::from_json(a.get("received"));
+                out.push(account);
+            }
             _ => ignored += 1,
         }
     }
@@ -268,7 +330,7 @@ pub(crate) fn changes(p: &Value) -> Value {
     let mut m = Map::new();
     if let Some(all) = p.as_object() {
         for (k, v) in all {
-            if !matches!(k.as_str(), "id" | "password") {
+            if !matches!(k.as_str(), "id" | "password" | "received") {
                 m.insert(k.clone(), v.clone());
             }
         }

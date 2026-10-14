@@ -73,7 +73,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "saveInPlace": s.save_in_place,
         "autoSaveMinutes": s.autosave_min,
         "dataFiles": files,
-        "accounts": s.accounts.iter().map(crate::accounts::Account::to_json).collect::<Vec<_>>(),
+        "accounts": s.accounts.iter().map(crate::accounts::Account::to_settings).collect::<Vec<_>>(),
     });
     if let Some(ui) = ui.filter(|ui| ui.is_object() && ui.to_string().len() <= MAX_UI) {
         out["ui"] = ui.clone();

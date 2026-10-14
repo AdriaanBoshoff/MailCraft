@@ -27,6 +27,8 @@ mod tests_accounts;
 #[cfg(test)]
 mod tests_pictures;
 #[cfg(test)]
+mod tests_receive;
+#[cfg(test)]
 mod tests_send;
 pub mod undo;
 

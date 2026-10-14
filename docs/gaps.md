@@ -1,12 +1,13 @@
 # Gaps
 
-**Status:** revision 82 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 83 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
-1. **No receiving, and no Exchange.** Accounts are kept and tested (M4.3) and mail is sent through
-   SMTP (M4.4); taking mail down by POP3 and keeping IMAP folders in step come next (M4.5), and the
-   window has no Account Settings or Send/Receive yet (M4.6).
+1. **IMAP is taken down, not kept in step, and there is no Exchange.** Accounts are kept and tested
+   (M4.3), mail is sent (M4.4) and received by POP3 and from the IMAP Inbox (M4.5); the server's
+   other folders, and changes made here going back to the server, are a do-later item, and the
+   window has no Account Settings yet (M4.6).
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
    (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; what we write, saved whole or into the file, opens in
    Outlook Classic with every folder and message as we wrote them (M3c.1), files from before M3c.1 too after one save (M3c.5), but no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
@@ -81,6 +82,7 @@
 
 ## Revision history
 
+- 83 · 2026-10-14 — M4.5: mail is received by POP3 and from the IMAP Inbox into the data file's Inbox.
 - 82 · 2026-10-14 — M4.4: mail is sent through an account's SMTP server and kept in Sent Items.
 - 81 · 2026-10-14 — M4.3: accounts are kept, changed and tested in the engine; passwords in the credential store.
 - 80 · 2026-10-14 — M4.2: TCP and TLS connections with checked certificates, and passwords in the system's credential store.

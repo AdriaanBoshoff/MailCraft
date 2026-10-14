@@ -876,6 +876,10 @@ impl MailUi {
                 run.push(("nav.module", json!({ "module": module })));
             }
         }
+        if hit(Modifiers::NONE, Key::F9) && self.session.is_enabled("mail.sendReceive") {
+            // The window is never kept waiting for a server: both go on threads of their own.
+            run.push(("mail.sendReceive", json!({ "wait": false })));
+        }
         if hit(Modifiers::NONE, Key::F12) {
             run.push(("ui.saveAsDialog", Value::Null));
         }
