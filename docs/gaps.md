@@ -1,14 +1,14 @@
 # Gaps
 
-**Status:** revision 71 · 2026-10-12 · ranked: the top of the list is what hurts most.
+**Status:** revision 72 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 1. **No accounts, no sending, no receiving.** IMAP, POP3, SMTP and Exchange are absent. `compose.send`
    files the message in Outbox and says so.
-2. **Changes to a data file are kept only for a Unicode `.pst`, and none of it is proved in Outlook.** `file.save`
-   (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; nothing we write has been opened in
-   Outlook, and no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
+2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
+   (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; what we write, saved whole or into the file, opens in
+   Outlook Classic with every folder and message as we wrote them (M3c.1), but no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
    after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21); an `.ost` and a 4K-page file are read-only. `file.export` copies a
    Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
    (associated) items and folder properties beyond name, class and counts are not carried then, and
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 72 · 2026-10-14 — M3c.1: Outlook Classic opens the data files our writer makes, whole, ANSI and saved into in place, and sees what we wrote.
 - 71 · 2026-10-13 — M3b.29: a save writes what changed into the data file where it is, with an undo file beside it until the save is checked; M3b is closed.
 - 70 · 2026-10-13 — M3b.28: metafiles draw parts of bitmaps, mirrored, turned and run-packed ones, every way of mixing, hatched and patterned brushes, and regions.
 - 69 · 2026-10-13 — M3b.27: an RTF highlight is one of the sixteen marker colours, and list numbers follow what their override changes.

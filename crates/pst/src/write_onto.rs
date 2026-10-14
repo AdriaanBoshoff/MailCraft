@@ -430,6 +430,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             next_page: onto.next_page,
             last: [0; 32],
             unique: 0,
+            counted: 0,
             onto: Some(Box::new(onto)),
         }
     }

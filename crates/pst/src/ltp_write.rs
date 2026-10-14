@@ -27,6 +27,7 @@ fn cannot(what: &str) -> PstError {
 }
 
 /// A heap-on-node being filled ([MS-PST] 2.3.1): allocations, block by block.
+#[derive(Clone)]
 pub(crate) struct Heap {
     sig: u8,
     /// The most bytes a block of the file holds.
@@ -169,6 +170,11 @@ fn bth(heap: &mut Heap, header: u32, key: usize, ent: usize, records: &[(Vec<u8>
     Ok(())
 }
 
+/// The kind of id the subnode with an object's storage has. The list of kinds ([MS-PST]
+/// 2.2.2.1) does not have it: of all thirty-two, it is the one Outlook's repair tool lets an
+/// object that is not a message be in (seen 2026-10-13, `docs/file-format-parity.md`).
+pub(crate) const NID_TYPE_OBJECT: u32 = 0x09;
+
 /// The subnodes of one node as they come about: values too large for the heap, and whatever
 /// the layer above puts there.
 pub(crate) struct Subs {
@@ -189,7 +195,27 @@ impl Subs {
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
     {
-        let nid = self.next.checked_shl(5).filter(|n| n >> 5 == self.next).ok_or_else(|| cannot("too many large values in one item"))? | NID_TYPE_LTP;
+        self.of(w, blocks, NID_TYPE_LTP)
+    }
+
+    /// A subnode of this node holding the storage of an object of another program, which a
+    /// PtypObject value names ([MS-PST] 2.3.3.5); its id.
+    pub(crate) fn object<W, I, B>(&mut self, w: &mut NdbWriter<W>, blocks: I) -> Result<u32, PstError>
+    where
+        W: Read + Write + Seek,
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
+        self.of(w, blocks, NID_TYPE_OBJECT)
+    }
+
+    fn of<W, I, B>(&mut self, w: &mut NdbWriter<W>, blocks: I, kind: u32) -> Result<u32, PstError>
+    where
+        W: Read + Write + Seek,
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
+        let nid = self.next.checked_shl(5).filter(|n| n >> 5 == self.next).ok_or_else(|| cannot("too many large values in one item"))? | kind;
         self.next += 1;
         let data = w.data(blocks)?;
         self.list.push(Sub { nid, data, sub: 0 });
@@ -213,6 +239,28 @@ fn hnid<W: Read + Write + Seek>(w: &mut NdbWriter<W>, heap: &mut Heap, subs: &mu
 /// Write a Property Context ([MS-PST] 2.3.3); the block id of the node's data. Large values
 /// are added to `subs`.
 pub(crate) fn write_pc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, props: &[Raw], subs: &mut Subs) -> Result<u64, PstError> {
+    write_pc_late(w, props, subs, None).map(|(data, _)| data)
+}
+
+/// A four-byte property that says how large the thing it is part of is, which is known only
+/// once the rest is written. Outlook's repair tool holds both against what is stored.
+pub(crate) enum Late {
+    /// PidTagAttachSize: the sizes of the values of all the properties added up, an object
+    /// counted as `object` bytes.
+    Values { id: u16, object: usize },
+    /// PidTagMessageSize: the bytes of node data written since the writer had counted `from`,
+    /// and those of this property list.
+    Stored { id: u16, from: u64 },
+}
+
+/// [`write_pc`], with the value of one property worked out as the list is written: the block
+/// id of the node's data, and that value. The property is one of `props`, with any value.
+pub(crate) fn write_pc_late<W: Read + Write + Seek>(
+    w: &mut NdbWriter<W>,
+    props: &[Raw],
+    subs: &mut Subs,
+    late: Option<Late>,
+) -> Result<(u64, i32), PstError> {
     // The text of an ANSI file is 8-bit where its code page has it: the code page of the
     // message these properties are part of, else their own, as they are read.
     let narrowed: Vec<Raw>;
@@ -231,6 +279,7 @@ pub(crate) fn write_pc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, props: &[Ra
     let mut heap = Heap::new(0xBC, w.max_data());
     let header = heap.alloc(&[0; 8])?;
     let mut records = Vec::with_capacity(order.len());
+    let mut values = 0usize;
     for p in order {
         // An object is eight bytes that name a subnode of this node ([MS-PST] 2.3.3.5). One
         // that names none has nothing to be read from, and another program would look for
@@ -249,6 +298,13 @@ pub(crate) fn write_pc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, props: &[Ra
             }
             _ => p,
         };
+        // What a value counts in the size of the whole: its bytes, a Boolean one, and an
+        // object what its user says (seen in what Outlook's repair tool puts there).
+        values = values.saturating_add(match p.ty {
+            ptype::OBJECT => 0,
+            ptype::BOOL => 1,
+            _ => p.data.len(),
+        });
         // A fixed size of up to four bytes sits in the record; the rest is an HNID.
         let value = if ptype::fixed_size(p.ty).is_some_and(|n| n <= 4) {
             let mut v = [0u8; 4];
@@ -264,8 +320,26 @@ pub(crate) fn write_pc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, props: &[Ra
         data.extend(value.to_le_bytes());
         records.push((p.id.to_le_bytes().to_vec(), data));
     }
+    let mut found = 0i32;
+    if let Some(late) = late {
+        let (id, size) = match late {
+            Late::Values { id, object } => (id, values.saturating_add(object)),
+            Late::Stored { id, from } => {
+                // The list is as large whatever the value is: it is laid out once to be measured.
+                let mut trial = heap.clone();
+                bth(&mut trial, header, 2, 6, &records)?;
+                let own: usize = trial.finish(header).iter().map(Vec::len).sum();
+                (id, usize::try_from(w.counted().saturating_sub(from)).unwrap_or(usize::MAX).saturating_add(own))
+            }
+        };
+        found = i32::try_from(size).unwrap_or(i32::MAX);
+        let key = id.to_le_bytes();
+        if let Some(to) = records.iter_mut().find(|(k, _)| k.as_slice() == key.as_slice()).and_then(|(_, data)| data.get_mut(2..6)) {
+            to.copy_from_slice(&found.to_le_bytes());
+        }
+    }
     bth(&mut heap, header, 2, 6, &records)?;
-    w.data(heap.finish(header))
+    Ok((w.data(heap.finish(header))?, found))
 }
 
 /// How many bytes a column takes in a row ([MS-PST] 2.3.4.4.2): the value up to eight bytes, a
@@ -281,6 +355,19 @@ fn cell_size(ty: u16) -> usize {
 /// type) are the columns the table has even when no row fills them; columns the rows bring are
 /// added. Rows keep their order; a row matrix or a value too large for the heap goes to `subs`.
 pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[(u16, u16)], rows: &[Row], subs: &mut Subs) -> Result<u64, PstError> {
+    write_tc_as(w, columns, rows, subs, false)
+}
+
+/// [`write_tc`], with the place of a row in the row index four bytes wide in an ANSI file too
+/// when `wide` is set: some of the tables Outlook keeps in an ANSI file are written so.
+pub(crate) fn write_tc_as<W: Read + Write + Seek>(
+    w: &mut NdbWriter<W>,
+    columns: &[(u16, u16)],
+    rows: &[Row],
+    subs: &mut Subs,
+    wide: bool,
+) -> Result<u64, PstError> {
+    let narrow = w.ansi() && !wide;
     let (columns, rows) = &one_kind_of_text(w.ansi(), w.text().unwrap_or(1252), columns, rows);
     let mut tags: Vec<u32> = columns.iter().map(|(id, ty)| u32::from(*id) << 16 | u32::from(*ty)).collect();
     tags.extend(rows.iter().flat_map(|r| r.cells.iter().map(|c| u32::from(c.id) << 16 | u32::from(c.ty))));
@@ -349,7 +436,7 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
         cell(&mut row, ROW_ID, &r.id.to_le_bytes());
         matrix.extend(row);
         // TCROWID: dwRowID, dwRowIndex, which is two bytes in an ANSI file ([MS-PST] 2.3.4.3.1).
-        let place = if w.ansi() {
+        let place = if narrow {
             u16::try_from(n).map_err(|_| cannot("a table with more rows than an ANSI data file holds"))?.to_le_bytes().to_vec()
         } else {
             n.to_le_bytes().to_vec()
@@ -360,7 +447,7 @@ pub(crate) fn write_tc<W: Read + Write + Seek>(w: &mut NdbWriter<W>, columns: &[
     if index.windows(2).any(|p| p.first().map(|p| &p.0) == p.get(1).map(|p| &p.0)) {
         return Err(cannot("two rows with one id in a table"));
     }
-    bth(&mut heap, index_hid, 4, if w.ansi() { 2 } else { 4 }, &index)?;
+    bth(&mut heap, index_hid, 4, if narrow { 2 } else { 4 }, &index)?;
 
     // The row matrix: in the heap when it fits, else a subnode whose blocks each hold whole
     // rows; every block but the last is a full one ([MS-PST] 2.3.4.4).

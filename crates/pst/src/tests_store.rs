@@ -211,18 +211,20 @@ fn an_empty_mailbox_is_a_whole_data_file() {
     let mut ndb = Ndb::open(Box::new(Cursor::new(bytes.clone()))).unwrap();
     for nid in [
         0x21u32, 0x61, 0x122, 0x12D, 0x12E, 0x12F, 0x1E1, 0x201, 0x60D, 0x60E, 0x60F, 0x610, 0x692, 0x671, 0x2223, 0x8022, 0x802D, 0x802E, 0x802F,
-        0x8042, 0x804D, 0x804E, 0x804F, 0x8062, 0x806D, 0x806E, 0x806F,
+        0x8042, 0x804D, 0x804E, 0x804F, 0x8062, 0x806D, 0x806E, 0x806F, // And those Outlook asks for besides (`tests_outlook.rs`).
+        0x62B, 0x64C, 0x6B6, 0x6D7, 0x6F8, 0xEC1, 0x2226, 0x2227, 0x2230,
     ] {
         assert!(ndb.nbt.contains_key(&nid), "node {nid:#x} is missing");
     }
-    assert_eq!(ndb.nbt.len(), 27);
-    // The root is its own parent, and lists the visible tree and the search root.
+    assert_eq!(ndb.nbt.len(), 36);
+    // The root is its own parent, and lists the visible tree, the search root and the one
+    // search folder.
     let root = *ndb.nbt.get(&0x122).unwrap();
     assert_eq!(root.parent, 0x122);
     let table = *ndb.nbt.get(&0x12D).unwrap();
     let subs = ndb.subnodes(table.sub).unwrap();
     let rows: Vec<u32> = ltp::read_tc(&mut ndb, table.data, &subs).unwrap().iter().map(|r| r.id).collect();
-    assert_eq!(rows, [0x8022, 0x8042]);
+    assert_eq!(rows, [0x8022, 0x8042, 0x2223]);
     // The store names its folders by entry id: flags, the store's id, the node.
     let store = *ndb.nbt.get(&0x21).unwrap();
     let props = ltp::read_pc(&mut ndb, store.data, &Default::default()).unwrap();

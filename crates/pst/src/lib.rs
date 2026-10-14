@@ -582,6 +582,8 @@ mod tests_journal;
 #[cfg(test)]
 mod tests_onto;
 #[cfg(test)]
+mod tests_outlook;
+#[cfg(test)]
 mod tests_store;
 #[cfg(test)]
 mod tests_write;

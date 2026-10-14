@@ -7,7 +7,7 @@
 
 use crate::PstError;
 use crate::ltp::{Raw, Row};
-use crate::ltp_write::{Subs, encode, write_pc, write_tc};
+use crate::ltp_write::{Late, Subs, encode, write_pc, write_pc_late, write_tc, write_tc_as};
 use crate::write::{NdbWriter, Sub, crc};
 use openmailclient_model::{
     Attachment, FolderId, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, MSGFLAG_READ, NameId, NamedKey, PropBag, PropValue, Store, codepage, pid,
@@ -29,6 +29,23 @@ const NID_SEARCH_CONTENTS_TEMPLATE: u32 = 0x610;
 const NID_ATTACHMENT_TABLE: u32 = 0x671;
 const NID_RECIPIENT_TABLE: u32 = 0x692;
 const NID_SPAM_SEARCH_FOLDER: u32 = 0x2223;
+/// Nodes the list of what a file must hold ([MS-PST] 2.7.1) leaves out and Outlook asks for
+/// all the same: its repair tool names each as missing, and Outlook does not load a file
+/// that lacks them (seen 2026-10-13, `docs/file-format-parity.md`). The first two are the
+/// receive folder table and the outgoing queue, node types of [MS-PST] 2.2.2.1; the three
+/// after them are tables new ones are made from.
+const NID_RECEIVE_FOLDERS: u32 = 0x62B;
+const NID_OUTGOING_QUEUE: u32 = 0x64C;
+const NID_TEMPLATE_16: u32 = 0x6B6;
+const NID_TEMPLATE_17: u32 = 0x6D7;
+/// The update queue of the search folders, an empty node.
+const NID_SEARCH_QUEUE: u32 = 0xEC1;
+const NID_TEMPLATE_18: u32 = 0x6F8;
+/// What a search folder has beside its property list ([MS-PST] 2.4.8.6): the queue of what
+/// changed, what it searches for, and its contents table.
+const TYPE_SEARCH_UPDATE_QUEUE: u32 = 0x06;
+const TYPE_SEARCH_CRITERIA: u32 = 0x07;
+const TYPE_SEARCH_CONTENTS: u32 = 0x10;
 const NID_IPM_SUBTREE: u32 = 0x8022;
 const NID_SEARCH_ROOT: u32 = 0x8042;
 const NID_DELETED_ITEMS: u32 = 0x8062;
@@ -63,9 +80,24 @@ const T: u16 = ptype::TIME;
 const X: u16 = ptype::BINARY;
 
 /// The columns every hierarchy table has ([MS-PST] 2.4.4.4.1). PidTagContainerClass is a
-/// string here, as in the files Outlook writes.
-pub(crate) const HIERARCHY: &[(u16, u16)] =
-    &[(0x0E30, I), (0x0E33, L), (0x0E34, X), (0x0E38, I), (0x3001, S), (0x3602, I), (0x3603, I), (0x360A, B), (0x3613, S), (0x6635, I), (0x6636, I)];
+/// string here, as in the files Outlook writes. The list says different versions of Outlook
+/// add columns: this one asks for 0x0E30 as a binary too, here and in contents tables, for
+/// 0x3013 in contents tables and for 0x682F in tables of associated items (seen in what its
+/// repair tool calls missing).
+pub(crate) const HIERARCHY: &[(u16, u16)] = &[
+    (0x0E30, I),
+    (0x0E30, X),
+    (0x0E33, L),
+    (0x0E34, X),
+    (0x0E38, I),
+    (0x3001, S),
+    (0x3602, I),
+    (0x3603, I),
+    (0x360A, B),
+    (0x3613, S),
+    (0x6635, I),
+    (0x6636, I),
+];
 /// The columns every contents table has ([MS-PST] 2.4.4.5.1).
 pub(crate) const CONTENTS: &[(u16, u16)] = &[
     (0x0017, I),
@@ -85,6 +117,7 @@ pub(crate) const CONTENTS: &[(u16, u16)] = &[
     (0x0E08, I),
     (0x0E17, I),
     (0x0E30, I),
+    (0x0E30, X),
     (0x0E33, L),
     (0x0E34, X),
     (0x0E38, I),
@@ -92,6 +125,7 @@ pub(crate) const CONTENTS: &[(u16, u16)] = &[
     (0x0E3D, X),
     (0x1097, I),
     (0x3008, T),
+    (0x3013, X),
     (0x65C6, I),
 ];
 /// Columns our own contents tables add, so a message list shows who a message is from and
@@ -106,6 +140,7 @@ pub(crate) const ASSOC: &[(u16, u16)] = &[
     (0x6800, S),
     (0x6803, B),
     (0x6805, ptype::MULTI_INT32),
+    (0x682F, S),
     (0x7003, I),
     (0x7004, X),
     (0x7005, X),
@@ -147,6 +182,14 @@ const RECIPIENTS: &[(u16, u16)] = &[
     (0x39FF, S),
     (0x3A40, B),
 ];
+/// The columns of the tables Outlook asks for beyond [MS-PST] 2.7.1, as its repair tool
+/// makes them: the receive folder table (a message class and the folder its mail goes to),
+/// the outgoing queue, and three templates.
+const RECEIVE_FOLDERS: &[(u16, u16)] = &[(0x001A, S), (0x6605, I)];
+const OUTGOING_QUEUE: &[(u16, u16)] = &[(0x0039, T), (0x0E10, I), (0x0E14, I)];
+const TEMPLATE_16: &[(u16, u16)] = &[(0x0E33, L), (0x0E37, X), (0x0E38, I)];
+const TEMPLATE_17: &[(u16, u16)] = &[(0x001A, S), (0x0E30, X), (0x0E31, X), (0x0E33, L), (0x0E34, X), (0x0E38, I), (0x0E3E, X)];
+const TEMPLATE_18: &[(u16, u16)] = &[(0x0E33, L), (0x3007, T)];
 /// The columns every attachment table has ([MS-PST] 2.4.6.1.1).
 pub(crate) const ATTACHMENTS: &[(u16, u16)] = &[(0x0E20, I), (0x3704, S), (0x3705, I), (0x370B, I)];
 
@@ -465,6 +508,7 @@ impl<W: Read + Write + Seek> Out<W> {
         if depth > MAX_DEPTH {
             return Err(cannot("messages attached to messages that deep"));
         }
+        let from = self.w.counted();
         let mut props = raws(&item.props);
         // What a message must have ([MS-PST] 2.4.5.1.1), where the item does not say.
         self.serial = self.serial.wrapping_add(1);
@@ -493,26 +537,28 @@ impl<W: Read + Write + Seek> Out<W> {
             let id = self.names.id_for(key)?;
             props.insert(id, encode(id, v));
         }
-        if item.props.i32(pid::MESSAGE_SIZE).is_none_or(|n| n <= 0) {
-            let size = props.values().map(|r| r.data.len()).chain(item.attachments.iter().map(Attachment::size)).fold(0usize, usize::saturating_add);
-            props.insert(pid::MESSAGE_SIZE, int(pid::MESSAGE_SIZE, i32::try_from(size).unwrap_or(i32::MAX)));
-        }
+        // PidTagMessageSize is how much of the file the message takes, its recipients and
+        // attachments too: Outlook's repair tool takes a row whose size is far from that for
+        // a damaged one (seen 2026-10-13). It is filled in when the rest is written.
+        props.insert(pid::MESSAGE_SIZE, int(pid::MESSAGE_SIZE, 0));
         // Short values only: these become the message's row in its folder's table.
-        let cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
+        let mut cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
 
         let props: Vec<Raw> = props.into_values().collect();
         let mut subs = Subs::new(1);
         // A message's own text is read in its own code page, and so are its recipients and
         // attachments; a message inside it has its own again.
         let cp = crate::code_page(&props);
-        let outer = self.w.within(None);
-        let data = write_pc(&mut self.w, &props, &mut subs)?;
-        drop(props);
-
-        self.w.within(Some(cp));
+        let outer = self.w.within(Some(cp));
         subs.list.push(self.recipients(item)?);
         subs.list.extend(self.attachments(item, depth)?);
+        self.w.within(None);
+        let (data, size) = write_pc_late(&mut self.w, &props, &mut subs, Some(Late::Stored { id: pid::MESSAGE_SIZE, from }))?;
+        drop(props);
         self.w.within(outer);
+        if let Some(cell) = cells.iter_mut().find(|c| c.id == pid::MESSAGE_SIZE) {
+            *cell = int(pid::MESSAGE_SIZE, size);
+        }
         let sub = self.w.subnodes(subs.list)?;
         Ok((data, sub, cells))
     }
@@ -521,7 +567,9 @@ impl<W: Read + Write + Seek> Out<W> {
     pub(crate) fn recipients(&mut self, item: &Item) -> Result<Sub, PstError> {
         let mut rows = Vec::with_capacity(item.recipients.len());
         for (i, r) in item.recipients.iter().enumerate() {
-            let id = u32::try_from(i).map_err(|_| cannot("that many recipients"))?;
+            // Rows are numbered from 1: Outlook's repair tool takes a table whose first row
+            // has the id 0 for a damaged one (seen 2026-10-13).
+            let id = u32::try_from(i).ok().and_then(|i| i.checked_add(1)).ok_or_else(|| cannot("that many recipients"))?;
             let mut cells = raws(r);
             cells.insert(pid::ROWID, int(pid::ROWID, count(u64::from(id))));
             rows.push(Row { id, cells: cells.into_values().filter(|c| fits(RECIPIENTS, c)).collect() });
@@ -579,26 +627,31 @@ impl<W: Read + Write + Seek> Out<W> {
         };
         let size = if let Some(inner) = &a.embedded {
             // An attached message is a whole message in a subnode ([MS-PST] 2.4.6.2.2).
-            let (data, sub, _) = self.message(inner, depth + 1)?;
+            let (data, sub, cells) = self.message(inner, depth + 1)?;
             subs.list.push(Sub { nid: NID_EMBEDDED, data, sub });
             props.insert(pid::ATTACH_METHOD, int(pid::ATTACH_METHOD, 5));
-            let size = inner.approx_size();
+            let size = cells.iter().find(|c| c.id == pid::MESSAGE_SIZE).and_then(|c| crate::ndb::u32_at(&c.data, 0)).map_or(0, |n| n as usize);
             props.insert(pid::ATTACH_DATA, object(NID_EMBEDDED, size));
             size
         } else if a.props.i32(pid::ATTACH_METHOD) == Some(6) && !a.data.is_empty() {
             // An object of another program is kept as an object too, its storage as bytes.
             let most = self.w.max_data();
-            let nid = subs.value(&mut self.w, a.data.chunks(most))?;
+            let nid = subs.object(&mut self.w, a.data.chunks(most))?;
             props.insert(pid::ATTACH_DATA, object(nid, a.data.len()));
             a.data.len()
         } else {
             props.insert(pid::ATTACH_DATA, Raw { id: pid::ATTACH_DATA, ty: X, data: a.data.clone() });
-            a.data.len()
+            0
         };
-        props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, i32::try_from(size).unwrap_or(i32::MAX)));
+        // PidTagAttachSize is the size of the whole attachment, its data and every other
+        // property of it as they are stored: Outlook's repair tool calls another number
+        // invalid (seen 2026-10-13). It is filled in as the properties are written.
+        props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, 0));
+        let list: Vec<Raw> = props.into_values().collect();
+        let (data, size) = write_pc_late(&mut self.w, &list, &mut subs, Some(Late::Values { id: pid::ATTACH_SIZE, object: size }))?;
+        let mut props: BTreeMap<u16, Raw> = list.into_iter().map(|r| (r.id, r)).collect();
+        props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, size));
         let cells = attachment_cells(&props);
-        let props: Vec<Raw> = props.into_values().collect();
-        let data = write_pc(&mut self.w, &props, &mut subs)?;
         let sub = self.w.subnodes(subs.list)?;
         Ok((data, sub, cells))
     }
@@ -802,7 +855,10 @@ fn write_store_of<W: Read + Write + Seek>(
     let search = plain(NID_SEARCH_ROOT, "Search Root", Vec::new());
     o.folder(&folders, &search, Some(none), &[])?;
     let top = folders.first().map(|f| Row { id: f.nid, cells: f.props(!f.children.is_empty()) });
-    let rows: Vec<Row> = top.into_iter().chain([Row { id: search.nid, cells: search.props(false) }]).collect();
+    let spam = plain(NID_SPAM_SEARCH_FOLDER, "SPAM Search Folder 2", Vec::new());
+    // Three rows: the visible tree, the search root and the search folder ([MS-PST] 2.7.3.4.1).
+    let rows: Vec<Row> =
+        top.into_iter().chain([Row { id: search.nid, cells: search.props(false) }, Row { id: spam.nid, cells: spam.props(false) }]).collect();
     let root = plain(NID_ROOT_FOLDER, "", Vec::new());
     let mut props = root.props(true);
     props.extend(found);
@@ -810,8 +866,17 @@ fn write_store_of<W: Read + Write + Seek>(
     o.tc_node(NID_ROOT_FOLDER & !0x1F | TYPE_HIERARCHY, HIERARCHY, &rows)?;
     o.contents(NID_ROOT_FOLDER, &[])?;
     o.tc_node(NID_ROOT_FOLDER & !0x1F | TYPE_ASSOC, ASSOC, &[])?;
-    // The search folder every data file has; the name is the one the format gives it.
-    o.pc_node(NID_SPAM_SEARCH_FOLDER, NID_ROOT_FOLDER, &plain(NID_SPAM_SEARCH_FOLDER, "SPAM Search Folder 2", Vec::new()).props(false))?;
+    // The search folder every data file has; the name is the one the format gives it. With
+    // it go an empty queue of what changed, a search for nothing and an empty contents table
+    // ([MS-PST] 2.4.8.6), and its place in the list of folders that are searched (2.4.8.4.2):
+    // Outlook does not load a file whose search folder lacks them.
+    o.pc_node(NID_SPAM_SEARCH_FOLDER, NID_ROOT_FOLDER, &spam.props(false))?;
+    o.w.node(NID_SPAM_SEARCH_FOLDER & !0x1F | TYPE_SEARCH_UPDATE_QUEUE, 0, 0, 0);
+    o.w.node(NID_SEARCH_QUEUE, 0, 0, 0);
+    o.pc_node(NID_SPAM_SEARCH_FOLDER & !0x1F | TYPE_SEARCH_CRITERIA, 0, &[Raw { id: 0x660B, ty: I, data: 0u32.to_le_bytes().to_vec() }])?;
+    o.tc_node(NID_SPAM_SEARCH_FOLDER & !0x1F | TYPE_SEARCH_CONTENTS, SEARCH_CONTENTS, &[])?;
+    let searched = o.w.data([NID_SPAM_SEARCH_FOLDER.to_le_bytes()])?;
+    o.w.node(NID_SEARCH_ACTIVITY_LIST, 0, searched, 0);
 
     // The message store ([MS-PST] 2.4.3.1).
     let mut props = vec![Raw { id: 0x0FF9, ty: X, data: uid.to_vec() }, text(pid::DISPLAY_NAME, &store.display_name())];
@@ -819,6 +884,8 @@ fn write_store_of<W: Read + Write + Seek>(
     {
         props.push(o.entry_id(id, nid));
     }
+    // PidTagPstPassword: none ([MS-PST] 2.4.3.3). Outlook asks for the property itself.
+    props.push(Raw { id: 0x67FF, ty: I, data: 0u32.to_le_bytes().to_vec() });
     o.pc_node(NID_MESSAGE_STORE, 0, &props)?;
     let names = o.names.props();
     o.pc_node(NID_NAME_TO_ID_MAP, 0, &names)?;
@@ -831,10 +898,27 @@ fn write_store_of<W: Read + Write + Seek>(
         (NID_SEARCH_CONTENTS_TEMPLATE, SEARCH_CONTENTS),
         (NID_RECIPIENT_TABLE, RECIPIENTS),
         (NID_ATTACHMENT_TABLE, ATTACHMENTS),
+        (NID_OUTGOING_QUEUE, OUTGOING_QUEUE),
+        (NID_TEMPLATE_16, TEMPLATE_16),
+        (NID_TEMPLATE_17, TEMPLATE_17),
+        (NID_TEMPLATE_18, TEMPLATE_18),
     ] {
-        o.tc_node(nid, columns, &[])?;
+        // Outlook's repair tool wants a four-byte row place in these two, in an ANSI file too.
+        let wide = nid == NID_TEMPLATE_17 || nid == NID_TEMPLATE_18;
+        let mut subs = Subs::new(1);
+        let data = write_tc_as(&mut o.w, columns, &[], &mut subs, wide)?;
+        let sub = o.w.subnodes(subs.list)?;
+        o.w.node(nid, 0, data, sub);
     }
+    // Mail of any class is received in the Inbox, or at the root where there is none.
+    let receive = Row {
+        id: 1,
+        cells: vec![
+            Raw { id: 0x001A, ty: S, data: Vec::new() },
+            Raw { id: 0x6605, ty: I, data: inbox.unwrap_or(NID_ROOT_FOLDER).to_le_bytes().to_vec() },
+        ],
+    };
+    o.tc_node(NID_RECEIVE_FOLDERS, RECEIVE_FOLDERS, &[receive])?;
     o.w.node(NID_SEARCH_MANAGEMENT_QUEUE, 0, 0, 0);
-    o.w.node(NID_SEARCH_ACTIVITY_LIST, 0, 0, 0);
     Ok((o.w.finish()?, done))
 }

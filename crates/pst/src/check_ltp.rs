@@ -360,8 +360,10 @@ fn table(ndb: &mut Ndb, heap: &Heap, subs: &Subnodes) -> Result<(), String> {
     let rows: Vec<&[u8]> = if row_size == 0 { Vec::new() } else { blocks.iter().flat_map(|b| b.chunks_exact(row_size)).take(MAX_ROWS).collect() };
     // The row index ([MS-PST] 2.3.4.3): a row's id, and which row that is.
     let mut taken = HashSet::new();
-    // TCROWID ([MS-PST] 2.3.4.3.1): the place of a row is four bytes, and two in an ANSI file.
-    let place = if heap.ver == Ver::Ansi { 2 } else { 4 };
+    // TCROWID ([MS-PST] 2.3.4.3.1): the place of a row is four bytes, and two in an ANSI file,
+    // where Outlook keeps some tables with four all the same; the index header says which.
+    let four = heap.alloc(row_index).and_then(|h| h.get(2)) == Some(&4);
+    let place = if heap.ver == Ver::Ansi && !four { 2 } else { 4 };
     for rec in bth(heap, row_index, 4, place, "its table's row index")? {
         let n = if place == 2 { u16_at(rec, 4).map(u32::from) } else { u32_at(rec, 4) };
         let (Some(id), Some(n)) = (u32_at(rec, 0), n) else { continue };

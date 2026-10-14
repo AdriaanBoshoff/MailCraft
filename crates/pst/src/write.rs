@@ -201,6 +201,8 @@ pub(crate) struct NdbWriter<W: Read + Write + Seek> {
     /// What a block's bytes hash to, to find one written before.
     seen: HashMap<u64, u32>,
     nodes: Vec<(u32, u64, u64, u32)>,
+    /// How many bytes of node data were given to `data` so far.
+    counted: u64,
     next_block: u64,
     next_page: u64,
     /// The highest index used so far for each of the 32 kinds of node id.
@@ -248,6 +250,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             next_page: 1,
             last: [0; 32],
             unique: 0,
+            counted: 0,
             onto: None,
         };
         w.open_section();
@@ -270,6 +273,12 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
 
     pub(crate) fn text(&self) -> Option<u32> {
         self.text
+    }
+
+    /// How many bytes of node data were written so far: the difference between two readings
+    /// is the size of what was written between them.
+    pub(crate) fn counted(&self) -> u64 {
+        self.counted
     }
 
     /// A block's trailer: sixteen bytes, twelve in an ANSI file ([MS-PST] 2.2.2.8.1).
@@ -515,6 +524,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
                 return Err(cannot("an item with more blocks than a data tree holds"));
             }
             let (bid, _) = self.block(chunk, false)?;
+            self.counted = self.counted.saturating_add(chunk.len() as u64);
             leaves.push((bid, chunk.len() as u64));
         }
         match leaves.as_slice() {

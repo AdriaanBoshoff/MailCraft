@@ -9,7 +9,7 @@
 
 use crate::journal::{self, Diff, Found, Journal, Op};
 use crate::ltp::{self, Raw, Row};
-use crate::ltp_write::{Subs, encode, write_pc};
+use crate::ltp_write::{Late, NID_TYPE_OBJECT, Subs, encode, write_pc_late};
 use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver, u32_at};
 use crate::store_write::{
     ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, cell_for, copy,
@@ -727,7 +727,7 @@ impl PstStore {
                     for raw in folder_cells(f) {
                         props.insert(raw.id, raw);
                     }
-                    let (data, sub) = self.close_pc(&mut o, props, &kept, Vec::new(), &mut budget)?;
+                    let (data, sub, _) = self.close_pc(&mut o, props, &kept, Vec::new(), None, &mut budget)?;
                     o.w.node(nid, parent_of(f), data, sub);
                     continue;
                 }
@@ -823,7 +823,7 @@ impl PstStore {
                 let mut props: Vec<Raw> = props.into_values().collect();
                 o.names.add_to(&mut props);
                 let props: BTreeMap<u16, Raw> = props.into_iter().map(|r| (r.id, r)).collect();
-                let (data, sub) = self.close_pc(&mut o, props, &kept, Vec::new(), &mut budget)?;
+                let (data, sub, _) = self.close_pc(&mut o, props, &kept, Vec::new(), None, &mut budget)?;
                 o.w.node(NID_NAME_TO_ID_MAP, e.parent, data, sub);
             } else {
                 self.copy_node(&mut o, NID_NAME_TO_ID_MAP, e.parent, e, &mut budget)?;
@@ -1097,20 +1097,25 @@ impl PstStore {
             let size = u32::try_from(new.data.len()).unwrap_or(u32::MAX);
             let contents = if new.props.i32(pid::ATTACH_METHOD) == Some(6) && !new.data.is_empty() {
                 // PtypObject: the subnode that holds the object, then its size ([MS-PST] 2.3.3.5).
-                let used = kept.keys().filter(|n| *n & 0x1F == TYPE_LTP).map(|n| n >> 5).max().unwrap_or(0);
+                let used = kept.keys().filter(|n| *n & 0x1F == NID_TYPE_OBJECT).map(|n| n >> 5).max().unwrap_or(0);
                 let mut subs = Subs::new(used.saturating_add(1));
                 let most = o.w.max_data();
-                let nid = subs.value(&mut o.w, new.data.chunks(most))?;
+                let nid = subs.object(&mut o.w, new.data.chunks(most))?;
                 more = subs.list;
                 Raw { id: pid::ATTACH_DATA, ty: ptype::OBJECT, data: [nid.to_le_bytes(), size.to_le_bytes()].concat() }
             } else {
                 Raw { id: pid::ATTACH_DATA, ty: ptype::BINARY, data: new.data.clone() }
             };
             props.insert(pid::ATTACH_DATA, contents);
-            props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, i32::try_from(new.data.len()).unwrap_or(i32::MAX)));
         }
-        let cells = attachment_cells(&props);
-        let (data, sub) = self.close_pc(o, props, &kept, more, budget)?;
+        // The size of the whole attachment as it is stored now (`Out::attachment`).
+        let object = props.get(&pid::ATTACH_DATA).filter(|r| r.ty == ptype::OBJECT).and_then(|r| u32_at(&r.data, 4)).map_or(0, |n| n as usize);
+        props.insert(pid::ATTACH_SIZE, int(pid::ATTACH_SIZE, 0));
+        let mut cells = attachment_cells(&props);
+        let (data, sub, size) = self.close_pc(o, props, &kept, more, Some(Late::Values { id: pid::ATTACH_SIZE, object }), budget)?;
+        if let Some(cell) = cells.iter_mut().find(|c| c.id == pid::ATTACH_SIZE) {
+            *cell = int(pid::ATTACH_SIZE, size);
+        }
         Ok((data, sub, cells))
     }
 
@@ -1122,8 +1127,9 @@ impl PstStore {
         props: BTreeMap<u16, Raw>,
         kept: &Subnodes,
         more: Vec<Sub>,
+        late: Option<Late>,
         budget: &mut usize,
-    ) -> Result<(u64, u64), PstError> {
+    ) -> Result<(u64, u64, i32), PstError> {
         // Values too large for the heap get subnodes of their own, numbered past those kept.
         let used = kept.keys().copied().chain(more.iter().map(|s| s.nid)).filter(|n| n & 0x1F == TYPE_LTP).map(|n| n >> 5).max().unwrap_or(0);
         let mut subs = Subs::new(used.saturating_add(1));
@@ -1136,8 +1142,8 @@ impl PstStore {
             subs.list.push(Sub { nid, data: self.copy_data(&mut o.w, data, budget)?, sub: self.copy_subs(&mut o.w, sub, 1, budget)? });
         }
         subs.list.extend(more);
-        let data = write_pc(&mut o.w, &props, &mut subs)?;
-        Ok((data, o.w.subnodes(subs.list)?))
+        let (data, late) = write_pc_late(&mut o.w, &props, &mut subs, late)?;
+        Ok((data, o.w.subnodes(subs.list)?, late))
     }
 
     /// A changed message: every stored property that was not changed stays as it is stored,
@@ -1206,7 +1212,7 @@ impl PstStore {
         }
         o.w.within(outer);
         let cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
-        let (data, sub) = self.close_pc(o, props, &kept, more, budget)?;
+        let (data, sub, _) = self.close_pc(o, props, &kept, more, None, budget)?;
         Ok((data, sub, cells, removed))
     }
 

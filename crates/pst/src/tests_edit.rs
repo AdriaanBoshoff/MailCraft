@@ -356,7 +356,8 @@ fn a_file_put_in_again_keeps_what_is_stored_on_it_and_what_cannot_be_read_stays(
     );
     let got = store.load(inbox.id, id).unwrap();
     assert_eq!(got.attachments[0].data, b"second draft, longer");
-    assert_eq!(got.attachments[0].props.i32(pid::ATTACH_SIZE), Some(20));
+    // The size of the whole attachment: the twenty bytes and its other properties.
+    assert_eq!(got.attachments[0].props.i32(pid::ATTACH_SIZE), Some(120));
     assert_eq!((got.attachments[1].data == grown, got.attachments[1].props.str(pid::ATTACH_MIME_TAG)), (true, Some("application/octet-stream")));
     assert_eq!((got.attachments[2].data.len(), got.attachments[2].props.i32(pid::ATTACH_METHOD)), (9, Some(6)));
     // Another name and other contents: nothing says it is the file that was there.
