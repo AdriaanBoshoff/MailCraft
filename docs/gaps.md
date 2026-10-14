@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 73 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 74 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,7 +9,7 @@
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
    (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; what we write, saved whole or into the file, opens in
    Outlook Classic with every folder and message as we wrote them (M3c.1), but no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
-   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21), and a 4K-page `.pst` as a 4K-page file, written whole (M3c.2); an `.ost` is read-only. `file.export` copies a
+   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21), and a 4K-page `.pst` as a 4K-page file, written whole (M3c.2); an `.ost` is read-only. Once a file has been saved, later changes are saved on their own after five minutes (M3c.3, `file.autoSave`). `file.export` copies a
    Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
    (associated) items and folder properties beyond name, class and counts are not carried then, and
    the new file does not say which folder is the Calendar or Contacts. Changes
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 74 · 2026-10-14 — M3c.3: unsaved changes are saved on their own after five minutes, never for a file's first save.
 - 73 · 2026-10-14 — M3c.2: data files with 4K pages are written, take changes and are saved as that kind; Outlook Classic opens one of ours.
 - 72 · 2026-10-14 — M3c.1: Outlook Classic opens the data files our writer makes, whole, ANSI and saved into in place, and sees what we wrote.
 - 71 · 2026-10-13 — M3b.29: a save writes what changed into the data file where it is, with an undo file beside it until the save is checked; M3b is closed.

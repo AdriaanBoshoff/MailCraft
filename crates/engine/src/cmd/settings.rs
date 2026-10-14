@@ -71,6 +71,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "animations": s.animate,
         "keepOriginal": s.keep_original,
         "saveInPlace": s.save_in_place,
+        "autoSaveMinutes": s.autosave_min,
         "dataFiles": files,
     });
     if let Some(ui) = ui.filter(|ui| ui.is_object() && ui.to_string().len() <= MAX_UI) {
@@ -181,6 +182,13 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(v.is_boolean());
         if let Some(on) = v.as_bool() {
             s.save_in_place = on;
+        }
+    }
+    if let Some(v) = all.get("autoSaveMinutes") {
+        let minutes = v.as_u64().filter(|m| *m <= super::file::MAX_AUTOSAVE_MIN).and_then(|m| u32::try_from(m).ok());
+        took(minutes.is_some());
+        if let Some(m) = minutes {
+            s.autosave_min = m;
         }
     }
     let (mut opened, mut missing) = (0u32, 0u32);

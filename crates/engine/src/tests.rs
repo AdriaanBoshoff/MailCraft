@@ -2416,6 +2416,7 @@ fn settings_are_kept_between_runs() {
     run(&mut s, "view.readingPane", json!({"position": "bottom"}));
     run(&mut s, "view.folderPane", json!({"show": false}));
     assert_eq!(run(&mut s, "file.keepOriginal", Value::Null)["on"], false);
+    assert_eq!(run(&mut s, "file.autoSave", json!({"minutes": 12}))["minutes"], 12);
     let mut save = at(&file);
     save["ui"] = json!({"theme": "dark"});
     run(&mut s, "settings.save", save);
@@ -2432,6 +2433,7 @@ fn settings_are_kept_between_runs() {
     assert!(next.stores.is_empty());
     assert_eq!((&next.page_setup, next.reading_pane, next.folder_pane), (&s.page_setup, crate::ReadingPane::Bottom, false));
     assert!(!next.keep_original);
+    assert_eq!(next.autosave_min, 12);
     let mut again = at(&file);
     again["reopen"] = json!(true);
     let took = run(&mut next, "settings.load", again.clone());
@@ -2827,4 +2829,90 @@ fn table_style_prints_the_columns_the_headings_and_the_rows_asked_for() {
     assert!(settings["pageSetup"].get("rows").is_none());
     assert_eq!(run(&mut s, "file.pageSetup", json!({"reset": true}))["columns"], json!(["who", "subject", "date", "size", "notes"]));
     assert_eq!(s.print_list, Listing::default());
+}
+
+/// Unsaved changes are saved on their own once they have waited, at a quiet moment, and never
+/// for the first time.
+#[test]
+fn unsaved_changes_are_saved_on_their_own_but_never_first() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-autosave-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.pst");
+    run(&mut session(), "file.export", json!({"path": path}));
+    let inbox = |s: &Session| s.folders[0].iter().find(|f| f.kind == FolderKind::Inbox).unwrap().total;
+    let mut s = Session::new();
+    s.now = now();
+    assert_eq!(s.autosave_min, 5);
+    run(&mut s, "file.open", json!({"path": path}));
+    let was = inbox(&s);
+    let delete = |s: &mut Session| {
+        run(s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+        run(s, "mail.delete", Value::Null);
+    };
+    const MIN: u64 = 60_000;
+
+    // A file never saved here is not saved on its own, however long it waits.
+    delete(&mut s);
+    assert!(!s.autosave(0));
+    assert!(!s.autosave(60 * MIN));
+    assert!(s.unsaved() && !openmailclient_pst::original_beside(&path).exists());
+
+    // Once saved, the next changes are saved on their own after five minutes and a quiet moment.
+    run(&mut s, "file.save", Value::Null);
+    let t = 70 * MIN;
+    delete(&mut s);
+    assert!(!s.autosave(t));
+    assert!(!s.autosave(t + 5 * MIN - 1));
+    assert!(s.autosave(t + 5 * MIN));
+    assert!(s.is_enabled("file.stopSave"));
+    s.finish_saves();
+    assert!(!s.unsaved());
+    assert!(s.status.ends_with("on its own"), "{}", s.status);
+    // Nothing waits now.
+    assert!(!s.autosave(t + 20 * MIN));
+
+    // In use all along: not while something was done a moment ago, but at three times as long,
+    // at a pause of a second.
+    let t = 100 * MIN;
+    delete(&mut s);
+    assert!(!s.autosave(t));
+    for k in 1..=14u64 {
+        run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+        assert!(!s.autosave(t + k * MIN));
+    }
+    run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
+    assert!(!s.autosave(t + 15 * MIN));
+    assert!(!s.autosave(t + 15 * MIN + 999));
+    assert!(s.autosave(t + 15 * MIN + 1000));
+    s.finish_saves();
+    assert!(!s.unsaved());
+
+    // Off: nothing is saved on its own.
+    assert_eq!(run(&mut s, "file.autoSave", json!({"minutes": 0}))["minutes"], 0);
+    delete(&mut s);
+    assert!(!s.autosave(200 * MIN) && !s.autosave(300 * MIN));
+    assert_eq!(run(&mut s, "file.autoSave", Value::Null)["minutes"], 5);
+    assert!(s.run("file.autoSave", &json!({"minutes": 241})).is_err());
+    assert!(s.run("file.autoSave", &json!({"minutes": -1})).is_err());
+    assert_eq!(s.autosave_min, 5);
+    run(&mut s, "file.save", Value::Null);
+    drop(s);
+
+    // The next run: the file as it was is beside it from the first save, so it is saved on its own.
+    assert!(openmailclient_pst::original_beside(&path).exists());
+    let mut s = Session::new();
+    s.now = now();
+    run(&mut s, "file.open", json!({"path": path}));
+    assert_eq!(inbox(&s), was - 4);
+    delete(&mut s);
+    assert!(!s.autosave(0));
+    assert!(s.autosave(5 * MIN));
+    s.finish_saves();
+    drop(s);
+    let mut s = Session::new();
+    run(&mut s, "file.open", json!({"path": path}));
+    assert_eq!(inbox(&s), was - 5);
+    drop(s);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

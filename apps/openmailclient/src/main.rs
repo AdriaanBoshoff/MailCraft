@@ -22,6 +22,8 @@ struct App {
     written: Option<std::time::Instant>,
     /// When the journals of unsaved changes were last forced to disk.
     settled: Option<std::time::Instant>,
+    /// When the app started: the clock saving on its own goes by.
+    started: std::time::Instant,
 }
 
 impl App {
@@ -203,6 +205,11 @@ impl eframe::App for App {
         }
         self.serve(&ctx);
         self.settle();
+        // Unsaved changes that have waited long enough are saved on their own.
+        let ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if self.ui.session.autosave(ms) {
+            ctx.request_repaint();
+        }
         if self.ui.session.unsaved() {
             // A change made a moment after the last forcing is forced a second later.
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
@@ -239,7 +246,7 @@ fn main() -> ExitCode {
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
     // Journals that cannot be kept beside their data file go beside the settings.
     session.journal_dir = settings_path().and_then(|p| p.parent().map(|dir| dir.join("journals")));
-    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None };
+    let mut app = App { ui: MailUi::new(session), settings, kept: Value::Null, written: None, settled: None, started: std::time::Instant::now() };
     if let Some(path) = app.settings.clone() {
         // The data files of last time are opened again unless this run names what to open.
         let reopen = !args.iter().any(|a| a == "--sample" || !a.starts_with("--"));

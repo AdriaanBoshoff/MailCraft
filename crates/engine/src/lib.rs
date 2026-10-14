@@ -149,6 +149,8 @@ pub struct Saving {
     pub store: usize,
     pub name: String,
     pub progress: std::sync::Arc<openmailclient_model::Progress>,
+    /// True when it was started by saving on its own (`Session::autosave`), not asked for.
+    pub auto: bool,
     done: std::sync::mpsc::Receiver<Result<openmailclient_model::SaveDone, StoreError>>,
 }
 
@@ -159,7 +161,7 @@ impl Saving {
         progress: std::sync::Arc<openmailclient_model::Progress>,
         done: std::sync::mpsc::Receiver<Result<openmailclient_model::SaveDone, StoreError>>,
     ) -> Self {
-        Self { store, name, progress, done }
+        Self { store, name, progress, auto: false, done }
     }
 }
 
@@ -205,6 +207,25 @@ impl Drop for Exporting {
     }
 }
 
+/// How long nothing must be done before a data file is saved on its own.
+const QUIET_MS: u64 = 5_000;
+
+/// What saving on its own keeps between calls of `Session::autosave`.
+#[derive(Default)]
+pub(crate) struct AutoSave {
+    /// Commands run so far, and as many as the last call had seen: when they differ, something
+    /// was just done.
+    runs: u64,
+    seen: u64,
+    /// When something was last done, on the host's clock.
+    active_at: u64,
+    /// Since when data files have waited to be saved on their own; `None` while none waits.
+    due_from: Option<u64>,
+    /// Data files saved in this run: once a file has been saved, later saves may be made on
+    /// their own.
+    pub(crate) saved_here: std::collections::HashSet<std::path::PathBuf>,
+}
+
 pub struct Session {
     /// Saves of data files that are being done away from the caller: `file.save` with
     /// `"wait": false` starts them, `Session::poll` ends them.
@@ -235,6 +256,10 @@ pub struct Session {
     /// Whether a save writes what changed into the data file where it is when that can be
     /// done (`file.saveInPlace`), and not the whole file anew.
     pub save_in_place: bool,
+    /// After how many minutes unsaved changes to a data file are saved on their own
+    /// (`file.autoSave`); 0 saves only when asked.
+    pub autosave_min: u32,
+    pub(crate) auto: AutoSave,
     pub compose: Option<Draft>,
     pub status: String,
     /// Minutes east of UTC for dates shown and written into reply headers. Set by the host.
@@ -287,6 +312,8 @@ impl Session {
             animate: true,
             keep_original: true,
             save_in_place: true,
+            autosave_min: 5,
+            auto: AutoSave::default(),
             compose: None,
             status: String::new(),
             tz_offset_min: 0,
@@ -312,6 +339,7 @@ impl Session {
 
     /// Run a command by id. An escaped panic becomes an error (never-crash safety net).
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
+        self.auto.runs = self.auto.runs.wrapping_add(1);
         let spec = registry().iter().find(|c| c.id == id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if !(spec.enabled)(self) {
             return Err(EngineError::Disabled(spec.label.to_string()));
@@ -579,6 +607,66 @@ impl Session {
         any
     }
 
+    /// Save on their own the data files whose changes have waited `autosave_min` minutes,
+    /// at a moment when nothing has been done for a few seconds; a mailbox in use all along is
+    /// saved after three times as long, at the first pause of a second. Each is saved as
+    /// `file.save` with `"wait": false` does it, checked and read back, on a thread of its own.
+    /// A data file is never saved for the first time on its own: it must have been saved here
+    /// once, or have the file as it was kept beside it from a first save of an earlier run. A
+    /// save that fails is tried again after as long once more. `now_ms` is the host's clock,
+    /// which only goes forward. True when a save was begun.
+    pub fn autosave(&mut self, now_ms: u64) -> bool {
+        if self.auto.runs != self.auto.seen {
+            self.auto.seen = self.auto.runs;
+            self.auto.active_at = now_ms;
+        }
+        let due: Vec<usize> = (0..self.stores.len()).filter(|&i| self.may_save_alone(i)).collect();
+        if self.autosave_min == 0 || due.is_empty() {
+            self.auto.due_from = None;
+            return false;
+        }
+        let from = *self.auto.due_from.get_or_insert(now_ms);
+        let every = u64::from(self.autosave_min).saturating_mul(60_000);
+        let (waited, quiet) = (now_ms.saturating_sub(from), now_ms.saturating_sub(self.auto.active_at));
+        let ready = waited >= every && (quiet >= QUIET_MS || (waited >= every.saturating_mul(3) && quiet >= 1_000));
+        if !ready || !self.saves.is_empty() || !self.exports.is_empty() {
+            return false;
+        }
+        // From now: what is not saved this time waits as long again.
+        self.auto.due_from = Some(now_ms);
+        let (before, status) = (self.saves.len(), std::mem::take(&mut self.status));
+        let (mut begun, mut said) = (false, None);
+        for idx in due {
+            let name = self.stores.get(idx).map(|st| st.display_name()).unwrap_or_default();
+            match self.run("file.save", &json!({ "store": idx, "wait": false })) {
+                Ok(done) if done["started"].as_u64().unwrap_or(0) > 0 => begun = true,
+                // Where no thread can be had it was saved there and then.
+                Ok(done) if done["saved"].as_u64().unwrap_or(0) > 0 => {
+                    begun = true;
+                    said = Some(format!("Saved {name} on its own"));
+                }
+                Ok(_) => {}
+                Err(e) => said = Some(format!("{name} was not saved on its own: {e}")),
+            }
+        }
+        for saving in self.saves.iter_mut().skip(before) {
+            saving.auto = true;
+        }
+        // Saving on its own is not something the owner did.
+        self.auto.seen = self.auto.runs;
+        self.status = said.unwrap_or(status);
+        begun
+    }
+
+    /// True when the data file `idx` has changes that may be saved on their own.
+    fn may_save_alone(&self, idx: usize) -> bool {
+        let Some(st) = self.stores.get(idx) else { return false };
+        st.writable()
+            && st.unsaved()
+            && !st.saving()
+            && st.path().is_some_and(|p| self.auto.saved_here.contains(p) || openmailclient_pst::original_beside(p).exists())
+    }
+
     /// True when a data file has changes that are not in the file yet.
     pub fn unsaved(&self) -> bool {
         self.stores.iter().any(|s| s.unsaved())
@@ -671,11 +759,17 @@ impl Session {
             let saving = self.saves.remove(at);
             ended = true;
             let Some(store) = self.stores.get_mut(saving.store) else { continue };
+            let alone = if saving.auto { " on its own" } else { "" };
             self.status = match store.save_end(done) {
-                Ok(()) => format!("Saved {}", saving.name),
+                Ok(()) => {
+                    if let Some(path) = store.path() {
+                        self.auto.saved_here.insert(path.to_path_buf());
+                    }
+                    format!("Saved {}{alone}", saving.name)
+                }
                 // Stopping was asked for: not a failure, and the file is as it was.
                 Err(_) if saving.progress.stopped() => format!("Saving {} was stopped; its changes are still unsaved", saving.name),
-                Err(e) => format!("{} was not saved: {e}", saving.name),
+                Err(e) => format!("{} was not saved{alone}: {e}", saving.name),
             };
             self.refresh_folders(saving.store);
         }

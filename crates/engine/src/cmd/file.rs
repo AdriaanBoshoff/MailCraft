@@ -74,6 +74,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: save_in_place,
         },
         CommandSpec {
+            id: "file.autoSave",
+            label: "Save Changes on Their Own",
+            tab: "File",
+            group: "Save",
+            shortcut: "",
+            params: r#"{"minutes": 0 to 240}; default: 5 as it is at first, or off when on and on when off. Unsaved changes to a data file are saved on their own once they have waited this many minutes, when nothing has been done for a few seconds (in a mailbox in use all along, after three times as long), on a thread of their own and checked as Save Changes does; 0 saves only when asked. A data file is never saved for the first time on its own: one that was not saved here before waits for Save Changes. Kept with the settings; returns {"minutes"}"#,
+            enabled: always,
+            run: auto_save,
+        },
+        CommandSpec {
             id: "file.stopSave",
             label: "Stop Saving",
             tab: "File",
@@ -193,6 +203,26 @@ fn keep_original(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "on": s.keep_original }))
 }
 
+/// The longest wait `file.autoSave` takes: four hours.
+pub(crate) const MAX_AUTOSAVE_MIN: u64 = 240;
+
+fn auto_save(s: &mut Session, p: &Value) -> CmdResult {
+    s.autosave_min = match p.get("minutes") {
+        None | Some(Value::Null) if s.autosave_min == 0 => 5,
+        None | Some(Value::Null) => 0,
+        Some(v) => match v.as_u64() {
+            Some(m) if m <= MAX_AUTOSAVE_MIN => u32::try_from(m).unwrap_or(5),
+            _ => return Err(EngineError::BadParams(format!("\"minutes\" is a whole number from 0 to {MAX_AUTOSAVE_MIN}"))),
+        },
+    };
+    s.status = match s.autosave_min {
+        0 => "Changes are saved only when asked".to_string(),
+        1 => "Unsaved changes are saved on their own after a minute".to_string(),
+        m => format!("Unsaved changes are saved on their own after {m} minutes"),
+    };
+    Ok(json!({ "minutes": s.autosave_min }))
+}
+
 fn save_in_place(s: &mut Session, p: &Value) -> CmdResult {
     s.save_in_place = p_bool(p, "on").unwrap_or(!s.save_in_place);
     s.status = if s.save_in_place {
@@ -266,6 +296,9 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
         let Some(store) = s.stores.get_mut(idx) else { continue };
         let before = store.saved_in_place();
         store.save(id)?;
+        if let Some(path) = store.path() {
+            s.auto.saved_here.insert(path.to_path_buf());
+        }
         in_place += u32::from(store.saved_in_place() > before);
         saved.push(store.display_name());
         if let Some(original) = store.path().map(openmailclient_pst::original_beside).filter(|o| o.exists()) {
