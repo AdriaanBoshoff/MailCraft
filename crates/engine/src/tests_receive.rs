@@ -253,6 +253,19 @@ fn an_account_keeps_its_mail_in_a_data_file_of_its_own() {
     assert_eq!(again.stores.len(), 1, "{}", again.status);
     assert_eq!((count_in(&again, 0, "Inbox"), count_in(&again, 0, "Sent Items")), (2, 1));
 
+    // An account kept before accounts had files of their own is given one when it is loaded.
+    let older = dir.join("older.json");
+    let mut kept = settings.clone();
+    kept["accounts"][0]["email"] = json!("sam@example.test");
+    kept["accounts"][0].as_object_mut().unwrap().remove("dataFile");
+    std::fs::write(&older, kept.to_string()).unwrap();
+    let mut third = Session::new();
+    third.account_dir = Some(dir.join("Accounts"));
+    third.run("settings.load", &json!({ "path": older.display().to_string() })).unwrap();
+    assert_eq!(third.stores.len(), 1, "{}", third.status);
+    assert!(dir.join("Accounts").join("sam@example.test.pst").exists());
+    third.run("file.closeStore", &json!({ "discard": true })).unwrap();
+
     // Removing the account keeps its mail.
     again.run("account.remove", &json!({ "id": "account-1" })).unwrap();
     assert!(again.status.contains("its mail stays"), "{}", again.status);

@@ -218,13 +218,18 @@ pub(crate) fn account_store(s: &mut Session, at: usize) -> Result<Option<usize>,
     Ok(Some(idx))
 }
 
-/// Open the data files of the accounts that have one, as the settings left them; those no
-/// longer there are made again when mail next comes.
+/// Open the data file of each account, as the settings left it. Where the host keeps an
+/// account folder, an account without one yet (one added before accounts had their own) is
+/// given it now, so its mailbox is there from the start; elsewhere a file no longer there is
+/// made again when mail next comes.
 pub(crate) fn open_account_stores(s: &mut Session) -> Vec<String> {
     let mut trouble = Vec::new();
     for at in 0..s.accounts.len() {
         let there = s.accounts.get(at).and_then(|a| a.data_file.as_ref()).is_some_and(|p| p.exists());
-        if there && let Err(e) = account_store(s, at) {
+        let made_here = s.account_dir.is_some() && s.accounts.get(at).is_some_and(|a| a.data_file.is_none());
+        if (there || made_here)
+            && let Err(e) = account_store(s, at)
+        {
             trouble.push(e.to_string());
         }
     }
