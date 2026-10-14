@@ -359,6 +359,12 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         self.counted
     }
 
+    /// Count `n` bytes of node data that are kept where they are stored, not written again:
+    /// they are part of the item's size all the same.
+    pub(crate) fn count(&mut self, n: u64) {
+        self.counted = self.counted.saturating_add(n);
+    }
+
     /// A block's trailer: sixteen bytes, twelve in an ANSI file ([MS-PST] 2.2.2.8.1), 24 in
     /// one with 4K pages.
     fn trailer(&self) -> usize {

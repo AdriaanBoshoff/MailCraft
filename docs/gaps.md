@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 74 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 75 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 75 · 2026-10-14 — M3c.4: a message changed by a save has as its size what is now stored of it.
 - 74 · 2026-10-14 — M3c.3: unsaved changes are saved on their own after five minutes, never for a file's first save.
 - 73 · 2026-10-14 — M3c.2: data files with 4K pages are written, take changes and are saved as that kind; Outlook Classic opens one of ours.
 - 72 · 2026-10-14 — M3c.1: Outlook Classic opens the data files our writer makes, whole, ANSI and saved into in place, and sees what we wrote.

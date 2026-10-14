@@ -920,8 +920,11 @@ impl PstStore {
         if bid == 0 {
             return Ok(0);
         }
-        // In the file itself, the blocks are there: they are named once more.
+        // In the file itself, the blocks are there: they are named once more, and counted as
+        // if written.
         if w.in_place() {
+            let n = self.ndb.data_len(bid)?;
+            w.count(n);
             return w.keep(bid);
         }
         let blocks = self.ndb.data_blocks(bid)?;
@@ -936,11 +939,13 @@ impl PstStore {
         if bid == 0 {
             return Ok(0);
         }
-        if w.in_place() {
-            return w.keep(bid);
-        }
         if depth > MAX_COPY_DEPTH {
             return Err(PstError::Damaged("items are nested deeper than this version follows".to_string()));
+        }
+        if w.in_place() {
+            let n = self.stored_under(bid, depth, budget)?;
+            w.count(n);
+            return w.keep(bid);
         }
         let mut subs: Vec<(u32, (u64, u64))> = self.ndb.subnodes(bid)?.into_iter().collect();
         subs.sort_unstable();
@@ -949,6 +954,22 @@ impl PstStore {
             list.push(Sub { nid, data: self.copy_data(w, data, budget)?, sub: self.copy_subs(w, sub, depth + 1, budget)? });
         }
         w.subnodes(list)
+    }
+
+    /// The bytes of data stored in the subnodes under `bid`, and theirs.
+    fn stored_under(&mut self, bid: u64, depth: usize, budget: &mut usize) -> Result<u64, PstError> {
+        if bid == 0 {
+            return Ok(0);
+        }
+        if depth > MAX_COPY_DEPTH {
+            return Err(PstError::Damaged("items are nested deeper than this version follows".to_string()));
+        }
+        let mut n = 0u64;
+        for (data, sub) in self.ndb.subnodes(bid)?.into_values() {
+            *budget = budget.checked_sub(1).ok_or_else(|| PstError::Damaged("the file's blocks point at each other without end".to_string()))?;
+            n = n.saturating_add(self.ndb.data_len(data)?).saturating_add(self.stored_under(sub, depth + 1, budget)?);
+        }
+        Ok(n)
     }
 
     fn copy_node<W: Read + Write + Seek>(&mut self, o: &mut Out<W>, nid: u32, parent: u32, e: NbtEntry, budget: &mut usize) -> Result<(), PstError> {
@@ -1161,6 +1182,9 @@ impl PstStore {
     ) -> Result<(u64, u64, Vec<Raw>, Vec<u16>), PstError> {
         let old = self.message(e.data, e.sub, 0)?;
         let (mut props, mut kept) = self.open_pc(e)?;
+        // Its size is what is stored of it once it is written ([MS-PST] 2.4.4.5.1 lists
+        // PidTagMessageSize in each row): counted from here.
+        let from = o.w.counted();
         let mut removed = Vec::new();
         let ids: HashSet<u16> =
             old.props.iter().chain(new.props.iter()).map(|(id, _)| id).filter(|id| *id < 0x8000 && !LTP_INTERNAL.contains(id)).collect();
@@ -1214,8 +1238,12 @@ impl PstStore {
             props.insert(pid::HASATTACH, flag(pid::HASATTACH, has));
         }
         o.w.within(outer);
-        let cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
-        let (data, sub, _) = self.close_pc(o, props, &kept, more, None, budget)?;
+        props.insert(pid::MESSAGE_SIZE, int(pid::MESSAGE_SIZE, 0));
+        let mut cells: Vec<Raw> = props.values().filter(|r| r.data.len() <= MAX_CELL).map(copy).collect();
+        let (data, sub, size) = self.close_pc(o, props, &kept, more, Some(Late::Stored { id: pid::MESSAGE_SIZE, from }), budget)?;
+        if let Some(cell) = cells.iter_mut().find(|c| c.id == pid::MESSAGE_SIZE) {
+            *cell = int(pid::MESSAGE_SIZE, size);
+        }
         Ok((data, sub, cells, removed))
     }
 

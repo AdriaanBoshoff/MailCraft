@@ -261,6 +261,25 @@ impl<'a> Ndb<'a> {
         Ok(out)
     }
 
+    /// How many bytes of data a node's data holds, without reading more than its first block:
+    /// a block's size, inflated where it is compressed, or the total an XBLOCK or XXBLOCK gives
+    /// (lcbTotal, [MS-PST] 2.2.2.8.3.2.1).
+    pub(crate) fn data_len(&mut self, bid: u64) -> Result<u64, PstError> {
+        if bid == 0 {
+            return Ok(0);
+        }
+        if bid & 2 == 0 {
+            let e = *self.bbt.get(&(bid & !1)).ok_or_else(|| damaged("a block is missing from the index"))?;
+            let n = if self.ver == Ver::Unicode4k && e.inflated != 0 { e.inflated } else { e.cb };
+            return Ok(u64::from(n));
+        }
+        let x = self.block(bid)?;
+        if x.first() != Some(&1) {
+            return Err(damaged("a data tree block is not valid"));
+        }
+        Ok(u64::from(u32_at(&x, 4).unwrap_or(0)))
+    }
+
     /// How many blocks the file has.
     pub(crate) fn block_count(&self) -> usize {
         self.bbt.len()

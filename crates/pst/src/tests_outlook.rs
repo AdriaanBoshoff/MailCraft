@@ -191,3 +191,62 @@ fn sizes_are_what_is_stored_and_rows_say_the_same() {
         assert_eq!((files_seen, objects, inside), (4, 1, 1));
     }
 }
+
+/// Every message in the file has as its size what is stored of it, and its row says the same.
+fn sizes_hold(bytes: &[u8], what: &str) -> usize {
+    let mut ndb = open(bytes);
+    let messages: Vec<u32> = ndb.nbt.keys().copied().filter(|n| n & 0x1F == 0x04).collect();
+    for nid in &messages {
+        let e = *ndb.nbt.get(nid).unwrap();
+        let size = int(&props(&mut ndb, e.data, e.sub), pid::MESSAGE_SIZE).unwrap();
+        assert_eq!(size as usize, stored(&mut ndb, e.data, e.sub), "message {nid:#x} ({what})");
+        let t = *ndb.nbt.get(&(e.parent & !0x1F | 0x0E)).unwrap();
+        let row = table(&mut ndb, t.data, t.sub).into_iter().find(|r| r.id == *nid).unwrap();
+        assert_eq!(int(&row.cells, pid::MESSAGE_SIZE), Some(size), "the row of {nid:#x} ({what})");
+    }
+    messages.len()
+}
+
+#[test]
+fn a_message_changed_by_a_save_has_the_size_now_stored() {
+    use crate::tests_edit::{folder, scratch};
+    use openmailclient_model::{Attachment, ItemId};
+    for (bytes, ansi) in files() {
+        for in_place in [true, false] {
+            let what = format!("ansi: {ansi}, in place: {in_place}");
+            let dir = scratch(&format!("sizes-{ansi}-{in_place}"));
+            let path = dir.join("box.pst");
+            std::fs::write(&path, &bytes).unwrap();
+            let mut store = PstStore::open(&path).unwrap();
+            store.keep_original(false);
+            store.save_in_place(in_place);
+            let inbox = folder(&mut store, "Inbox");
+            let listed = store.list(inbox.id).unwrap();
+            // One message only marked read: its recipients and attachments stay as stored.
+            let first = ItemId(listed[0].id);
+            let mut item = store.load(inbox.id, first).unwrap();
+            item.set_read(!item.is_read());
+            store.update(inbox.id, first, item).unwrap();
+            // One given a file: it is larger by about as much.
+            let second = ItemId(listed[1].id);
+            let was = store.list(inbox.id).unwrap()[1].size;
+            let mut item = store.load(inbox.id, second).unwrap();
+            item.attachments.push(Attachment::file("added.bin", "application/octet-stream", vec![7; 20_000]));
+            store.update(inbox.id, second, item).unwrap();
+            store.save(UID).unwrap();
+            assert_eq!(store.saved_in_place(), u64::from(in_place), "{what}");
+            let now = std::fs::read(&path).unwrap();
+            assert!(sizes_hold(&now, &what) >= 4);
+            let size = PstStore::open(&path).unwrap().list(inbox.id).unwrap()[1].size;
+            assert!(size >= was + 20_000, "{was} then {size} ({what})");
+            // Once more, on what the first save wrote.
+            let mut item = store.load(inbox.id, first).unwrap();
+            item.set_read(!item.is_read());
+            store.update(inbox.id, first, item).unwrap();
+            store.save(UID).unwrap();
+            sizes_hold(&std::fs::read(&path).unwrap(), &what);
+            drop(store);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}

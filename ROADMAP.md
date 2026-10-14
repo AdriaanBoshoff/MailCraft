@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); next the rest of M3c, then accounts (M4) · revision 84 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); next the rest of M3c, then accounts (M4) · revision 85 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 348, all passing |
+| Tests | 349, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -20,7 +20,7 @@
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
-| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); next the size of a message changed in place |
+| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); next files from before M3c.1 |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -120,7 +120,8 @@
 68. Done: Outlook Classic opens the data files our writer makes, Unicode, ANSI and saved into in place, and sees every folder and message as we wrote them (M3c.1).
 69. Done: Data files with 4K pages, the kind newer versions of Outlook make, are written, take changes and are saved as that kind; Outlook Classic opens one of ours and sees the same mailbox as in our Unicode file (M3c.2).
 70. Done: Unsaved changes to a data file are saved on their own after five minutes at a quiet moment, checked as Save Changes is, and never for a file's first save (M3c.3).
-71. Next: M3c.4: the size of a message changed by an in-place save. Then the rest of M3c (files from before M3c.1, export from an `.ost` or a 4K file carrying hidden items, compressed 4K blocks), then M4: accounts. M1's checks against Outlook stay open.
+71. Done: A message changed by a save, into the file where it is or whole, is given as its size what is now stored of it, in the message and in its folder's row (M3c.4).
+72. Next: M3c.5: data files written before M3c.1 rewritten whole on their first save. Then the rest of M3c (export from an `.ost` or a 4K file carrying hidden items, compressed 4K blocks), then M4: accounts. M1's checks against Outlook stay open.
 
 ## Do later (from M2)
 
@@ -151,7 +152,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~A `.pst` from our writer opened in Outlook Classic; with it, where a message attached to a message is kept~~ | done: M3c.1 |
 | The bucket of a named property, written from the specification alone, seen by Outlook (no message of ours has a named property yet) | M5, with categories and custom fields |
 | Node 0xC01, which Outlook makes when it first opens a file of ours (its layout is in no specification; Outlook makes it itself) | when its layout can be learned black-box from files Outlook writes |
-| The size of a message changed by an in-place save (it keeps the size it had; Outlook accepts it within a tenth) | M3c |
+| ~~The size of a message changed by an in-place save~~ (and by a whole one) | done: M3c.4 |
 | Files written by OpenMailClient before M3c.1 are refused by Outlook until written whole once (`file.export`); a save could do that by itself | M3c |
 | A save into an Outlook-written `.pst` with 512-byte pages, opened in Outlook afterwards (none at hand; Outlook could not be made to create one) | M1 checks against Outlook |
 | An attached object that is not a real storage: Outlook lists no attachment for it | M5, with attachments of other programs |
@@ -1515,3 +1516,13 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   says so and is tried again after as long once more, not at every frame. The window's host
   gives the clock (`Session::autosave`); the engine has none, so the web app is not held up.
   1 test, and the settings test takes the new setting.
+- **2026-10-14** - M3c.4: the size of a message changed by a save. A changed message kept the
+  PidTagMessageSize it had: a flag was right, but a file added or taken away left the size
+  wrong (Outlook accepts a size within a tenth; a large attachment is far outside that). Now
+  the size is worked out as the message is written, as it is for a new one: the bytes of its
+  property list and of every subnode, those written again and those kept where they are
+  stored. Kept blocks are not read for it: a block's size is in the file's index, and a data
+  tree's total in its first block (lcbTotal, [MS-PST] 2.2.2.8.3.2.1), so a flag on a message
+  with a large attachment still reads a few blocks. The folder's row takes the same size.
+  Unicode and ANSI, saved into in place and whole, twice over: 1 test, which fails on the
+  code before.
