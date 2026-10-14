@@ -418,6 +418,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             out,
             crypt: onto.crypt,
             ansi: onto.ansi,
+            big: false,
             text: None,
             section,
             index: onto.first,

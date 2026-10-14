@@ -267,8 +267,6 @@ fn the_trees_of_a_large_ansi_file_come_back() {
         let e = *ndb.nbt.get(&((0x2000 + i) << 5 | 4)).unwrap();
         assert_eq!(ndb.data(e.data).unwrap(), pattern(64, 500 + i));
     }
-    // A file with 4K pages is not written.
-    assert!(matches!(NdbWriter::of(Cursor::new(Vec::new()), 1, Ver::Unicode4k), Err(PstError::Write(_))));
 }
 
 #[test]

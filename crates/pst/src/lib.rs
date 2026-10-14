@@ -25,7 +25,7 @@ mod write;
 pub use check::{Check, check, check_until};
 pub use edit::original_beside;
 pub use journal::{journal_beside, journal_elsewhere, set_aside};
-pub use store_write::{Written, write_store, write_store_ansi, write_store_until};
+pub use store_write::{Written, write_store, write_store_4k, write_store_ansi, write_store_until};
 pub use undo::undo_beside;
 
 use ltp::Raw;
@@ -573,6 +573,8 @@ impl Store for PstStore {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_4k;
 #[cfg(test)]
 mod tests_ansi;
 #[cfg(test)]

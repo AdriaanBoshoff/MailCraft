@@ -176,6 +176,9 @@ pub enum PstKind {
     Unicode,
     /// The kind older programs read ([MS-PST] 2.2.2.6, wVer 14), of at most 2 GB.
     Ansi,
+    /// Pages of 4096 bytes and blocks of up to 64 KB (wVer 36), the kind newer versions of
+    /// Outlook make; in no specification, measured on files Outlook wrote.
+    Big,
 }
 
 impl PstKind {
@@ -185,7 +188,8 @@ impl PstKind {
             None => Ok(PstKind::AsItIs),
             Some("unicode") => Ok(PstKind::Unicode),
             Some("ansi") => Ok(PstKind::Ansi),
-            Some(other) => Err(EngineError::BadParams(format!("a data file is written as \"unicode\" or \"ansi\", not {other:?}"))),
+            Some("4k") => Ok(PstKind::Big),
+            Some(other) => Err(EngineError::BadParams(format!("a data file is written as \"unicode\", \"ansi\" or \"4k\", not {other:?}"))),
         }
     }
 
@@ -195,10 +199,16 @@ impl PstKind {
         if self == PstKind::AsItIs {
             return true;
         }
-        // HEADER, wVer at 10 ([MS-PST] 2.2.2.6): 14 and 15 are ANSI files.
+        // HEADER, wVer at 10 ([MS-PST] 2.2.2.6): 14 and 15 are ANSI files, 36 one with 4K
+        // pages (measured).
         let mut head = [0u8; 12];
         let read = store.path().and_then(|p| std::fs::File::open(p).ok()).is_some_and(|mut f| f.read_exact(&mut head).is_ok());
-        read && (matches!(u16::from_le_bytes([head[10], head[11]]), 14 | 15) == (self == PstKind::Ansi))
+        let source = match u16::from_le_bytes([head[10], head[11]]) {
+            14 | 15 => PstKind::Ansi,
+            36 => PstKind::Big,
+            _ => PstKind::Unicode,
+        };
+        read && source == self
     }
 }
 
@@ -312,6 +322,7 @@ fn write_checked(
     let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
     let written = match kind {
         PstKind::Ansi => openmailclient_pst::write_store_ansi(file, store, id, progress),
+        PstKind::Big => openmailclient_pst::write_store_4k(file, store, id, progress),
         _ => openmailclient_pst::write_store_until(file, store, id, progress),
     };
     let (mut file, done) = written.map_err(pst_error)?;

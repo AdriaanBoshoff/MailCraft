@@ -461,15 +461,16 @@ impl<W: Read + Write + Seek> Out<W> {
     }
 
     /// A table as a node's data and subnodes.
-    fn table(&mut self, columns: &[(u16, u16)], rows: &[Row]) -> Result<(u64, u64), PstError> {
+    fn table(&mut self, nid: u32, columns: &[(u16, u16)], rows: &[Row]) -> Result<(u64, u64), PstError> {
         let mut subs = Subs::new(1);
         let data = write_tc(&mut self.w, columns, rows, &mut subs)?;
+        contents_extra(&mut self.w, nid, &mut subs)?;
         Ok((data, self.w.subnodes(subs.list)?))
     }
 
     /// A top-level node holding a table. Tables have no parent.
     pub(crate) fn tc_node(&mut self, nid: u32, columns: &[(u16, u16)], rows: &[Row]) -> Result<(), PstError> {
-        let (data, sub) = self.table(columns, rows)?;
+        let (data, sub) = self.table(nid, columns, rows)?;
         self.w.node(nid, 0, data, sub);
         Ok(())
     }
@@ -574,7 +575,7 @@ impl<W: Read + Write + Seek> Out<W> {
             cells.insert(pid::ROWID, int(pid::ROWID, count(u64::from(id))));
             rows.push(Row { id, cells: cells.into_values().filter(|c| fits(RECIPIENTS, c)).collect() });
         }
-        let (table, table_sub) = self.table(RECIPIENTS, &rows)?;
+        let (table, table_sub) = self.table(0, RECIPIENTS, &rows)?;
         Ok(Sub { nid: NID_RECIPIENT_TABLE, data: table, sub: table_sub })
     }
 
@@ -602,7 +603,7 @@ impl<W: Read + Write + Seek> Out<W> {
 
     /// The attachment table of a message ([MS-PST] 2.4.6.1), as a subnode.
     pub(crate) fn attachment_table(&mut self, rows: &[Row]) -> Result<Sub, PstError> {
-        let (data, sub) = self.table(ATTACHMENTS, rows)?;
+        let (data, sub) = self.table(0, ATTACHMENTS, rows)?;
         Ok(Sub { nid: NID_ATTACHMENT_TABLE, data, sub })
     }
 
@@ -705,6 +706,34 @@ pub fn write_store_ansi<W: Read + Write + Seek>(
     write_store_of(out, store, uid, progress, crate::ndb::Ver::Ansi)
 }
 
+/// A contents table in a file with 4K pages has two subnodes more, 0x521 and 0x541, each a
+/// heap with the client signature 0xA5, which [MS-PST] 2.3.1.2 calls reserved (measured). In
+/// the empty tables of the files measured both are heaps with nothing in them; Outlook's Inbox
+/// Repair Tool reads a contents table without them, the template 0x60E among them, as broken.
+/// What they hold for a table with rows is not known, and they are written empty.
+pub(crate) fn contents_extra<W: Read + Write + Seek>(w: &mut NdbWriter<W>, nid: u32, subs: &mut Subs) -> Result<(), PstError> {
+    if w.big() && nid & 0x1F == TYPE_CONTENTS {
+        for at in [0x521, 0x541] {
+            let empty = crate::ltp_write::Heap::new(0xA5, w.max_data()).finish(0);
+            let data = w.data(empty)?;
+            subs.list.push(Sub { nid: at, data, sub: 0 });
+        }
+    }
+    Ok(())
+}
+
+/// `write_store_until` for a data file with 4K pages (wVer 36), the kind newer versions of
+/// Outlook make: pages of 4096 bytes and blocks of up to 64 KB. The layout is in no
+/// specification; it was measured on files Outlook wrote (see `write::big`).
+pub fn write_store_4k<W: Read + Write + Seek>(
+    out: W,
+    store: &mut dyn Store,
+    uid: [u8; 16],
+    progress: Option<&openmailclient_model::Progress>,
+) -> Result<(W, Written), PstError> {
+    write_store_of(out, store, uid, progress, crate::ndb::Ver::Unicode4k)
+}
+
 fn write_store_of<W: Read + Write + Seek>(
     out: W,
     store: &mut dyn Store,
@@ -718,7 +747,7 @@ fn write_store_of<W: Read + Write + Seek>(
         p.begin(listed.iter().map(|f| u64::from(f.total)).sum::<u64>().saturating_mul(2));
     }
     // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
-    let mut o = Out { w: NdbWriter::of(out, 1, ver)?, names: Names::default(), uid, serial: 0 };
+    let mut o = Out { w: NdbWriter::of(out, crate::write::crypt_of(ver), ver)?, names: Names::default(), uid, serial: 0 };
     let mut done = Written::default();
 
     // 0: the top of the visible tree; 1…: the source's folders in its order.
@@ -907,6 +936,7 @@ fn write_store_of<W: Read + Write + Seek>(
         let wide = nid == NID_TEMPLATE_17 || nid == NID_TEMPLATE_18;
         let mut subs = Subs::new(1);
         let data = write_tc_as(&mut o.w, columns, &[], &mut subs, wide)?;
+        contents_extra(&mut o.w, nid, &mut subs)?;
         let sub = o.w.subnodes(subs.list)?;
         o.w.node(nid, 0, data, sub);
     }

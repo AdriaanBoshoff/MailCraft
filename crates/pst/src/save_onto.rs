@@ -107,7 +107,8 @@ impl PstStore {
     /// this file, or was tried and undone: the file is as it was, and is to be written whole.
     pub(crate) fn in_place(&mut self, path: &Path, seed: [u8; 16]) -> Result<Option<Written>, PstError> {
         self.onto_failed = None;
-        if !self.in_place || self.torn.is_some() || !self.can_edit() {
+        // A file with 4K pages is written whole: what heads its later sections is not known.
+        if !self.in_place || self.torn.is_some() || !self.can_edit() || self.ndb.ver == crate::ndb::Ver::Unicode4k {
             return Ok(None);
         }
         // The first save keeps the file as it was under another name, which costs nothing

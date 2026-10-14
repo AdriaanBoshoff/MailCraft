@@ -2660,7 +2660,21 @@ fn a_mailbox_is_exported_as_an_ansi_file_and_such_a_file_stays_one() {
     assert_eq!((&done["copied"], &done["unreadable"]), (&json!(false), &json!(0)));
     assert_eq!(kind_of(&old), 14);
     sound(&old);
-    assert!(s.run("file.export", &json!({"path": dir.join("no.pst"), "kind": "4k"})).is_err());
+    // With 4K pages (wVer 36, measured on files Outlook wrote), and back again: a copy of it
+    // as it is stored keeps the kind, one asked for as Unicode is not a copy.
+    let big = dir.join("big.pst");
+    assert_eq!(run(&mut s, "file.export", json!({"path": big, "kind": "4k"}))["copied"], false);
+    assert_eq!(kind_of(&big), 36);
+    sound(&big);
+    let mut from_big = Session::new();
+    from_big.now = now();
+    run(&mut from_big, "file.open", json!({"path": big}));
+    assert_eq!(run(&mut from_big, "file.export", json!({"path": dir.join("big2.pst")}))["copied"], true);
+    assert_eq!(kind_of(&dir.join("big2.pst")), 36);
+    assert_eq!(run(&mut from_big, "file.export", json!({"path": dir.join("wide.pst"), "kind": "unicode"}))["copied"], false);
+    assert_eq!(kind_of(&dir.join("wide.pst")), 23);
+    sound(&dir.join("big2.pst"));
+    assert!(s.run("file.export", &json!({"path": dir.join("no.pst"), "kind": "8k"})).is_err());
     assert!(s.run("file.export", &json!({"path": dir.join("no.pst"), "kind": 14})).is_ok_and(|v| v["copied"] == false));
     assert_eq!(kind_of(&dir.join("no.pst")), 23, "a kind that is not text is no kind named");
 

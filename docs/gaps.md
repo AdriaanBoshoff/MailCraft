@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 72 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 73 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,7 +9,7 @@
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
    (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; what we write, saved whole or into the file, opens in
    Outlook Classic with every folder and message as we wrote them (M3c.1), but no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
-   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21); an `.ost` and a 4K-page file are read-only. `file.export` copies a
+   after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21), and a 4K-page `.pst` as a 4K-page file, written whole (M3c.2); an `.ost` is read-only. `file.export` copies a
    Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
    (associated) items and folder properties beyond name, class and counts are not carried then, and
    the new file does not say which folder is the Calendar or Contacts. Changes
@@ -55,10 +55,10 @@
    produced by a test-only builder, including truncated, corrupted and cyclic ones. Checked locally
    against a few small Outlook-written 4K-page `.ost` files (wVer 36): every folder and every item
    loaded. No Outlook-written Unicode or ANSI `.pst`, and no large mailbox, has been tried yet.
-8. **Only a small committed fixture for 4K-page files.** The real files used for the check above are
-   private and stay local; the writer only writes 512-byte-page files. A small 4K-page file is put
-   together by hand in `crates/pst/src/tests_check_kinds.rs` for the structure check (M3b.20): a few
-   nodes, no mailbox.
+8. **4K-page files in tests are our own.** The real files used for the check above are private and
+   stay local. The writer makes 4K-page files (M3c.2) and `crates/pst/src/tests_4k.rs` writes, reads,
+   changes and checks whole mailboxes in them, one of 1,500 messages among them; Outlook opens such a
+   file. None of them has a heap of more than one block written by Outlook to compare with.
 9. **`.msg`/`.oft` output is checked in Outlook Classic only for plain mail.** Outlook opens our
    messages and templates and reads back subject, sender, recipients, times, flags, categories, bodies
    and a file attachment ([file-format-parity.md](file-format-parity.md)). Attached messages, inline
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 73 · 2026-10-14 — M3c.2: data files with 4K pages are written, take changes and are saved as that kind; Outlook Classic opens one of ours.
 - 72 · 2026-10-14 — M3c.1: Outlook Classic opens the data files our writer makes, whole, ANSI and saved into in place, and sees what we wrote.
 - 71 · 2026-10-13 — M3b.29: a save writes what changed into the data file where it is, with an undo file beside it until the save is checked; M3b is closed.
 - 70 · 2026-10-13 — M3b.28: metafiles draw parts of bitmaps, mirrored, turned and run-packed ones, every way of mixing, hatched and patterned brushes, and regions.

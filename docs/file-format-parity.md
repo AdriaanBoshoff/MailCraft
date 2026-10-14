@@ -1,6 +1,6 @@
 # File format parity
 
-**Status:** revision 24 · 2026-10-14 · files we write open in Outlook Classic with every folder and message as written, whole, ANSI and saved into in place (M3c.1); a save writes what changed into the data file where it is, with an undo file beside it until the save is checked (M3b.29); ANSI data files are written and an open one takes changes and stays ANSI (M3b.21); the structure check covers ANSI and 4K-page files (M3b.20); an export of any mailbox runs on a thread of its own (M3b.19); values of another type than their column's are shown as the column holds them, the structure check hears Stop and compares fill levels (M3b.18); attachments with new contents keep what is stored on them, unreadable ones are carried (M3b.17); values keep their kind and a saved file goes on from the header's counters (M3b.16); an exported file names the other modules' folders by id (M3b.15); an export of a Unicode `.pst` runs on a thread of its own (M3b.14); the structure check looks inside nodes (M3b.13); an attachment keeps what is stored on it when a message's attachments change, and search-folder rows of changed messages are brought up to date (M3b.11); the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1); nothing our writer made has been opened in Outlook yet
+**Status:** revision 25 · 2026-10-14 · data files with 4K pages are written, take changes and are saved as that kind, and Outlook Classic opens one of ours (M3c.2); files we write open in Outlook Classic with every folder and message as written, whole, ANSI and saved into in place (M3c.1); a save writes what changed into the data file where it is, with an undo file beside it until the save is checked (M3b.29); ANSI data files are written and an open one takes changes and stays ANSI (M3b.21); the structure check covers ANSI and 4K-page files (M3b.20); an export of any mailbox runs on a thread of its own (M3b.19); values of another type than their column's are shown as the column holds them, the structure check hears Stop and compares fill levels (M3b.18); attachments with new contents keep what is stored on them, unreadable ones are carried (M3b.17); values keep their kind and a saved file goes on from the header's counters (M3b.16); an exported file names the other modules' folders by id (M3b.15); an export of a Unicode `.pst` runs on a thread of its own (M3b.14); the structure check looks inside nodes (M3b.13); an attachment keeps what is stored on it when a message's attachments change, and search-folder rows of changed messages are brought up to date (M3b.11); the journal is kept in a folder of our own when the data file's folder cannot be written (M3b.7); `file.export` copies a Unicode `.pst` as it is stored (M3b.2); unsaved changes are journalled beside the file (M3b.1)
 
 What each format carries in each direction, and how it was checked. "Outlook" means Outlook Classic
 (version 16.0) driven through its automation interface on the dev machine: it opens the file and reports
@@ -45,7 +45,7 @@ Outlook window (only the automation interface was used).
 
 ## `.pst` and `.ost` ([MS-PST])
 
-Read: ANSI, Unicode and 4K-page files. Written: Unicode and ANSI files (M3b.21); in an ANSI file text is 8-bit in the code page it will be read in when those bytes read back the same, and Unicode text otherwise. See [gaps.md](gaps.md) items 2, 7 and 8.
+Read: ANSI, Unicode and 4K-page files. Written: Unicode and ANSI files (M3b.21) and 4K-page files (M3c.2); in an ANSI file text is 8-bit in the code page it will be read in when those bytes read back the same, and Unicode text otherwise. See [gaps.md](gaps.md) items 2, 7 and 8.
 
 Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 
@@ -71,7 +71,8 @@ Written so far (M3.1, M3.2), Unicode with 512-byte pages only:
 | Which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts (ids on the root and the Inbox, [MS-OXOSFLD] 2.2.3) | kept by `file.save` and by `file.export` of a Unicode `.pst`; written by `file.export` from other sources; read from the root | read back |
 | Changing a Unicode `.pst` that is open (`file.save`) | yes: nodes not touched are copied block for block; a changed message keeps every stored property that was not changed, also those under ids no name stands for; when its attachments change, each attachment the file holds stays in its subnode with every stored property (matched by being the same, or by its contents), and only new ones are written from the model; a search folder's table loses the rows of deleted messages and shows changed ones as they are now | read back: messages changed, moved, deleted and added, folders made, renamed, moved and deleted; attachments reordered, renamed, added and removed with a property no name stands for on each; a search table with rows written as another program would; damaged files; three local copies (counts only) |
 | Changing an ANSI `.pst` that is open (`file.save`) | yes, as a Unicode one, and it is saved as an ANSI file (M3b.21) | read back over three saves, each held against the structure check; no Outlook-written ANSI file tried |
-| Changing a 4K-page file, an `.ost` | no: read-only | a 4K-page `.pst` with writing that kind (see ROADMAP, Do later); an `.ost` never |
+| Changing a 4K-page `.pst` that is open (`file.save`) | yes, written whole as a 4K-page file (M3c.2); not into the file where it is | read back after a save, held against the structure check |
+| Changing an `.ost` | no: read-only, it is a server's copy | never |
 
 **Seen in Outlook (M3c.1, 2026-10-13).** With the owner's say, copies of files this writer made
 were added to the Outlook profile as extra data files through its automation interface, read and
@@ -97,6 +98,32 @@ message changed by an in-place save is kept as it was (within what Outlook accep
 before M3c.1 are refused until exported once; an attached object that is not a real storage shows
 as no attachment; no Outlook-written 512-byte-page `.pst` has been saved into. Each has a row in
 ROADMAP, Do later.
+
+**4K pages (M3c.2).** A data file with wVer 36, the kind newer versions of Outlook make, is in
+no specification. What is written was measured on the few small Outlook-written `.ost` files kept
+locally (their layout only, never their contents) and on what Outlook's Inbox Repair Tool asked of
+files of ours:
+
+| Part | Written (measured, not specified) |
+|---|---|
+| Header | "SM", wVer 36, wVerClient 19 (the repair tool asks 19 of a `.pst`; the `.ost` files measured have 12), the two maps of the header zero, bCryptMethod 0 |
+| Pages | 4096 bytes: 4072 of body and a trailer of 24 (ptype twice, wSig, crc, bid, then a 16-bit 1) |
+| Allocation maps | one heads each section of 4072 × 8 × 512 bytes (16 MB), the first at 0x22000, one bit for 512 bytes; no page maps, free maps or free page maps |
+| Density list | at 0x21000, empty, carrying the header's next page id |
+| Blocks | up to 65,512 bytes of data on 512-byte slots, a trailer of 24 (cb, wSig, crc, bid, a 16-bit 2, the inflated size, four zero bytes); not encoded |
+| B-tree pages | 4056 bytes of entries, 16-bit counts at 4056 and 4058, entry size at 4060 and level at 4061; block-tree leaves carry the inflated size |
+| Heaps | as [MS-PST] 2.3.1, with blocks of 64 KB; a HID past the first block has the block number at bit 19, our reading (no Outlook-written heap of more than one block was at hand) |
+| Contents tables | as [MS-PST] 2.3.4, with two subnodes more, 0x521 and 0x541: heaps with the client signature 0xA5 ([MS-PST] 2.3.1.2 calls it reserved), written empty. The repair tool reads a contents table without them, the template 0x60E too, as broken |
+
+| File | Repair tool (scan) | Outlook |
+|---|---|---|
+| A whole 4K-page `.pst` (`file.export` with `"kind": "4k"`) | only that it makes an HMP, as of our Unicode files | opens; the same folders, counts, unread counts and 17 messages, field for field, as a Unicode file of the same mailbox opened beside it |
+| The same file after Outlook opened it, read back here | — | Outlook added Calendar, Contacts and Tasks, as to any store it first opens; every item read; our structure check finds nothing |
+
+Not known, and written as said or not at all (each a row in ROADMAP, Do later): what 0x521 and
+0x541 hold for a table with rows; where Outlook puts the block number of a HID; what heads a
+section after the first in a file Outlook grew (so a 4K-page file is saved whole, never into the
+file where it is); compressed blocks, which are read and not written.
 
 `file.export` writes the new file beside the target, holds it
 against the structure check and only then puts it in the target's place. `file.save` does the

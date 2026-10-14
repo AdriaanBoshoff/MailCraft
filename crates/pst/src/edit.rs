@@ -10,7 +10,7 @@
 use crate::journal::{self, Diff, Found, Journal, Op};
 use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Late, NID_TYPE_OBJECT, Subs, encode, write_pc_late};
-use crate::ndb::{NbtEntry, Ndb, Subnodes, Ver, u32_at};
+use crate::ndb::{NbtEntry, Ndb, Subnodes, u32_at};
 use crate::store_write::{
     ASSOC, ATTACHMENTS, CONTENTS, CONTENTS_MORE, HIERARCHY, MAX_CELL, MAX_INDEX, Names, Out, Written, attachment_cells, cannot, cell_for, copy,
     count, flag, int, text,
@@ -202,11 +202,11 @@ fn stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
 }
 
 impl PstStore {
-    /// True when changes to this data file can be kept: a `.pst`, Unicode or ANSI, and it is
-    /// saved as the kind it is. A file with 4K pages is in no specification and is not
-    /// written. An `.ost` is a copy of a mailbox on a server and is only ever read.
+    /// True when changes to this data file can be kept: a `.pst` of any kind, and it is
+    /// saved as the kind it is (one with 4K pages is written whole). An `.ost` is a copy of
+    /// a mailbox on a server and is only ever read.
     pub(crate) fn can_edit(&self) -> bool {
-        self.ndb.ver != Ver::Unicode4k && !self.path.as_deref().is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ost")))
+        !self.path.as_deref().is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ost")))
     }
 
     pub(crate) fn note_stamp(&mut self) {
@@ -584,9 +584,6 @@ impl PstStore {
         seed: [u8; 16],
         put: Vec<(u32, u32, Vec<Raw>)>,
     ) -> Result<(W, Written), PstError> {
-        if self.ndb.ver == Ver::Unicode4k {
-            return Err(PstError::Write("a data file with 4K pages is not written by this version".to_string()));
-        }
         let edits = self.edits.take();
         let done = self.write(out, seed, edits.as_ref(), put);
         self.edits = edits;
@@ -603,7 +600,12 @@ impl PstStore {
         // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
         // The file is written as the kind it is: what is copied block for block has blocks
         // of that kind's size.
-        let mut o = Out { w: NdbWriter::of(out, 1, self.ndb.ver)?, names: Names::seeded(&self.names), uid: seed, serial: 0 };
+        let mut o = Out {
+            w: NdbWriter::of(out, crate::write::crypt_of(self.ndb.ver), self.ndb.ver)?,
+            names: Names::seeded(&self.names),
+            uid: seed,
+            serial: 0,
+        };
         o.w.carry(self.ndb.counters);
         let (o, done) = self.write_into(o, edits, put)?;
         Ok((o.w.finish()?, done))
@@ -899,6 +901,7 @@ impl PstStore {
         o.w.near(e.data, e.sub);
         let mut subs = Subs::new(1);
         let data = crate::ltp_write::write_tc(&mut o.w, &columns, &rows, &mut subs)?;
+        crate::store_write::contents_extra(&mut o.w, nid, &mut subs)?;
         let sub = o.w.subnodes(subs.list)?;
         o.w.node(nid, e.parent, data, sub);
         Ok(true)

@@ -13,9 +13,14 @@ use std::io::{Read, Seek, Write};
 
 /// The largest allocation a heap holds; a larger value lives in a subnode ([MS-PST] 2.3.3.3).
 pub(crate) const MAX_ALLOC: usize = 3580;
-/// An HID has 11 bits of index within a block and 16 of block ([MS-PST] 2.3.1.1).
+/// An HID has 11 bits of index within a block and 16 of block ([MS-PST] 2.3.1.1). In a file
+/// with 4K pages blocks are larger and an HID is read with 14 bits of index and 13 of block
+/// (measured on files Outlook wrote, whose heaps were all of one block: the split is
+/// unproved); no more than 11 bits of index are used, so that either reading finds the
+/// allocation within a block.
 const MAX_PER_BLOCK: usize = 0x7FF;
 const MAX_BLOCKS: usize = 0x1_0000;
+const MAX_BLOCKS_WIDE: usize = 0x2000;
 /// Subnodes that hold values are of this type ([MS-PST] 2.2.2.1 NID_TYPE_LTP).
 const NID_TYPE_LTP: u32 = 0x1F;
 /// The two columns every table has ([MS-PST] 2.3.4.4.1).
@@ -32,12 +37,23 @@ pub(crate) struct Heap {
     sig: u8,
     /// The most bytes a block of the file holds.
     max: usize,
+    /// HIDs of a file with 4K pages.
+    wide: bool,
     blocks: Vec<Vec<Vec<u8>>>,
 }
 
 impl Heap {
     pub(crate) fn new(sig: u8, max: usize) -> Self {
-        Self { sig, max, blocks: vec![Vec::new()] }
+        Self { sig, max, wide: false, blocks: vec![Vec::new()] }
+    }
+
+    /// A heap for the file `w` writes.
+    pub(crate) fn of<W: Read + Write + Seek>(sig: u8, w: &NdbWriter<W>) -> Self {
+        Self { wide: w.big(), ..Self::new(sig, w.max_data()) }
+    }
+
+    fn shift(&self) -> u32 {
+        if self.wide { 19 } else { 16 }
     }
 
     /// The header of data block `block`: HNHDR in the first, HNBITMAPHDR in the eighth and every
@@ -66,7 +82,7 @@ impl Heap {
         let block = self.blocks.len().saturating_sub(1);
         let fits = self.blocks.last().is_some_and(|b| b.len() < MAX_PER_BLOCK && Self::size(block, b, Some(bytes.len())) <= self.max);
         if !fits {
-            if self.blocks.len() >= MAX_BLOCKS {
+            if self.blocks.len() >= if self.wide { MAX_BLOCKS_WIDE } else { MAX_BLOCKS } {
                 return Err(cannot("more values than one heap holds"));
             }
             self.blocks.push(Vec::new());
@@ -74,12 +90,13 @@ impl Heap {
         let block = self.blocks.len().saturating_sub(1);
         let allocs = self.blocks.last_mut().ok_or_else(|| cannot("a heap without blocks"))?;
         allocs.push(bytes.to_vec());
-        Ok((allocs.len() as u32) << 5 | (block as u32) << 16)
+        Ok((allocs.len() as u32) << 5 | (block as u32) << self.shift())
     }
 
     /// Replace an allocation by bytes of the same length (a header that is known last).
     fn set(&mut self, hid: u32, bytes: &[u8]) {
-        let slot = self.blocks.get_mut((hid >> 16) as usize).and_then(|b| b.get_mut((((hid >> 5) & 0x7FF) as usize).wrapping_sub(1)));
+        let shift = self.shift();
+        let slot = self.blocks.get_mut((hid >> shift) as usize).and_then(|b| b.get_mut((((hid >> 5) & 0x7FF) as usize).wrapping_sub(1)));
         if let Some(slot) = slot.filter(|s| s.len() == bytes.len()) {
             slot.copy_from_slice(bytes);
         }
@@ -276,7 +293,7 @@ pub(crate) fn write_pc_late<W: Read + Write + Seek>(
     if order.windows(2).any(|p| p.first().map(|p| p.id) == p.get(1).map(|p| p.id)) {
         return Err(cannot("one property twice in an item"));
     }
-    let mut heap = Heap::new(0xBC, w.max_data());
+    let mut heap = Heap::of(0xBC, w);
     let header = heap.alloc(&[0; 8])?;
     let mut records = Vec::with_capacity(order.len());
     let mut values = 0usize;
@@ -401,7 +418,7 @@ pub(crate) fn write_tc_as<W: Read + Write + Seek>(
     let ceb = at;
     let row_size = ceb + tags.len().div_ceil(8);
 
-    let mut heap = Heap::new(0x7C, w.max_data());
+    let mut heap = Heap::of(0x7C, w);
     let info_size = 22 + 8 * tags.len();
     // The header of the row index comes first and the table's own second, as in the files
     // Outlook writes.

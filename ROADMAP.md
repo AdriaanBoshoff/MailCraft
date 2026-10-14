@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); next 4K-page writing (M3c), then accounts (M4) · revision 82 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); next the rest of M3c, then accounts (M4) · revision 83 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 343, all passing |
+| Tests | 347, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -20,7 +20,7 @@
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
-| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); next 4K-page data files |
+| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); next saving on its own |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -118,7 +118,8 @@
 66. Done: Metafiles draw parts of bitmaps, mirrored and turned ones, run-packed ones, every way of mixing, hatched and patterned brushes, and regions (M3b.28).
 67. Done: A save writes what changed into the data file where it is, with what it writes over kept beside the file until the save is checked; M3b is closed (M3b.29).
 68. Done: Outlook Classic opens the data files our writer makes, Unicode, ANSI and saved into in place, and sees every folder and message as we wrote them (M3c.1).
-69. Next: M3c.2: writing 4K-page data files, now that a file of ours can be held against Outlook. Then M4: accounts. M1's checks against Outlook stay open.
+69. Done: Data files with 4K pages, the kind newer versions of Outlook make, are written, take changes and are saved as that kind; Outlook Classic opens one of ours and sees the same mailbox as in our Unicode file (M3c.2).
+70. Next: M3c.3: unsaved changes saved on their own after a while. Then the rest of M3c (the size of a message changed in place, files from before M3c.1, export from an `.ost` or a 4K file carrying hidden items, compressed 4K blocks), then M4: accounts. M1's checks against Outlook stay open.
 
 ## Do later (from M2)
 
@@ -156,10 +157,10 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Hidden (associated) items and a folder's own properties beyond name, class and counts kept when an open `.pst` is saved~~ | done: M3.4 |
 | ~~Hidden (associated) items and a folder's own properties carried by `file.export` when the source is a Unicode `.pst`~~ | done: M3b.2 |
 | ~~Hidden items and a folder's own properties carried by `file.export` from an ANSI `.pst`~~ | done: M3b.21 |
-| Hidden items and a folder's own properties carried by `file.export` from an `.ost` and a 4K-page file (read through the model still) | M3c, with writing 4K-page files |
+| Hidden items and a folder's own properties carried by `file.export` from an `.ost` and a 4K-page file (read through the model still) | M3c |
 | ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
 | ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
-| Unsaved changes saved on their own after a while (the writer is now proved in Outlook, M3c.1; nothing writes a data file unasked until this lands) | M3c, after 4K-page writing |
+| Unsaved changes saved on their own after a while (the writer is now proved in Outlook, M3c.1; nothing writes a data file unasked until this lands) | M3c, next |
 | ~~Saving off the UI thread, with progress~~ | done: M3b.12 |
 | ~~A save that does not rewrite the whole data file (needs writes into the data file that are journalled themselves)~~ | done: M3b.29 |
 | ~~Unknown properties of an attachment kept when a message's attachments change~~ | done: M3b.11 |
@@ -167,7 +168,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~The cells of a changed message in search-folder tables~~ | done: M3b.11 |
 | Working out again which search folders a changed message belongs to (its rows are brought up to date; a row is not added or taken away) | M5 |
 | ~~Changes to an ANSI `.pst` kept~~ (an `.ost` stays read-only for good: it is a server's copy) | done: M3b.21 |
-| Changes to a 4K-page `.pst` kept | M3c, with writing 4K-page files |
+| ~~Changes to a 4K-page `.pst` kept~~ (written whole) | done: M3c.2 |
+| Saving into a 4K-page `.pst` where it is (it is written whole: what heads a section after the first is not known) | with a 4K-page file over 16 MB that Outlook wrote |
 | ~~The node-id counters of a file's header carried into the rewritten file~~ | done: M3b.16 |
 | ~~A choice not to keep the file as it was beside a data file on its first save~~ | done: M3b.16 (`file.keepOriginal`) |
 | ~~The ids on the root and the Inbox that tell Outlook which folder is the Calendar, Contacts, Tasks, Notes, Journal and Drafts, for a file made by `file.export`~~ | done: M3b.15 |
@@ -184,7 +186,10 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | A heap's fill levels compared with an Outlook-written heap of several blocks | with the first such file we may read |
 | The places of free map and free page map pages compared with an Outlook-written file over 32 MB | with the first such file we may read |
 | ~~Writing ANSI data files (a re-saved file keeps its kind)~~ | done: M3b.21 |
-| Writing 4K-page data files (the layout is in no specification; files of ours can now be held against Outlook) | M3c, its own arc, before M4 |
+| ~~Writing 4K-page data files~~ | done: M3c.2 |
+| What the subnodes 0x521 and 0x541 of a 4K-page contents table (heaps with the client signature 0xA5) hold for a table with rows; they are written empty, and Outlook takes them so | when a 4K-page file shows what they hold black-box |
+| Heaps of more than one block in a 4K-page file: where the block number stands in a HID is our reading, no Outlook-written file has such a heap | with the first Outlook-written 4K-page file that has one |
+| Compressed blocks in a 4K-page file (read; written uncompressed) | M3c |
 | What Outlook makes of Unicode text in an ANSI file of ours, and of wVer 14 where a file had 15 | M1 checks against Outlook, with the owner's say |
 | ~~The selected row only, chosen columns and group headings in Table Style~~ | done: M3b.22 |
 | Several messages selected at once (Table Style's selected rows then follow the selection) | M5, with interaction parity |
@@ -1472,3 +1477,27 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   writing whole once (export) before Outlook takes them; no Outlook-written `.pst` with
   512-byte pages has been saved into (Outlook could not be made to create one); an object
   that is not a real storage is listed by Outlook as no attachment.
+- **2026-10-14** - M3c.2: data files with 4K pages written. The layout is in no specification; it was
+  measured on the few small Outlook-written `.ost` files kept locally (layout only) and is
+  now written: pages of 4096 bytes with trailers of 24, blocks of up to 64 KB on 512-byte
+  slots with a trailer that carries the inflated size, allocation maps heading sections of
+  16 MB, an empty density list carrying the header's next page id, B-tree pages with
+  16-bit counts, wVer 36 and wVerClient 19, and blocks not encoded. `file.export` takes
+  `"kind": "4k"`, an open 4K-page `.pst` takes changes and `file.save` writes it whole as
+  the same kind (into the file where it is is left for later: what heads a later section
+  is not known). Outlook's Inbox Repair Tool, scanning only, first found 858 problems in
+  such a file; three came out of measurement: the blocks must not be encoded, wVerClient
+  must be 19, and every contents table, the template 0x60E too, has two subnodes more,
+  0x521 and 0x541, heaps with the client signature 0xA5 that [MS-PST] calls reserved,
+  written empty. With those it says only that it makes an HMP, as of our Unicode files.
+  With the owner's say Outlook Classic opened a 4K file of ours and a Unicode one written
+  from the same mailbox side by side, as extra data files taken out again (the profile had
+  three stores before and after): the same folders, counts and unread counts, and every
+  one of the 17 messages with the same subject, sender, recipients, flags, categories,
+  size, body and attachments (only received times moved: the sample's dates follow the
+  clock). Outlook added Calendar, Contacts and Tasks to it, as to any store it first
+  opens; read back here, every item loads and our structure check finds nothing. 4 tests
+  in `crates/pst/src/tests_4k.rs`. Not done, each with a row in Do later: what the 0xA5
+  heaps hold for a table with rows; heaps of more than one block in a 4K file (their HID
+  layout is our reading, no Outlook file has one); saving into a 4K file where it is;
+  writing compressed 4K blocks.
