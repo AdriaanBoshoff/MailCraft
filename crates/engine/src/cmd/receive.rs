@@ -129,6 +129,14 @@ struct Target {
     own: bool,
 }
 
+/// The data file mail is taken down into, as `Received::into` names it.
+fn into_of(s: &Session, target: Target) -> String {
+    if !target.own {
+        return String::new();
+    }
+    s.stores.get(target.store).and_then(|st| st.path()).map(|p| p.display().to_string()).unwrap_or_default()
+}
+
 /// The data file and Inbox new mail goes in.
 fn inbox(s: &Session) -> Option<(usize, FolderId)> {
     let store = s.writable_store()?;
@@ -166,7 +174,7 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
         // Taken off a POP3 server only what is kept for good: the data file is a file, and
         // holds no change that is not saved.
         let saved = s.stores.get(target.store).is_some_and(|st| st.path().is_some() && !st.unsaved());
-        let (received, take_off) = (account.received.clone(), !account.leave_on_server && saved);
+        let (received, take_off) = (account.received.kept_in(&into_of(s, target)), !account.leave_on_server && saved);
         targets.push((account.id.clone(), target));
         taking.push(Taking { reach: Reach::of(s, at)?, received, take_off });
     }
@@ -315,11 +323,12 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
     let mut touched: Vec<Target> = Vec::new();
     for t in took {
         let Some(&(_, Target { store, folder, own })) = targets.iter().find(|(id, _)| *id == t.id) else { continue };
-        let mut received = s.accounts.iter().find(|a| a.id == t.id).map(|a| a.received.clone()).unwrap_or_default();
+        let into = into_of(s, Target { store, folder, own });
+        let mut received = s.accounts.iter().find(|a| a.id == t.id).map(|a| a.received.kept_in(&into)).unwrap_or_default();
         if let Some(v) = t.uid_validity
             && v != received.uid_validity
         {
-            received = Received { uid_validity: v, ..Received::default() };
+            received = Received { uid_validity: v, into, ..Received::default() };
         }
         let mut kept = 0usize;
         let mut trouble = t.error.as_ref().map(ToString::to_string);

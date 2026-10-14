@@ -290,3 +290,25 @@ fn a_data_file_named_in_the_settings_must_be_a_pst_by_its_full_path() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn mail_taken_into_another_data_file_is_taken_down_again_into_the_account_s_own() {
+    let dir = std::env::temp_dir().join(format!("omc-account-again-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = Fake::default();
+    add(&fake, "one", &[]);
+    add(&fake, "two", &[]);
+    // First into the sample, as before accounts had data files of their own.
+    let mut s = with(&fake, "imap", json!({}));
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 2);
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0);
+    // Then the account has its own: none of that mail is in it, so all of it comes again.
+    s.account_dir = Some(dir.join("Accounts"));
+    s.journal_dir = Some(dir.join("journals"));
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 2, "{}", s.status);
+    assert_eq!(count_in(&s, 1, "Inbox"), 2);
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0, "and only once");
+    settle(&mut s);
+    s.run("file.closeStore", &json!({ "store": 1, "discard": true })).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

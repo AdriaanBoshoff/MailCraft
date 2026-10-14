@@ -63,6 +63,9 @@ pub struct Received {
     pub last_uid: u32,
     /// POP3: the unique ids of the messages taken down that the server still had last time.
     pub seen: Vec<String>,
+    /// The data file what was taken down went into; empty for the one new mail is kept in.
+    /// Taken into another file, nothing of it is in this one: all of it is taken down again.
+    pub into: String,
 }
 
 /// POP3 ids remembered at most; the server's list is the bound in practice.
@@ -70,7 +73,7 @@ pub const MAX_SEEN: usize = 100_000;
 
 impl Received {
     fn to_json(&self) -> Value {
-        json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen })
+        json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen, "into": self.into })
     }
 
     /// As a settings file gives it: what makes no sense is left as nothing taken down yet.
@@ -89,7 +92,13 @@ impl Received {
                     .collect()
             })
             .unwrap_or_default();
-        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen }
+        let into = v.get("into").and_then(Value::as_str).filter(|p| p.len() <= 1024 && !p.chars().any(char::is_control)).unwrap_or_default();
+        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string() }
+    }
+
+    /// What was taken down into the data file `into`: nothing, when it went into another.
+    pub fn kept_in(&self, into: &str) -> Self {
+        if self.into == into { self.clone() } else { Self { into: into.to_string(), ..Self::default() } }
     }
 }
 
