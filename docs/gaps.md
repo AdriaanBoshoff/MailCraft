@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 77 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 78 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 78 · 2026-10-14 — M3c.7: larger data blocks of a 4K-page file are written deflated, as Outlook writes them; M3c is closed.
 - 77 · 2026-10-14 — M3c.6: an `.ost` is exported with its hidden items and folder properties, and Outlook opens the export; a file that lacks what Outlook asks for is written anew with its hidden items.
 - 76 · 2026-10-14 — M3c.5: a file from before M3c.1 is written whole on its next save, keeping its ids, and Outlook opens it.
 - 75 · 2026-10-14 — M3c.4: a message changed by a save has as its size what is now stored of it.

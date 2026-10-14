@@ -186,3 +186,56 @@ fn a_4k_data_file_takes_changes_and_is_saved_as_it_is() {
     drop(back);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn data_blocks_larger_than_a_slot_are_stored_deflated() {
+    // Two messages with the same attachment, which shrinks when deflated, and one whose
+    // attachment does not.
+    let mut store = mailbox();
+    let inbox = store.folder_by_kind(FolderKind::Inbox).unwrap();
+    let same = "A line that comes again and again. ".repeat(3_000).into_bytes();
+    for subject in ["Once", "Twice"] {
+        let mut m = mail(subject, false);
+        m.attachments.push(Attachment::file("again.txt", "text/plain", same.clone()));
+        store.push_item(inbox, m);
+    }
+    let mut m = mail("Noise", false);
+    m.attachments.push(Attachment::file("noise.bin", "", pattern(20_000, 9)));
+    store.push_item(inbox, m);
+    let want = whole(&mut PstStore::from_bytes(save(&mut store).0).unwrap());
+    let bytes = four_k(&mut store);
+    let ndb = Ndb::open(Box::new(Cursor::new(bytes.clone()))).unwrap();
+    let deflated: Vec<_> = ndb.bbt.iter().filter(|(_, e)| e.cb != e.inflated).collect();
+    assert!(deflated.len() >= 2, "{}", deflated.len());
+    for (bid, e) in &deflated {
+        // Data blocks only, each larger than one slot holds, each smaller stored.
+        assert_eq!(*bid & 2, 0);
+        assert!(e.inflated as usize + big::TRAILER > 512);
+        assert!(e.cb < e.inflated);
+    }
+    // What fits in one slot is stored as it is.
+    assert!(ndb.bbt.values().filter(|e| e.inflated as usize + big::TRAILER <= 512).all(|e| e.cb == e.inflated));
+    // Deflated, the two attachments together take less room than one stored as it is.
+    let stored: u64 = ndb.bbt.values().map(|e| u64::from(e.cb)).sum();
+    let inflated: u64 = ndb.bbt.values().map(|e| u64::from(e.inflated)).sum();
+    assert!(inflated - stored > same.len() as u64, "{stored} {inflated}");
+    let mut back = PstStore::from_bytes(bytes).unwrap();
+    same_mailbox(&want, &whole(&mut back));
+    // Saved again, still deflated and the same.
+    let dir = scratch("4k-deflated");
+    let path = dir.join("box.pst");
+    std::fs::write(&path, four_k(&mut store)).unwrap();
+    let mut open = PstStore::open(&path).unwrap();
+    let inbox = folder(&mut open, "Inbox");
+    let first = ItemId(open.list(inbox.id).unwrap()[0].id);
+    let mut item = open.load(inbox.id, first).unwrap();
+    item.set_read(!item.is_read());
+    open.update(inbox.id, first, item).unwrap();
+    open.save(UID).unwrap();
+    drop(open);
+    let bytes = std::fs::read(&path).unwrap();
+    sound(&bytes);
+    let ndb = Ndb::open(Box::new(Cursor::new(bytes))).unwrap();
+    assert!(ndb.bbt.values().any(|e| e.cb != e.inflated));
+    let _ = std::fs::remove_dir_all(&dir);
+}

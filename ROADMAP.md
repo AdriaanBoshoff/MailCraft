@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); next compressed 4K blocks, then accounts (M4) · revision 87 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; next accounts (M4) · revision 88 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 355, all passing |
+| Tests | 356, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -20,7 +20,7 @@
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
-| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); next compressed 4K blocks |
+| M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -123,7 +123,8 @@
 71. Done: A message changed by a save, into the file where it is or whole, is given as its size what is now stored of it, in the message and in its folder's row (M3c.4).
 72. Done: A data file that lacks what Outlook asks for, as those written here before M3c.1 do, is written whole by today's writer on its next save or copy, every folder and item keeping its id; Outlook opens such files, Unicode and ANSI, after one save (M3c.5).
 73. Done: A mailbox written from what is read carries each folder's hidden items and its own properties, entry ids among them made to name the same folders in the new file: an `.ost` is exported with them, and a file another program wrote that lacks what Outlook asks for is written whole with them; Outlook opens an `.ost` exported as Unicode, ANSI and 4K-page files with every folder, message and hidden item (M3c.6).
-74. Next: M3c.7: compressed blocks in a 4K-page file, written. Then M4: accounts. M1's checks against Outlook stay open.
+74. Done: A data block of a 4K-page file that does not fit in one 512-byte slot is stored deflated when that makes it smaller, as Outlook stores them, and blocks shared by several messages are found again through what they inflate to; Outlook opens such files, written from the sample and from an `.ost`, with every folder, message and hidden item (M3c.7). M3c is closed.
+75. Next: M4: accounts (IMAP, POP3 and SMTP behind an account trait, with an in-process fake server). M1's checks against Outlook stay open.
 
 ## Do later (from M2)
 
@@ -195,7 +196,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Writing 4K-page data files~~ | done: M3c.2 |
 | What the subnodes 0x521 and 0x541 of a 4K-page contents table (heaps with the client signature 0xA5) hold for a table with rows; they are written empty, and Outlook takes them so | when a 4K-page file shows what they hold black-box |
 | Heaps of more than one block in a 4K-page file: where the block number stands in a HID is our reading, no Outlook-written file has such a heap | with the first Outlook-written 4K-page file that has one |
-| Compressed blocks in a 4K-page file (read; written uncompressed) | M3c |
+| ~~Compressed blocks in a 4K-page file (read; written uncompressed)~~ (data blocks of more than one slot written deflated) | done: M3c.7 |
 | What Outlook makes of Unicode text in an ANSI file of ours, and of wVer 14 where a file had 15 | M1 checks against Outlook, with the owner's say |
 | ~~The selected row only, chosen columns and group headings in Table Style~~ | done: M3b.22 |
 | Several messages selected at once (Table Style's selected rows then follow the selection) | M5, with interaction parity |
@@ -1561,3 +1562,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   wrote: exported as Unicode, ANSI and 4K-page files, each opened in Outlook with all 36 folders,
   both messages, every default folder and all 32 hidden items, the repair tool finding no more
   than in any file of ours, and the file read back clean after Outlook. 4 tests.
+- **2026-10-14** - M3c.7: compressed blocks in 4K-page files written; M3c closed.
+  A 4K-page file was written with every block stored as it is, though Outlook stores its larger
+  data blocks deflated. Measured on a local `.ost` Outlook wrote (its layout only): of 263 blocks,
+  68 data blocks were deflated and no internal one; none of 476 bytes or less was, the smallest
+  that was came to 492, and larger ones that would not shrink were stored as they are. Now a data
+  block whose bytes and trailer pass one 512-byte slot is deflated (a zlib stream, RFC 1950/1951)
+  when that makes it smaller; the trailer and the block tree say what it inflates to, and a block
+  already written is reused for the same bytes, deflated or not. Better than stored as it is: a
+  file of long bodies and text attachments takes a fraction of the room. Exported from the sample
+  and from a copy of an `.ost`, the files' structure check and Outlook's repair tool find nothing
+  more than in any file of ours, Outlook opens them with all folders, messages and the 32 hidden
+  items of the `.ost`, and they read back clean after Outlook. 1 test. This closes M3c: what is
+  left of it is in Do later, in M4, M5 and with M1's checks.

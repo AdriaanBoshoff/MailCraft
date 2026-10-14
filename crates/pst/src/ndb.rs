@@ -37,10 +37,10 @@ pub(crate) struct NbtEntry {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct BbtEntry {
-    ib: u64,
-    cb: u32,
-    inflated: u32,
+pub(crate) struct BbtEntry {
+    pub(crate) ib: u64,
+    pub(crate) cb: u32,
+    pub(crate) inflated: u32,
 }
 
 /// (data block id, subnode block id) of one subnode.
@@ -52,7 +52,7 @@ pub(crate) struct Ndb<'a> {
     pub ver: Ver,
     crypt: u8,
     pub nbt: HashMap<u32, NbtEntry>,
-    bbt: HashMap<u64, BbtEntry>,
+    pub(crate) bbt: HashMap<u64, BbtEntry>,
     /// dwUnique and rgnid of the header ([MS-PST] 2.2.2.6): how often the header was
     /// written, and for each kind of node id the next one to give out.
     pub counters: (u32, [u32; 32]),

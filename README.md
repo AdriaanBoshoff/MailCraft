@@ -1,8 +1,8 @@
 # OpenMailClient
 
-![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3b%20closed%20%C2%B7%20M3c%20in%20progress-orange)
+![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M3c%20closed%20%C2%B7%20M4%20next-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-355%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-356%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -32,14 +32,14 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M2 | **Formatted reading**: HTML and RTF bodies laid out and drawn, pictures, printing | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3 | **Writing `.pst`**: a mailbox saved as a `.pst`, changes to an open one kept, settings kept | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3b | **The do-later batch**: journalled changes, a save into the data file where it is, and what M2 and M3 left | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
-| M3c | **Proof in Outlook, 4K-page writing**: files we write open in Outlook Classic (done); 4K-page data files written (done); changes saved on their own (done); a changed message's size (done); files from before M3c.1 (done); hidden items exported from an `.ost` (done) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M3c | **Proof in Outlook, 4K-page writing**: files we write open in Outlook Classic (done); 4K-page data files written (done); changes saved on their own (done); a changed message's size (done); files from before M3c.1 (done); hidden items exported from an `.ost` (done); compressed 4K-page blocks (done) | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M4 | **Accounts**: IMAP, POP3 and SMTP | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 
 Closed milestones still have work left over: it is not dropped. Each piece is a row in
 [Do later](ROADMAP.md#do-later-from-m2) with the slot it lands in, and is struck when it lands.
-49 rows are done; 32 are open: 1 in M3c, 2 in M4, 16 in M5, 1 in M6, 2 with M1's checks against
+50 rows are done; 31 are open: 2 in M4, 16 in M5, 1 in M6, 2 with M1's checks against
 Outlook, and 10 that wait on something we do not have yet (an Outlook-written file of a kind we may
 read, a reader we can try without driving a window, a printer we may use).
 
@@ -106,7 +106,7 @@ read, a reader we can try without driving a window, a printer we may use).
   and message as written, whole, ANSI and saved into in place; a file written before M3c.1 is written
   whole on its next save, keeping its ids, and then opens too; an `.ost` is exported with its
   hidden items as a `.pst` Outlook opens. No Outlook-written `.pst` has been saved into yet. A 4K-page file is
-  written whole on every save (M3c.2).
+  written whole on every save (M3c.2), its larger blocks deflated as Outlook stores them (M3c.7).
 - **Parts of formatted bodies.** Right-to-left text while it is typed; complex scripts
   on screen beyond what egui shapes; metafiles that copy with a mask or see-through; printing to a
   printer. Each is scheduled in

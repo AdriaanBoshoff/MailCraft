@@ -214,7 +214,10 @@ fn hash(data: &[u8], internal: bool) -> u64 {
 struct Block {
     bid: u64,
     ib: u64,
+    /// The bytes as they are stored.
     cb: u16,
+    /// The bytes they come to once inflated: `cb` again for a block that is not deflated.
+    inflated: u16,
     refs: u16,
 }
 
@@ -503,11 +506,14 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         let key = hash(data, internal);
         if let Some(&i) = self.seen.get(&key)
             && let Some(b) = self.blocks.get(i as usize).copied()
-            && usize::from(b.cb) == data.len()
+            && usize::from(b.inflated) == data.len()
             && (b.bid & 2 != 0) == internal
             && b.refs < MAX_REFS
         {
-            let mut old = self.stored(b.ib, data.len())?;
+            let mut old = self.stored(b.ib, usize::from(b.cb))?;
+            if b.cb != b.inflated {
+                old = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&old, data.len()).unwrap_or_default();
+            }
             if !internal {
                 match self.crypt {
                     1 => crypt::permute_decode(&mut old),
@@ -531,10 +537,22 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
         self.next_block = self.next_block.checked_add(1).filter(|n| *n < most).ok_or_else(|| cannot("too many blocks"))?;
         let tail = self.trailer();
         let slot = self.slot();
-        let size = (data.len() + tail).next_multiple_of(slot);
+        let mut body = data.to_vec();
+        // A data block of a file with 4K pages that does not fit in one slot is stored deflated
+        // (a zlib stream, RFC 1950/1951) when that makes it smaller, as Outlook stores them: of
+        // the blocks of an `.ost` it wrote, data blocks of more than one slot were, internal
+        // blocks and those that fit in one slot were not (measured 2026-10-14). The trailer
+        // and the block tree say what it comes to.
+        if self.big && !internal && data.len() + tail > slot {
+            let packed = miniz_oxide::deflate::compress_to_vec_zlib(data, 6);
+            if packed.len() < data.len() {
+                body = packed;
+            }
+        }
+        let inflated = data.len() as u16;
+        let size = (body.len() + tail).next_multiple_of(slot);
         let at = self.room(size, slot)?;
         let ib = self.base() + at as u64;
-        let mut body = data.to_vec();
         if !internal {
             // Only data blocks are encoded ([MS-PST] 2.2.2.8.3.1.1).
             match self.crypt {
@@ -557,15 +575,15 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
             put(&mut trailer, 8, &bid.to_le_bytes());
         }
         if self.big {
-            // Then 2 and the size before compression; nothing written here is compressed.
+            // Then 2 and the size before compression.
             put(&mut trailer, 16, &2u16.to_le_bytes());
-            put(&mut trailer, 18, &cb.to_le_bytes());
+            put(&mut trailer, 18, &inflated.to_le_bytes());
         }
         put(&mut self.section, at, &body);
         put(&mut self.section, at + size - tail, trailer.get(..tail).unwrap_or_default());
         // A block starts with two references: its entry in the block tree and whoever asked for it.
         self.seen.insert(key, u32::try_from(self.blocks.len()).map_err(|_| cannot("too many blocks"))?);
-        self.blocks.push(Block { bid, ib, cb, refs: 2 });
+        self.blocks.push(Block { bid, ib, cb, inflated, refs: 2 });
         Ok((bid, false))
     }
 
@@ -828,7 +846,7 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
                     put(&mut e, 0, &b.bid.to_le_bytes());
                     put(&mut e, 8, &b.ib.to_le_bytes());
                     put(&mut e, 16, &b.cb.to_le_bytes());
-                    put(&mut e, 18, &b.cb.to_le_bytes());
+                    put(&mut e, 18, &b.inflated.to_le_bytes());
                     put(&mut e, 20, &b.refs.to_le_bytes());
                 } else {
                     put(&mut e, 0, &b.bid.to_le_bytes());
