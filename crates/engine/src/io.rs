@@ -293,7 +293,7 @@ impl Saved {
             says.push_str(", as it is stored");
         } else if let Some(why) = &self.not_copied {
             says.push_str(&format!(
-                "; it could not be copied as it is stored ({why}), so hidden items and what this program does not know of are not in it"
+                "; it could not be copied as it is stored ({why}), so what lies outside its folders (search folders, say) is not in it"
             ));
         }
         says

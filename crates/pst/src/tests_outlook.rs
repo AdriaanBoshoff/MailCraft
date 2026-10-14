@@ -312,12 +312,13 @@ fn a_file_without_what_outlook_asks_for_is_written_whole_keeping_its_ids() {
 }
 
 #[test]
-fn a_file_without_what_outlook_asks_for_and_with_hidden_items_is_copied_as_stored() {
+fn a_file_without_what_outlook_asks_for_and_a_hidden_row_that_cannot_be_read_is_copied_as_stored() {
     use crate::tests_edit::{folder, scratch};
     use openmailclient_model::ItemId;
     let (bytes, _) = old_files().remove(0);
     let mut plain = PstStore::from_bytes(bytes).unwrap();
-    // A hidden item in the Inbox's table of associated items, as another program keeps.
+    // A row in the Inbox's table of associated items for a hidden item that is not there:
+    // writing the file anew would lose the row, so it is copied as it is stored.
     let inbox = folder(&mut plain, "Inbox");
     let table = u32::try_from(inbox.id.0).unwrap() & !0x1F | 0x0F;
     let (columns, _) = plain.table_of(table).unwrap();
@@ -331,7 +332,7 @@ fn a_file_without_what_outlook_asks_for_and_with_hidden_items_is_copied_as_store
     std::fs::write(&path, out.into_inner()).unwrap();
     let mut store = PstStore::open(&path).unwrap();
     store.keep_original(false);
-    assert!(!store.renews());
+    assert!(store.renews());
     let first = ItemId(store.list(inbox.id).unwrap()[0].id);
     let mut item = store.load(inbox.id, first).unwrap();
     item.set_read(!item.is_read());

@@ -666,6 +666,23 @@ pub trait Store {
     fn apart(&mut self) -> Result<Option<Apart>, StoreError> {
         Ok(None)
     }
+    /// A folder's hidden (associated) items: views, rules, forms and the like that other
+    /// programs keep beside the folder's messages, each with its id. Their order is the
+    /// store's; one that cannot be read is given as the error it was. None in a store that
+    /// keeps no such items.
+    fn hidden(&mut self, _folder: FolderId) -> Result<Vec<(ItemId, Result<Item, StoreError>)>, StoreError> {
+        Ok(Vec::new())
+    }
+    /// A folder's own properties as they are kept, those the model has no place for among
+    /// them. Empty in a store that keeps none.
+    fn folder_props(&mut self, _folder: FolderId) -> Result<PropBag, StoreError> {
+        Ok(PropBag::default())
+    }
+    /// The id the store gives itself, which its entry ids carry ([MS-OXCDATA] 2.2.4.1),
+    /// where it has one.
+    fn record_key(&mut self) -> Option<[u8; 16]> {
+        None
+    }
     /// Every folder under the visible root (the "IPM subtree"), parents before children.
     fn folders(&mut self) -> Result<Vec<FolderInfo>, StoreError>;
     fn list(&mut self, folder: FolderId) -> Result<Vec<Summary>, StoreError>;

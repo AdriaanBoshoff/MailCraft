@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); next the rest of M3c, then accounts (M4) · revision 86 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); next compressed 4K blocks, then accounts (M4) · revision 87 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 351, all passing |
+| Tests | 355, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -20,7 +20,7 @@
 | M2 | Formatted reading: HTML and RTF bodies laid out and drawn, inline pictures, printing | closed: HTML and RTF text, lists, tables, pictures and named fonts are drawn; a message or a folder's list prints to a PDF file, with a page setup and a preview. See "Do later (from M2)" |
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
-| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); next export from `.ost` and 4K files |
+| M3c | Proof in Outlook and 4K-page writing | in progress: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); next compressed 4K blocks |
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | not started |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
@@ -122,7 +122,8 @@
 70. Done: Unsaved changes to a data file are saved on their own after five minutes at a quiet moment, checked as Save Changes is, and never for a file's first save (M3c.3).
 71. Done: A message changed by a save, into the file where it is or whole, is given as its size what is now stored of it, in the message and in its folder's row (M3c.4).
 72. Done: A data file that lacks what Outlook asks for, as those written here before M3c.1 do, is written whole by today's writer on its next save or copy, every folder and item keeping its id; Outlook opens such files, Unicode and ANSI, after one save (M3c.5).
-73. Next: M3c.6: export from an `.ost` or a 4K-page file carrying hidden items and folder properties. Then compressed 4K blocks, then M4: accounts. M1's checks against Outlook stay open.
+73. Done: A mailbox written from what is read carries each folder's hidden items and its own properties, entry ids among them made to name the same folders in the new file: an `.ost` is exported with them, and a file another program wrote that lacks what Outlook asks for is written whole with them; Outlook opens an `.ost` exported as Unicode, ANSI and 4K-page files with every folder, message and hidden item (M3c.6).
+74. Next: M3c.7: compressed blocks in a 4K-page file, written. Then M4: accounts. M1's checks against Outlook stay open.
 
 ## Do later (from M2)
 
@@ -155,13 +156,14 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Node 0xC01, which Outlook makes when it first opens a file of ours (its layout is in no specification; Outlook makes it itself) | when its layout can be learned black-box from files Outlook writes |
 | ~~The size of a message changed by an in-place save~~ (and by a whole one) | done: M3c.4 |
 | ~~Files written by OpenMailClient before M3c.1 are refused by Outlook~~ (written whole on their next save or copy, ids kept) | done: M3c.5 |
-| A file another program wrote that lacks what Outlook asks for and holds hidden items is saved as stored, and stays as Outlook refuses it: the save could add the nodes and columns it lacks | M3c |
+| ~~A file another program wrote that lacks what Outlook asks for and holds hidden items is saved as stored~~ (written anew with its hidden items; one whose table names a hidden item that is not there is still copied) | done: M3c.6 |
 | A save into an Outlook-written `.pst` with 512-byte pages, opened in Outlook afterwards (none at hand; Outlook could not be made to create one) | M1 checks against Outlook |
 | An attached object that is not a real storage: Outlook lists no attachment for it | M5, with attachments of other programs |
 | ~~Hidden (associated) items and a folder's own properties beyond name, class and counts kept when an open `.pst` is saved~~ | done: M3.4 |
 | ~~Hidden (associated) items and a folder's own properties carried by `file.export` when the source is a Unicode `.pst`~~ | done: M3b.2 |
 | ~~Hidden items and a folder's own properties carried by `file.export` from an ANSI `.pst`~~ | done: M3b.21 |
-| Hidden items and a folder's own properties carried by `file.export` from an `.ost` and a 4K-page file (read through the model still) | M3c |
+| ~~Hidden items and a folder's own properties carried by `file.export` from an `.ost` and a 4K-page file~~ (a 4K-page `.pst` is copied as stored; an `.ost` is written from the model with them) | done: M3c.6 |
+| A folder's named properties, and search folders, carried by an export written from the model (an `.ost`) | M5, with search folders |
 | ~~Changes journalled as they are made: a crash loses what was not saved~~ | done: M3b.1 |
 | ~~The journal kept somewhere else when the data file's folder cannot be written; forced to disk on a timer as well as every 64 records; a count of records lost after a damaged one that is exact~~ | done: M3b.7 |
 | ~~Unsaved changes saved on their own after a while~~ (never a file's first save) | done: M3c.3 |
@@ -1542,3 +1544,20 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   build before M3c.1 wrote: Outlook's repair tool found 314 and 306 things wrong with them,
   and after one save nothing more than in any file of ours; Outlook opened both, Unicode
   and ANSI, with every folder and message, and they read back clean after it. 2 tests.
+- **2026-10-14** - M3c.6: hidden items and folder properties carried by what is written from the model.
+  An `.ost` was exported through the model and lost each folder's hidden items (views, rules,
+  forms) and its own properties; copying it node for node was tried and Outlook refused the file
+  it made (its repair tool found the store's and the folders' entries of an offline store, 232
+  findings). Now the `Store` trait gives a folder's hidden items and its own properties
+  (`hidden`, `folder_props`, `record_key`), and the writer from the model carries them: a hidden
+  item goes out as a message of the associated kind with its row in the folder's table of
+  associated items, a folder's own properties go into its property list and, where the table has
+  columns for them, into its row in its parent's hierarchy table (the repair tool asks that), and
+  an entry id of the source naming one of its folders is made to name that folder in the new
+  file, by the new file's id. Better than a copy: the export is a `.pst` Outlook takes, of the
+  kind asked for. The same carries hidden items when a file that lacks what Outlook asks for is
+  written anew (M3c.5), which now keeps the store's own id too; only a row naming a hidden item
+  that is not there still has such a file copied as stored. Tried on a copy of an `.ost` Outlook
+  wrote: exported as Unicode, ANSI and 4K-page files, each opened in Outlook with all 36 folders,
+  both messages, every default folder and all 32 hidden items, the repair tool finding no more
+  than in any file of ours, and the file read back clean after Outlook. 4 tests.

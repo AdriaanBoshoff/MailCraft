@@ -522,6 +522,23 @@ impl Store for PstStore {
         self.e_apart()
     }
 
+    fn hidden(&mut self, folder: FolderId) -> Result<Vec<(ItemId, Result<Item, StoreError>)>, StoreError> {
+        self.e_hidden(folder)
+    }
+
+    fn folder_props(&mut self, folder: FolderId) -> Result<PropBag, StoreError> {
+        self.e_folder_props(folder)
+    }
+
+    fn record_key(&mut self) -> Option<[u8; 16]> {
+        // PidTagRecordKey of the message store ([MS-PST] 2.4.3.1).
+        let (bag, _) = self.node_props(0x21).ok()?;
+        match bag.get(0x0FF9) {
+            Some(PropValue::Binary(b)) => b.as_slice().try_into().ok(),
+            _ => None,
+        }
+    }
+
     fn recover(&mut self) -> Result<openmailclient_model::Recovery, StoreError> {
         PstStore::recover(self).map_err(StoreError::from)
     }
@@ -577,6 +594,8 @@ mod tests;
 mod tests_4k;
 #[cfg(test)]
 mod tests_ansi;
+#[cfg(test)]
+mod tests_carry;
 #[cfg(test)]
 mod tests_edit;
 #[cfg(test)]

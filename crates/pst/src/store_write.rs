@@ -54,6 +54,7 @@ const NID_DELETED_ITEMS: u32 = 0x8062;
 const TYPE_FOLDER: u32 = 0x02;
 const TYPE_MESSAGE: u32 = 0x04;
 const TYPE_ATTACHMENT: u32 = 0x05;
+const TYPE_ASSOC_MESSAGE: u32 = 0x08;
 const TYPE_HIERARCHY: u32 = 0x0D;
 const TYPE_CONTENTS: u32 = 0x0E;
 const TYPE_ASSOC: u32 = 0x0F;
@@ -207,6 +208,8 @@ pub struct Written {
     pub items: u64,
     /// Items and folder lists the source could not give; they are not in the file.
     pub unreadable: u64,
+    /// Hidden items carried from the source, beside `items`.
+    pub hidden: u64,
 }
 
 /// True when a value may sit in a table that has `columns`: a column of its id has its type.
@@ -414,6 +417,57 @@ struct Folder {
     children: Vec<usize>,
     total: u64,
     unread: u64,
+    /// The folder's own properties the source keeps, carried into the new file.
+    kept: BTreeMap<u16, Raw>,
+    /// Its hidden items' rows in its table of associated items.
+    hidden: Vec<Row>,
+}
+
+/// Properties of a folder the writer gives itself, which a folder's carried properties do
+/// not stand in for: what its row in the hierarchy table says, and the ids naming the other
+/// modules' folders, which are made anew.
+fn written_here(id: u16) -> bool {
+    matches!(id, pid::DISPLAY_NAME | pid::CONTENT_COUNT | pid::CONTENT_UNREAD_COUNT | pid::SUBFOLDERS | pid::CONTAINER_CLASS)
+        || SPECIAL.iter().any(|(s, _)| *s == id)
+        || LTP_INTERNAL.contains(&id)
+}
+
+/// Entry ids of the source's folders made to name the same folders in the new file: an
+/// entry id of this store is four bytes of flags, the store's id and the node
+/// ([MS-PST] 2.4.3.2), so one that names a folder of the source by the source's id is given
+/// the new file's id and the folder's node there.
+struct Renamed {
+    from: Option<[u8; 16]>,
+    to: [u8; 16],
+    nids: HashMap<u32, u32>,
+}
+
+impl Renamed {
+    fn bytes(&self, b: &mut [u8]) {
+        let Some(from) = self.from else { return };
+        if b.len() != 24 || b.get(..4) != Some(&[0u8; 4][..]) || b.get(4..20) != Some(&from[..]) {
+            return;
+        }
+        let Some(n) = crate::ndb::u32_at(b, 20).and_then(|nid| self.nids.get(&nid)).copied() else { return };
+        if let Some(uid) = b.get_mut(4..20) {
+            uid.copy_from_slice(&self.to);
+        }
+        if let Some(place) = b.get_mut(20..24) {
+            place.copy_from_slice(&n.to_le_bytes());
+        }
+    }
+
+    fn value(&self, v: &mut PropValue) {
+        match v {
+            PropValue::Binary(b) => self.bytes(b),
+            PropValue::MultiBinary(list) => list.iter_mut().for_each(|b| self.bytes(b)),
+            _ => {}
+        }
+    }
+
+    fn bag(&self, bag: &mut PropBag) {
+        bag.0.values_mut().for_each(|v| self.value(v));
+    }
 }
 
 impl Folder {
@@ -427,6 +481,15 @@ impl Folder {
             out.push(text(pid::CONTAINER_CLASS, &self.class));
         }
         out
+    }
+
+    /// Its row in its parent's hierarchy table: what `props` gives, and those of its carried
+    /// properties the table has columns for. Outlook's repair tool takes a row that does not
+    /// show what the folder holds under a column for a damaged one (seen 2026-10-14).
+    fn row(&self, subfolders: bool) -> Row {
+        let mut cells = self.props(subfolders);
+        cells.extend(self.kept.values().filter_map(|r| cell_for(HIERARCHY, r)));
+        Row { id: self.nid, cells }
     }
 }
 
@@ -478,15 +541,16 @@ impl<W: Read + Write + Seek> Out<W> {
     /// A folder's node and its three tables ([MS-PST] 2.4.4). `rows` are its contents table.
     fn folder(&mut self, folders: &[Folder], f: &Folder, contents: Option<&[Row]>, more: &[Raw]) -> Result<(), PstError> {
         let kids: Vec<&Folder> = f.children.iter().filter_map(|i| folders.get(*i)).collect();
-        let mut props = f.props(!kids.is_empty());
-        props.extend(more.iter().map(|r| Raw { id: r.id, ty: r.ty, data: r.data.clone() }));
+        let mut props: BTreeMap<u16, Raw> = f.kept.values().map(|r| (r.id, copy(r))).collect();
+        props.extend(f.props(!kids.is_empty()).into_iter().chain(more.iter().map(copy)).map(|r| (r.id, r)));
+        let props: Vec<Raw> = props.into_values().collect();
         self.pc_node(f.nid, f.parent, &props)?;
-        let rows: Vec<Row> = kids.iter().map(|k| Row { id: k.nid, cells: k.props(!k.children.is_empty()) }).collect();
+        let rows: Vec<Row> = kids.iter().map(|k| k.row(!k.children.is_empty())).collect();
         self.tc_node(f.nid & !0x1F | TYPE_HIERARCHY, HIERARCHY, &rows)?;
         if let Some(rows) = contents {
             self.contents(f.nid, rows)?;
         }
-        self.tc_node(f.nid & !0x1F | TYPE_ASSOC, ASSOC, &[])
+        self.tc_node(f.nid & !0x1F | TYPE_ASSOC, ASSOC, &f.hidden)
     }
 
     fn contents(&mut self, folder: u32, rows: &[Row]) -> Result<(), PstError> {
@@ -793,6 +857,8 @@ fn write_store_of<W: Read + Write + Seek>(
         children: Vec::new(),
         total: 0,
         unread: 0,
+        kept: BTreeMap::new(),
+        hidden: Vec::new(),
     }];
     let mut place: HashMap<u64, usize> = HashMap::new();
     let mut ids: Vec<FolderId> = Vec::with_capacity(listed.len());
@@ -838,7 +904,17 @@ fn write_store_of<W: Read + Write + Seek>(
         if f.kind == FolderKind::Inbox && inbox.is_none() {
             inbox = Some(nid);
         }
-        folders.push(Folder { nid, parent, name: f.name.clone(), class: f.container_class.clone(), children: Vec::new(), total: 0, unread: 0 });
+        folders.push(Folder {
+            nid,
+            parent,
+            name: f.name.clone(),
+            class: f.container_class.clone(),
+            children: Vec::new(),
+            total: 0,
+            unread: 0,
+            kept: BTreeMap::new(),
+            hidden: Vec::new(),
+        });
     }
     if deleted.is_none() {
         let at = folders.len();
@@ -853,7 +929,32 @@ fn write_store_of<W: Read + Write + Seek>(
             children: Vec::new(),
             total: 0,
             unread: 0,
+            kept: BTreeMap::new(),
+            hidden: Vec::new(),
         });
+    }
+
+    // What the source keeps beside the model: each folder's own properties and its hidden
+    // items, entry ids naming its folders made to name them in the new file.
+    let renamed = Renamed {
+        from: store.record_key(),
+        to: uid,
+        nids: ids
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| Some((u32::try_from(id.0).ok()?, folders.get(i + 1)?.nid)))
+            .chain([(NID_ROOT_FOLDER, NID_ROOT_FOLDER), (NID_IPM_SUBTREE, NID_IPM_SUBTREE), (NID_SEARCH_ROOT, NID_SEARCH_ROOT)])
+            .collect(),
+    };
+    for (i, id) in ids.iter().enumerate() {
+        let Ok(mut bag) = store.folder_props(*id) else {
+            done.unreadable += 1;
+            continue;
+        };
+        renamed.bag(&mut bag);
+        if let Some(f) = folders.get_mut(i + 1) {
+            f.kept = raws(&bag).into_iter().filter(|(id, _)| !written_here(*id)).collect();
+        }
     }
 
     // The messages, folder by folder, and each folder's contents table.
@@ -893,8 +994,35 @@ fn write_store_of<W: Read + Write + Seek>(
             unread += u64::from(item.flags() & MSGFLAG_READ == 0);
         }
         o.contents(nid, &rows)?;
+        // The folder's hidden items, after its messages.
+        let hidden = store.hidden(*id).unwrap_or_else(|_| {
+            done.unreadable += 1;
+            Vec::new()
+        });
+        let mut assoc = Vec::with_capacity(hidden.len());
+        for (hid, item) in hidden {
+            if progress.is_some_and(|p| p.stopped()) {
+                return Err(PstError::Stopped);
+            }
+            let Ok(mut item) = item else {
+                done.unreadable += 1;
+                continue;
+            };
+            renamed.bag(&mut item.props);
+            let message = if keep.is_some() {
+                kept_id(hid.0, TYPE_ASSOC_MESSAGE, false, &mut taken)?
+            } else {
+                let index = next;
+                next = next.checked_add(1).filter(|n| *n <= MAX_INDEX).ok_or_else(|| cannot("that many messages"))?;
+                index << 5 | TYPE_ASSOC_MESSAGE
+            };
+            let (data, sub, cells) = o.message(&item, 0)?;
+            o.w.node(message, nid, data, sub);
+            assoc.push(Row { id: message, cells: cells.iter().filter_map(|c| cell_for(ASSOC, c)).collect() });
+            done.hidden += 1;
+        }
         if let Some(f) = folders.get_mut(i + 1) {
-            (f.total, f.unread) = (total, unread);
+            (f.total, f.unread, f.hidden) = (total, unread, assoc);
         }
         done.items += total;
     }
@@ -920,6 +1048,8 @@ fn write_store_of<W: Read + Write + Seek>(
         children,
         total: 0,
         unread: 0,
+        kept: BTreeMap::new(),
+        hidden: Vec::new(),
     };
     let search = plain(NID_SEARCH_ROOT, "Search Root", Vec::new());
     o.folder(&folders, &search, Some(none), &[])?;

@@ -113,7 +113,7 @@ pub(super) fn tree(store: &mut dyn Store) -> Vec<(String, FolderInfo, Vec<Summar
 fn a_mailbox_saved_as_pst_comes_back() {
     let mut source = mailbox();
     let (bytes, done) = save(&mut source);
-    assert_eq!(done, Written { folders: source.folders().unwrap().len() as u64, items: 4, unreadable: 0 });
+    assert_eq!(done, Written { folders: source.folders().unwrap().len() as u64, items: 4, unreadable: 0, hidden: 0 });
     let mut back = PstStore::from_bytes(bytes).unwrap();
     assert_eq!(back.display_name(), "Synthetic mailbox");
 

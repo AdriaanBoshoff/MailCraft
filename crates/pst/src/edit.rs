@@ -33,6 +33,7 @@ const TYPE_HIERARCHY: u32 = 0x0D;
 const TYPE_CONTENTS: u32 = 0x0E;
 const TYPE_ASSOC: u32 = 0x0F;
 const TYPE_SEARCH_FOLDER: u32 = 0x03;
+const TYPE_ASSOC_MESSAGE: u32 = 0x08;
 /// Nodes Outlook asks for that the files this program wrote before M3c.1 lack (see
 /// `store_write`): the receive folder table, the outgoing queue, three templates and the
 /// search update queue.
@@ -45,6 +46,8 @@ const TYPE_LTP: u32 = 0x1F;
 
 /// Subnodes are copied this deep; a message attached to a message goes two levels down.
 const MAX_COPY_DEPTH: usize = 40;
+/// At most this many hidden items of one folder are read for a mailbox written anew.
+const MAX_HIDDEN: usize = 100_000;
 #[cfg(test)]
 thread_local! {
     /// Tables a test has the next save write (node, columns, rows) in place of what the file
@@ -840,7 +843,9 @@ impl PstStore {
             }
         }
         let done = match edits {
-            Some(_) => Written { folders: folders.len() as u64, items: folders.iter().map(|f| u64::from(f.info.total)).sum(), unreadable: 0 },
+            Some(_) => {
+                Written { folders: folders.len() as u64, items: folders.iter().map(|f| u64::from(f.info.total)).sum(), unreadable: 0, hidden: 0 }
+            }
             None => Written::default(),
         };
         Ok((o, done))
@@ -865,6 +870,31 @@ fn show(cells: &mut BTreeMap<u16, Raw>, columns: &[(u16, u16)], now: &[Raw]) {
 }
 
 impl PstStore {
+    /// A folder's hidden items: the messages its associated contents table lists ([MS-PST]
+    /// 2.4.4.6), in its order. None for a folder the file does not have yet.
+    pub(crate) fn e_hidden(&mut self, folder: FolderId) -> Result<Vec<(ItemId, Result<Item, StoreError>)>, StoreError> {
+        let nid = nid_of(folder.0).ok_or(StoreError::NoFolder)?;
+        let Some((_, rows)) = self.table_of(nid & !0x1F | TYPE_ASSOC) else { return Ok(Vec::new()) };
+        let mut out = Vec::with_capacity(rows.len().min(MAX_HIDDEN));
+        for row in rows.into_iter().take(MAX_HIDDEN) {
+            let id = ItemId(u64::from(row.id));
+            out.push((id, self.file_load(id)));
+        }
+        Ok(out)
+    }
+
+    /// A folder's own properties as the file has them; none for a folder it does not have
+    /// yet. Named properties are left out: their names are the file's own.
+    pub(crate) fn e_folder_props(&mut self, folder: FolderId) -> Result<PropBag, StoreError> {
+        let nid = nid_of(folder.0).ok_or(StoreError::NoFolder)?;
+        if !self.ndb.nbt.contains_key(&nid) {
+            return Ok(PropBag::default());
+        }
+        let (mut bag, _) = self.node_props(nid)?;
+        bag.0.retain(|id, _| *id < 0x8000);
+        Ok(bag)
+    }
+
     /// A table's columns and rows, the table's own bookkeeping left out; `None` when the
     /// file has no such table or it cannot be read.
     pub(crate) fn table_of(&mut self, nid: u32) -> Option<(Vec<(u16, u16)>, Vec<Row>)> {
@@ -1536,6 +1566,9 @@ impl PstStore {
     /// file: what is stored and the model does not hold goes with it. The new file keeps the
     /// id of the one it was copied from, as a copy made of the file itself would.
     pub(crate) fn e_copy_to(&mut self, to: &Path, seed: [u8; 16]) -> Result<Option<openmailclient_model::Copied>, StoreError> {
+        // An `.ost` is not copied as it is stored: Outlook refuses a `.pst` made of an offline
+        // store's nodes (seen 2026-10-14). It is written from what is read, which carries its
+        // hidden items and folder properties all the same (`write_store_until`).
         if !self.can_edit() {
             return Ok(None);
         }
@@ -1560,9 +1593,10 @@ impl PstStore {
 
     /// True when the data file lacks nodes Outlook asks for beyond [MS-PST] 2.7.1 (see
     /// `store_write`), as those this program wrote before M3c.1 do, and all it holds is in
-    /// what is read of it: no hidden items, and no folder that is not listed but those every
-    /// file has. Such a file is written whole by the writer of today when it is saved or
-    /// copied, every folder and item keeping its id; any other is copied as it is stored.
+    /// what is read of it or carried beside it (hidden items and folder properties): no
+    /// folder that is not listed but those every file has. Such a file is written whole by
+    /// the writer of today when it is saved or copied, every folder and item keeping its id;
+    /// any other is copied as it is stored.
     pub(crate) fn renews(&mut self) -> bool {
         if !self.can_edit() || OUTLOOK_ASKS.iter().all(|nid| self.ndb.nbt.contains_key(nid)) {
             return false;
@@ -1570,9 +1604,17 @@ impl PstStore {
         let Ok(listed) = self.file_folders() else { return false };
         let listed: HashSet<u32> = listed.iter().filter_map(|f| nid_of(f.id.0)).chain(EVERY_FILE).collect();
         let nodes: Vec<u32> = self.ndb.nbt.keys().copied().collect();
+        // The hidden items the listed folders' tables name: those are carried.
+        let mut named: HashSet<u32> = HashSet::new();
+        for folder in &listed {
+            if let Some((_, rows)) = self.table_of(folder & !0x1F | TYPE_ASSOC) {
+                named.extend(rows.iter().map(|r| r.id));
+            }
+        }
         nodes.into_iter().all(|nid| match nid & 0x1F {
             TYPE_FOLDER | TYPE_SEARCH_FOLDER => listed.contains(&nid),
-            TYPE_ASSOC => self.table_of(nid).is_some_and(|(_, rows)| rows.is_empty()),
+            // A hidden item no listed folder's table names would be lost.
+            TYPE_ASSOC_MESSAGE => named.contains(&nid),
             _ => true,
         })
     }
@@ -1583,7 +1625,9 @@ impl PstStore {
     fn renewed<W: Read + Write + Seek>(&mut self, out: W, seed: [u8; 16]) -> Result<(W, Written), PstError> {
         let progress = self.progress.clone();
         let (ver, counters) = (self.ndb.ver, self.ndb.counters);
-        let (out, done) = match crate::store_write::write_store_keeping(out, self, seed, progress.as_deref(), ver, counters) {
+        // The file keeps the id it has, as a copy of it would.
+        let uid = openmailclient_model::Store::record_key(self).unwrap_or(seed);
+        let (out, done) = match crate::store_write::write_store_keeping(out, self, uid, progress.as_deref(), ver, counters) {
             Err(PstError::Stopped) => return Err(PstError::Write(STOPPED.to_string())),
             done => done?,
         };
