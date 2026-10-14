@@ -1,0 +1,20 @@
+[package]
+name = "openmailclient-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "IMAP, POP3 and SMTP clients behind a connector, and an in-process fake server for tests"
+
+[lints]
+workspace = true
+
+[features]
+# The in-process fake server, for this crate's tests and those of the crates above it.
+fake = []
+
+[dependencies]
+thiserror = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+openmailclient-net = { path = ".", features = ["fake"] }

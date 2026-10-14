@@ -23,6 +23,7 @@ const LAYERS: &[(&str, &str, u8)] = &[
     ("openmailclient-pdf", "crates/pdf", 2),
     ("openmailclient-layout", "crates/layout", 3),
     ("openmailclient-render", "crates/render", 3),
+    ("openmailclient-net", "crates/net", 3),
     ("openmailclient-engine", "crates/engine", 4),
     ("openmailclient-ui-egui", "crates/ui-egui", 6),
     ("openmailclient", "apps/openmailclient", 7),
@@ -45,6 +46,7 @@ const WASM_CRATES: &[&str] = &[
     "openmailclient-pdf",
     "openmailclient-layout",
     "openmailclient-render",
+    "openmailclient-net",
     "openmailclient-engine",
 ];
 const ASSET_EXTENSIONS: &[&str] = &[

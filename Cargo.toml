@@ -19,6 +19,7 @@ openmailclient-formats = { path = "crates/formats" }
 openmailclient-pdf = { path = "crates/pdf" }
 openmailclient-layout = { path = "crates/layout" }
 openmailclient-render = { path = "crates/render" }
+openmailclient-net = { path = "crates/net" }
 openmailclient-engine = { path = "crates/engine" }
 openmailclient-ui-egui = { path = "crates/ui-egui" }
 

@@ -1,0 +1,109 @@
+//! A connection read a line or a counted run of bytes at a time, with every read capped.
+
+use crate::{Connector, NetError, Stream};
+use std::io::ErrorKind;
+
+/// The longest line read; a server that sends a longer one is broken or hostile.
+pub const MAX_LINE: usize = 64 * 1024;
+/// Bytes asked of the stream at a time.
+const CHUNK: usize = 16 * 1024;
+
+pub struct Conn {
+    s: Box<dyn Stream>,
+    buf: Vec<u8>,
+    at: usize,
+}
+
+impl Conn {
+    pub fn new(s: Box<dyn Stream>) -> Self {
+        Self { s, buf: Vec::new(), at: 0 }
+    }
+
+    fn fill(&mut self) -> Result<(), NetError> {
+        if self.at > 0 {
+            self.buf.drain(..self.at);
+            self.at = 0;
+        }
+        let start = self.buf.len();
+        self.buf.resize(start + CHUNK, 0);
+        let n = loop {
+            match self.s.read(self.buf.get_mut(start..).unwrap_or_default()) {
+                Ok(n) => break n,
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                    self.buf.truncate(start);
+                    return Err(NetError::TimedOut);
+                }
+                Err(e) => {
+                    self.buf.truncate(start);
+                    return Err(e.into());
+                }
+            }
+        };
+        self.buf.truncate(start + n);
+        if n == 0 {
+            return Err(NetError::Closed);
+        }
+        Ok(())
+    }
+
+    fn pending(&self) -> &[u8] {
+        self.buf.get(self.at..).unwrap_or_default()
+    }
+
+    /// One line, without its CRLF (a bare LF is taken as the end too). Longer than `MAX_LINE`
+    /// is an error.
+    pub fn line(&mut self) -> Result<Vec<u8>, NetError> {
+        let mut looked = 0;
+        loop {
+            if let Some(i) = self.pending().get(looked..).and_then(|p| p.iter().position(|b| *b == b'\n')) {
+                let end = looked + i;
+                let mut line = self.pending().get(..end).unwrap_or_default().to_vec();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                self.at += end + 1;
+                return Ok(line);
+            }
+            looked = self.pending().len();
+            if looked > MAX_LINE {
+                return Err(NetError::TooLarge("a line from the server"));
+            }
+            self.fill()?;
+        }
+    }
+
+    /// Exactly `n` bytes; `n` is checked against the cap by the caller.
+    pub fn exact(&mut self, n: usize) -> Result<Vec<u8>, NetError> {
+        let mut out = Vec::with_capacity(n.min(CHUNK * 64));
+        while out.len() < n {
+            if self.pending().is_empty() {
+                self.fill()?;
+            }
+            let take = (n - out.len()).min(self.pending().len());
+            out.extend_from_slice(self.pending().get(..take).unwrap_or_default());
+            self.at += take;
+        }
+        Ok(out)
+    }
+
+    pub fn send(&mut self, bytes: &[u8]) -> Result<(), NetError> {
+        self.s.write_all(bytes).map_err(|e| match e.kind() {
+            ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted => NetError::Closed,
+            ErrorKind::TimedOut | ErrorKind::WouldBlock => NetError::TimedOut,
+            _ => e.into(),
+        })?;
+        self.s.flush()?;
+        Ok(())
+    }
+
+    /// TLS over this connection (after STARTTLS or STLS). Anything the server sent after its
+    /// answer and before TLS began is refused: it was said in the clear and could have been
+    /// put there by someone between us and the server ([RFC 3207] 4.2, [RFC 9051] 6.2.1).
+    pub fn secure(self, with: &dyn Connector, host: &str) -> Result<Self, NetError> {
+        if !self.pending().is_empty() {
+            return Err(NetError::protocol("the server said more before the connection was made secure"));
+        }
+        Ok(Self::new(with.secure(self.s, host)?))
+    }
+}

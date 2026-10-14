@@ -2428,6 +2428,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "openmailclient-net"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "openmailclient-net",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "openmailclient-pdf"
 version = "0.1.0"
 dependencies = [
