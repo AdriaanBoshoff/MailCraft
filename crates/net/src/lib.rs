@@ -17,6 +17,12 @@ mod pipe;
 pub mod pop3;
 pub mod smtp;
 mod utf7;
+mod vault;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod tcp;
+#[cfg(not(target_arch = "wasm32"))]
+pub use tcp::TcpConnector;
 
 #[cfg(feature = "fake")]
 pub mod fake;
@@ -24,6 +30,7 @@ pub mod fake;
 pub use conn::Conn;
 pub use pipe::{End, pipe};
 pub use utf7::{decode as decode_mailbox_name, encode as encode_mailbox_name};
+pub use vault::{MemoryVault, SystemVault, Vault};
 
 use std::io::{Read, Write};
 
@@ -46,6 +53,10 @@ pub enum NetError {
     Auth(String),
     #[error("the server does not offer a secure connection, and this account asks for one")]
     NotSecure,
+    #[error("the server's certificate was not accepted: {0}")]
+    Certificate(String),
+    #[error("the system's credential store could not be used: {0}")]
+    Vault(String),
     #[error("{0}")]
     Unsupported(String),
     #[error("{0} is too large")]
@@ -162,3 +173,5 @@ pub(crate) fn one_line(what: &'static str, text: &str) -> Result<(), NetError> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_tls;

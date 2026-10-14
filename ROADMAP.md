@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1) · revision 89 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2) · revision 90 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 44 of 117 (37%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 372, all passing |
+| Tests | 377, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -21,7 +21,7 @@
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
-| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1) |
+| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2) |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
 
@@ -125,7 +125,8 @@
 73. Done: A mailbox written from what is read carries each folder's hidden items and its own properties, entry ids among them made to name the same folders in the new file: an `.ost` is exported with them, and a file another program wrote that lacks what Outlook asks for is written whole with them; Outlook opens an `.ost` exported as Unicode, ANSI and 4K-page files with every folder, message and hidden item (M3c.6).
 74. Done: A data block of a 4K-page file that does not fit in one 512-byte slot is stored deflated when that makes it smaller, as Outlook stores them, and blocks shared by several messages are found again through what they inflate to; Outlook opens such files, written from the sample and from an `.ost`, with every folder, message and hidden item (M3c.7). M3c is closed.
 75. Done: A new crate, `net`, speaks IMAP, POP3 and SMTP: it signs in only over TLS or STARTTLS, lists folders with their special uses, reads messages without marking them read, appends, flags, deletes and sends, and is tested against an in-process fake server and hostile scripted servers, with no socket (M4.1).
-76. Next: M4.2: a TCP and TLS connector, and passwords kept in the system's credential store; then accounts in the engine (M4.3), sending (M4.4) and receiving (M4.5).
+76. Done: Mail servers are reached over TCP and TLS 1.2 or 1.3, with the certificate checked against the roots the system trusts and the server's name before anything is said; passwords are kept in the system's credential store (Windows Credential Manager, the macOS keychain, the Secret Service), never in a file of ours (M4.2).
+77. Next: M4.3: accounts in the engine (add, list, test, remove, a password set through the credential store, and a server's own certificate trusted when the owner says so), run off the window's thread; then sending (M4.4) and receiving (M4.5).
 
 ## Do later (from M2)
 
@@ -1592,3 +1593,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   command early are refused, a password never prints, and every count and length a server gives
   is capped before anything is allocated. 16 tests, among them hostile servers that send
   broken, endless and noisy replies.
+- **2026-10-14** - M4.2: TCP and TLS, and passwords in the system's credential store.
+  `TcpConnector` opens a connection to each address of a server's name in turn and puts TLS 1.2
+  or 1.3 over it (rustls with the ring provider), at once or after STARTTLS. The certificate is
+  checked against the roots this system trusts and against the name the account gives, and the
+  handshake is made before the first command, so a certificate that is not accepted is said as
+  that rather than as a broken reply, and nothing is sent to such a server. A connector can also
+  trust only certain certificates, for a server whose certificate is its own. Passwords are kept
+  by account in the system's credential store through `Vault` (`SystemVault`; `MemoryVault` for
+  tests and where there is none): Windows Credential Manager, the macOS keychain, the Secret
+  Service on Linux and the BSDs. Neither is on the web build. Tested against a TLS server on
+  this machine's loopback with certificates made for the test: TLS from the first byte, STARTTLS,
+  a certificate signed by nobody trusted and one for another name (both refused before anything
+  is said), and servers that are not there. 5 tests.

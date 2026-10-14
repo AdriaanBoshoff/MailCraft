@@ -8,6 +8,14 @@ pub const MAX_LINE: usize = 64 * 1024;
 /// Bytes asked of the stream at a time.
 const CHUNK: usize = 16 * 1024;
 
+/// An error of the stream, as this crate says it: waiting too long is timing out.
+pub(crate) fn io_error(e: std::io::Error) -> NetError {
+    match e.kind() {
+        ErrorKind::TimedOut | ErrorKind::WouldBlock => NetError::TimedOut,
+        _ => NetError::Io(e),
+    }
+}
+
 pub struct Conn {
     s: Box<dyn Stream>,
     buf: Vec<u8>,
@@ -30,13 +38,9 @@ impl Conn {
             match self.s.read(self.buf.get_mut(start..).unwrap_or_default()) {
                 Ok(n) => break n,
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
-                    self.buf.truncate(start);
-                    return Err(NetError::TimedOut);
-                }
                 Err(e) => {
                     self.buf.truncate(start);
-                    return Err(e.into());
+                    return Err(io_error(e));
                 }
             }
         };

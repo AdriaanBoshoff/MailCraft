@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M4%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-44%20of%20117%20%C2%B7%2037%25-yellow)
-![tests](https://img.shields.io/badge/tests-372%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-377%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -33,7 +33,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M3 | **Writing `.pst`**: a mailbox saved as a `.pst`, changes to an open one kept, settings kept | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3b | **The do-later batch**: journalled changes, a save into the data file where it is, and what M2 and M3 left | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M3c | **Proof in Outlook, 4K-page writing**: files we write open in Outlook Classic (done); 4K-page data files written (done); changes saved on their own (done); a changed message's size (done); files from before M3c.1 (done); hidden items exported from an `.ost` (done); compressed 4K-page blocks (done) | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
-| M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done); TLS with checked certificates, passwords in the system's credential store (done) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 
