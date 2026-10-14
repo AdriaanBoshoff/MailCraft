@@ -7,6 +7,7 @@ mod file;
 mod folder;
 mod link;
 mod mail;
+mod send;
 pub(crate) mod settings;
 mod view;
 
@@ -40,6 +41,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(view::commands());
         v.extend(settings::commands());
         v.extend(account::commands());
+        v.extend(send::commands());
         v
     })
 }

@@ -1,5 +1,6 @@
 //! Compose commands: new mail, reply, reply all, forward, and the compose window's own actions.
-//! Nothing here touches a network: "Send" files the message in the Outbox.
+//! Nothing here touches a network: "Send" files the message in the Outbox, and the Outbox is
+//! sent by `cmd/send.rs` when there is an account to send it from.
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
 use crate::{CmdResult, Draft, EngineError, Session, outgoing};
@@ -108,7 +109,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "Message",
             group: "",
             shortcut: "Ctrl+Enter",
-            params: "",
+            params: r#"{"anyway": true to send it whatever "compose.check" says, "wait": false to send on a thread of its own}; files it in the Outbox, and sends the Outbox when there is an account (see mail.sendAll)"#,
             enabled: composing,
             run: send,
         },
@@ -231,7 +232,7 @@ fn recipients_of(item: &Item, kind: i32, seen: &mut HashSet<String>) -> Vec<Stri
 fn respond(s: &mut Session, kind: &'static str) -> CmdResult {
     let item = s.open.clone().ok_or(StoreError::NoItem)?;
     let sender = mailbox(&item.sender_name(), &item.sender_email());
-    let mut draft = Draft { kind, body: quoted(s, &item), ..Draft::default() };
+    let mut draft = Draft { kind, body: quoted(s, &item), account: account_reached(s, &item), ..Draft::default() };
     match kind {
         "Forward" => {
             draft.subject = prefixed("FW:", &item.subject());
@@ -239,7 +240,9 @@ fn respond(s: &mut Session, kind: &'static str) -> CmdResult {
         }
         _ => {
             draft.subject = prefixed("RE:", &item.subject());
-            let own = s.user_email.trim().to_lowercase();
+            (draft.in_reply_to, draft.references) = thread_of(&item);
+            // The writer is the account the answer goes from, where there are accounts.
+            let own = from_account(s, &draft).map_or(s.user_email.as_str(), |a| a.email.as_str()).trim().to_lowercase();
             let from = item.sender_email().trim().to_lowercase();
             // Nobody is named twice, and the writer not at all, however the message listed them.
             let mut seen: HashSet<String> = [own.clone(), from.clone()].into_iter().filter(|a| !a.is_empty()).collect();
@@ -307,7 +310,20 @@ fn set_field(s: &mut Session, p: &Value) -> CmdResult {
         }
         "subject" => draft.subject = one_line,
         "body" => draft.body = clamp(value, MAX_BODY),
-        other => return Err(EngineError::BadParams(format!("\"{other}\" is not to, cc, bcc, subject or body"))),
+        "from" | "account" => {
+            // An account by its id or its address; empty for the first account.
+            let wanted = value.trim();
+            draft.account = if wanted.is_empty() {
+                String::new()
+            } else {
+                s.accounts
+                    .iter()
+                    .find(|a| a.id == wanted || a.email.eq_ignore_ascii_case(wanted))
+                    .map(|a| a.id.clone())
+                    .ok_or_else(|| EngineError::BadParams(format!("there is no account {}", clamp(wanted, 64))))?
+            };
+        }
+        other => return Err(EngineError::BadParams(format!("\"{other}\" is not to, cc, bcc, subject, body or from"))),
     }
     draft.touched = true;
     ok()
@@ -362,7 +378,15 @@ fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     let mut item = Item::new_mail();
     item.set_subject(&draft.subject);
     item.set_body_text(&draft.body);
-    item.set_sender(&s.user_name, &s.user_email);
+    match from_account(s, draft) {
+        Some(a) => item.set_sender(&a.display_name, &a.email),
+        None => item.set_sender(&s.user_name, &s.user_email),
+    }
+    for (id, text) in [(pid::IN_REPLY_TO_ID, &draft.in_reply_to), (pid::INTERNET_REFERENCES, &draft.references)] {
+        if !text.is_empty() {
+            item.props.set(id, PropValue::String(text.clone()));
+        }
+    }
     for (kind, line) in [(RECIP_TO, &draft.to), (RECIP_CC, &draft.cc), (RECIP_BCC, &draft.bcc)] {
         for (name, email) in openmailclient_mime::parse_addresses(line) {
             item.add_recipient(kind, &name, &email);
@@ -379,6 +403,30 @@ fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
         item.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(MSGFLAG_READ | MSGFLAG_UNSENT));
     }
     item
+}
+
+/// The account a draft goes from: the one it names, or the first.
+fn from_account<'a>(s: &'a Session, draft: &Draft) -> Option<&'a crate::accounts::Account> {
+    s.accounts.iter().find(|a| a.id == draft.account).or_else(|| s.accounts.first())
+}
+
+/// The account a message reached: the first whose address it went to, or that sent it.
+fn account_reached(s: &Session, item: &Item) -> String {
+    let to: Vec<String> = item.recipients.iter().map(recipient_email).chain([item.sender_email()]).collect();
+    s.accounts.iter().find(|a| to.iter().any(|t| t.trim().eq_ignore_ascii_case(&a.email))).map(|a| a.id.clone()).unwrap_or_default()
+}
+
+/// The headers of an answer that name what it answers ([RFC 5322] 3.6.4): the message's own
+/// id, after those it named itself, of which no more than the last 20 are kept.
+fn thread_of(item: &Item) -> (String, String) {
+    let Some(id) = item.props.str(pid::INTERNET_MESSAGE_ID).map(str::trim).filter(|v| v.starts_with('<') && v.is_ascii()) else {
+        return (String::new(), String::new());
+    };
+    let before = item.props.str(pid::INTERNET_REFERENCES).or(item.props.str(pid::IN_REPLY_TO_ID)).unwrap_or_default();
+    let mut all: Vec<&str> = before.split_whitespace().filter(|r| r.starts_with('<') && r.ends_with('>') && r.is_ascii()).collect();
+    all.push(id);
+    let from = all.len().saturating_sub(20);
+    (id.to_string(), all.get(from..).unwrap_or_default().join(" "))
 }
 
 fn file_draft(s: &mut Session, kind: FolderKind, sent: bool) -> Result<(), EngineError> {
@@ -411,8 +459,19 @@ fn send(s: &mut Session, p: &Value) -> CmdResult {
         return Err(EngineError::Format(format!("{} It was not sent; send it with \"anyway\": true to send it as it is.", words.join(" "))));
     }
     file_draft(s, FolderKind::Outbox, true)?;
-    s.status = "The message is in the Outbox. Sending needs an account, which this version does not have yet.".to_string();
-    ok()
+    if s.accounts.is_empty() {
+        s.status = "The message is in the Outbox; it goes when an account is added (account.add) and Send All is asked for".to_string();
+        return ok();
+    }
+    if s.connector.is_none() {
+        s.status = "The message is in the Outbox; this build cannot reach mail servers".to_string();
+        return ok();
+    }
+    // The message is kept whatever comes of sending it.
+    super::send::send_outbox(s, p_bool(p, "wait") != Some(false)).or_else(|e| {
+        s.status = format!("The message is in the Outbox and was not sent: {e}");
+        ok()
+    })
 }
 
 fn save_draft(s: &mut Session, _: &Value) -> CmdResult {

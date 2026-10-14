@@ -1,8 +1,8 @@
 # OpenMailClient
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M4%20in%20progress-orange)
-![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-46%20of%20118%20%C2%B7%2038%25-yellow)
-![tests](https://img.shields.io/badge/tests-383%20passing-brightgreen)
+![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-47%20of%20118%20%C2%B7%2039%25-yellow)
+![tests](https://img.shields.io/badge/tests-388%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -33,7 +33,7 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M3 | **Writing `.pst`**: a mailbox saved as a `.pst`, changes to an open one kept, settings kept | ![closed](https://img.shields.io/badge/-closed-brightgreen) ([do later](ROADMAP.md#do-later-from-m2)) |
 | M3b | **The do-later batch**: journalled changes, a save into the data file where it is, and what M2 and M3 left | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M3c | **Proof in Outlook, 4K-page writing**: files we write open in Outlook Classic (done); 4K-page data files written (done); changes saved on their own (done); a changed message's size (done); files from before M3c.1 (done); hidden items exported from an `.ost` (done); compressed 4K-page blocks (done) | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
-| M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done); TLS with checked certificates, passwords in the system's credential store (done); accounts added, tested and kept (done) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
+| M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done); TLS with checked certificates, passwords in the system's credential store (done); accounts added, tested and kept (done); mail sent and kept in Sent Items (done) | ![in progress](https://img.shields.io/badge/-in%20progress-orange) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 
@@ -47,13 +47,13 @@ read, a reader we can try without driving a window, a printer we may use).
 
 | Area | Done | | |
 |---|---|---|---|
-| Mail | 32 of 67 | `██████████░░░░░░░░░░` | 48% |
+| Mail | 33 of 67 | `██████████░░░░░░░░░░` | 49% |
 | File | 10 of 15 | `█████████████░░░░░░░` | 66% |
 | Message window | 4 of 17 | `█████░░░░░░░░░░░░░░░` | 24% |
 | Calendar | 0 of 9 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | People | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | Tasks | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
-| **All** | **46 of 118** | `███████░░░░░░░░░░░░░` | **38%** |
+| **All** | **47 of 118** | `████████░░░░░░░░░░░░` | **39%** |
 
 ### File formats and protocols
 
@@ -63,7 +63,7 @@ read, a reader we can try without driving a window, a printer we may use).
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
-| IMAP, POP3, SMTP | the protocols are spoken, tested against a fake server; accounts in the app next (M4) | the same |
+| IMAP, POP3, SMTP | accounts are kept and tested, and mail is sent; receiving next (M4) | the same |
 
 ## What works today
 

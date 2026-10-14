@@ -708,7 +708,7 @@ impl MailUi {
                     .min_size(vec2(72.0, 30.0)),
                 );
                 if send.on_hover_text("Files the message in Outbox. Sending needs an account, which is not built yet.").clicked() {
-                    acts.push(("compose.send", json!({ "anyway": !cautions.is_empty() })));
+                    acts.push(("compose.send", json!({ "anyway": !cautions.is_empty(), "wait": false })));
                 }
                 for (label, cmd, params) in [
                     ("Attach File…", "ui.attachDialog", Value::Null),

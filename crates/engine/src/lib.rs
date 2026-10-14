@@ -26,6 +26,8 @@ mod tests;
 mod tests_accounts;
 #[cfg(test)]
 mod tests_pictures;
+#[cfg(test)]
+mod tests_send;
 pub mod undo;
 
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
@@ -147,6 +149,11 @@ pub struct Draft {
     pub was_hidden: bool,
     /// Its writer has put something into it.
     pub touched: bool,
+    /// The id of the account it goes from; empty for the first account.
+    pub account: String,
+    /// What it answers, as the headers that keep a conversation together ([RFC 5322] 3.6.4).
+    pub in_reply_to: String,
+    pub references: String,
 }
 
 /// A save of a data file that is being done on a thread of its own.
@@ -243,6 +250,8 @@ pub struct Session {
     pub jobs: Vec<jobs::Job>,
     /// What the jobs that ended last came to, the newest last.
     pub finished: Vec<Value>,
+    /// The Outbox is to be sent again once the send under way ends: more was put in it.
+    pub send_again: bool,
     /// Saves of data files that are being done away from the caller: `file.save` with
     /// `"wait": false` starts them, `Session::poll` ends them.
     pub saves: Vec<Saving>,
@@ -315,6 +324,7 @@ impl Session {
             connector: None,
             jobs: Vec::new(),
             finished: Vec::new(),
+            send_again: false,
             saves: Vec::new(),
             exports: Vec::new(),
             stores: Vec::new(),

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3) · revision 91 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4) · revision 92 · 2026-10-14
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 46 of 118 (38%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 383, all passing |
+| Catalogued Outlook Classic features with a command | 47 of 118 (39%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 388, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -21,7 +21,7 @@
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
-| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3) |
+| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4) |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
 
@@ -127,7 +127,8 @@
 75. Done: A new crate, `net`, speaks IMAP, POP3 and SMTP: it signs in only over TLS or STARTTLS, lists folders with their special uses, reads messages without marking them read, appends, flags, deletes and sends, and is tested against an in-process fake server and hostile scripted servers, with no socket (M4.1).
 76. Done: Mail servers are reached over TCP and TLS 1.2 or 1.3, with the certificate checked against the roots the system trusts and the server's name before anything is said; passwords are kept in the system's credential store (Windows Credential Manager, the macOS keychain, the Secret Service), never in a file of ours (M4.2).
 77. Done: Mail accounts are kept in the engine: added, listed, changed, removed and tested (signing in to both servers and sending nothing), on a thread of their own; kept in the settings file without their passwords, which are in the system's credential store (M4.3).
-78. Next: M4.4: sending: a message in the Outbox goes out through its account's SMTP server and is filed in Sent Items; then receiving (M4.5) and the window's Account Settings and Send/Receive (M4.6).
+78. Done: Mail is sent: Send puts a message in the Outbox and the Outbox goes out through its account's SMTP server on a thread of its own; what went is kept in Sent Items, and what the server did not take stays in the Outbox with the reason (M4.4).
+79. Next: M4.5: receiving: POP3 into the Inbox, IMAP folders kept in step with the server; then the window's Account Settings and Send/Receive (M4.6) and the check with a real test account (M4.7).
 
 ## Do later (from M2)
 
@@ -218,6 +219,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
 | A server's own certificate trusted on the owner's word, and kept for that server only | M4.6, with the window's Account Settings |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
+| A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | M4.5, with IMAP folders |
+| Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.6, with the window's message options |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
 
@@ -1624,3 +1627,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   (`jobs`, which sending and receiving will use) with Stop. The window and the CLI reach servers
   over TLS and keep passwords in the system's store (`Session::use_this_system`); tests use the
   fake server. 6 tests.
+- **2026-10-14** - M4.4: sending.
+  `compose.send` files the message in the Outbox and, when there is an account and a way to
+  reach servers, sends the Outbox; `mail.sendAll` (Send / Receive > Send All) sends it on its
+  own. Each message goes from the account its sender names, or the first; the messages of one
+  account go over one connection, on a thread of its own from the window (`"wait": false`),
+  with progress and Stop. On the wire a message has a Message-ID of its own and no Bcc line, so
+  hidden recipients stay hidden, while the envelope names every recipient; Sent Items keeps it
+  as it went, every recipient with it. A message is put in Sent Items before it leaves the
+  Outbox, so one that went is never lost; one the server did not take stays in the Outbox with
+  the reason, a recipient the server refused is named, and a wrong password sends nothing and is
+  never said. A send asked for while one runs follows it, and nothing goes twice; a data file is
+  not closed from under a send. Better than Outlook: an answer goes from the account the message
+  it answers reached, and carries In-Reply-To and References so conversations stay together in
+  every client; the From of a message being written is chosen with `compose.setField`
+  (`"from"`). 5 tests.

@@ -633,8 +633,10 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
     if idx >= s.stores.len() {
         return Err(EngineError::BadParams(format!("there is no data file {idx}")));
     }
-    if !s.saves.is_empty() || !s.exports.is_empty() {
-        return Err(EngineError::BadParams("a data file is being saved or exported; close when that is done, or stop it with file.stopSave".into()));
+    if !s.saves.is_empty() || !s.exports.is_empty() || !s.jobs.is_empty() {
+        return Err(EngineError::BadParams(
+            "a data file is being saved or exported, or mail is being sent; close when that is done, or stop it with file.stopSave".into(),
+        ));
     }
     // Changes are not thrown away, and a file is not written, without being asked.
     if s.stores.get(idx).is_some_and(|st| st.unsaved()) {

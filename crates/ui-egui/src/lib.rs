@@ -865,7 +865,6 @@ impl MailUi {
             (Key::Q, "mail.markRead"),
             (Key::U, "mail.markUnread"),
             (Key::D, "mail.delete"),
-            (Key::Enter, "compose.send"),
             (Key::S, "compose.saveDraft"),
         ] {
             if hit(ctrl, key) {
@@ -879,6 +878,10 @@ impl MailUi {
         }
         if hit(Modifiers::NONE, Key::F12) {
             run.push(("ui.saveAsDialog", Value::Null));
+        }
+        if hit(ctrl, Key::Enter) {
+            // From the window a send does not hold the window: the status bar says how it went.
+            run.push(("compose.send", json!({ "wait": false })));
         }
         if hit(ctrl, Key::S) && self.session.is_enabled("file.save") {
             // From the window a save does not hold the window: the status bar says how far it is.
