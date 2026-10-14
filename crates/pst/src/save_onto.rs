@@ -111,6 +111,10 @@ impl PstStore {
         if !self.in_place || self.torn.is_some() || !self.can_edit() || self.ndb.ver == crate::ndb::Ver::Unicode4k {
             return Ok(None);
         }
+        // A file that lacks what Outlook asks for is written whole, by the writer of today.
+        if self.renews() {
+            return Ok(None);
+        }
         // The first save keeps the file as it was under another name, which costs nothing
         // when the new file takes its place and would cost a copy here.
         if self.keep_before && !original_beside(path).exists() {

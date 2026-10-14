@@ -32,6 +32,14 @@ const TYPE_ATTACHMENT: u32 = 0x05;
 const TYPE_HIERARCHY: u32 = 0x0D;
 const TYPE_CONTENTS: u32 = 0x0E;
 const TYPE_ASSOC: u32 = 0x0F;
+const TYPE_SEARCH_FOLDER: u32 = 0x03;
+/// Nodes Outlook asks for that the files this program wrote before M3c.1 lack (see
+/// `store_write`): the receive folder table, the outgoing queue, three templates and the
+/// search update queue.
+const OUTLOOK_ASKS: [u32; 6] = [0x62B, 0x64C, 0x6B6, 0x6D7, 0x6F8, 0xEC1];
+/// The folders every data file has that are not listed: the root, the top of the visible
+/// tree, the search root and the search folder ([MS-PST] 2.7.1).
+const EVERY_FILE: [u32; 4] = [0x122, 0x8022, 0x8042, 0x2223];
 const TYPE_SEARCH_CONTENTS: u32 = 0x10;
 const TYPE_LTP: u32 = 0x1F;
 
@@ -1372,8 +1380,23 @@ impl PstStore {
     /// Write the mailbox as it stands to `tmp`, hold that file against the structure check,
     /// read it back and compare it with what was meant. Gives the new file, open.
     fn prepare(&mut self, tmp: &Path, seed: [u8; 16]) -> Result<(Self, Written), PstError> {
+        // A file that lacks what Outlook asks for is written anew; where that cannot be done
+        // it is saved as it is stored, as before.
+        if self.renews() {
+            match self.prepare_as(tmp, seed, true) {
+                Ok(done) => return Ok(done),
+                Err(e) if self.progress.as_ref().is_some_and(|p| p.stopped()) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        self.prepare_as(tmp, seed, false)
+    }
+
+    /// `prepare`, the new file written by copying what is stored, or with `renew` by the
+    /// writer of today from the mailbox as it is read (`renewed`).
+    fn prepare_as(&mut self, tmp: &Path, seed: [u8; 16], renew: bool) -> Result<(Self, Written), PstError> {
         let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(tmp)?;
-        let (mut file, done) = self.save_to(file, seed)?;
+        let (mut file, done) = if renew { self.renewed(file, seed)? } else { self.save_to(file, seed)? };
         file.sync_all()?;
         file.seek(SeekFrom::Start(0))?;
         // The check hears a stop as the writing does.
@@ -1517,11 +1540,57 @@ impl PstStore {
             return Ok(None);
         }
         let listed = self.e_folders()?;
-        let file = std::fs::File::options().read(true).write(true).create(true).truncate(true).open(to).map_err(PstError::Io)?;
-        let (file, _) = self.save_to(file, seed)?;
+        let open = || std::fs::File::options().read(true).write(true).create(true).truncate(true).open(to).map_err(PstError::Io);
+        // A copy of a file that lacks what Outlook asks for is written anew, as a save is.
+        let renewed = match self.renews() {
+            true => match self.renewed(open()?, seed) {
+                Err(e) if self.progress.as_ref().is_some_and(|p| p.stopped()) => return Err(e.into()),
+                done => done.ok(),
+            },
+            false => None,
+        };
+        let (file, _) = match renewed {
+            Some(done) => done,
+            None => self.save_to(open()?, seed)?,
+        };
         file.sync_all().map_err(PstError::Io)?;
         let items = listed.iter().fold(0u64, |n, f| n.saturating_add(u64::from(f.total)));
         Ok(Some(openmailclient_model::Copied { folders: listed.len() as u64, items }))
+    }
+
+    /// True when the data file lacks nodes Outlook asks for beyond [MS-PST] 2.7.1 (see
+    /// `store_write`), as those this program wrote before M3c.1 do, and all it holds is in
+    /// what is read of it: no hidden items, and no folder that is not listed but those every
+    /// file has. Such a file is written whole by the writer of today when it is saved or
+    /// copied, every folder and item keeping its id; any other is copied as it is stored.
+    pub(crate) fn renews(&mut self) -> bool {
+        if !self.can_edit() || OUTLOOK_ASKS.iter().all(|nid| self.ndb.nbt.contains_key(nid)) {
+            return false;
+        }
+        let Ok(listed) = self.file_folders() else { return false };
+        let listed: HashSet<u32> = listed.iter().filter_map(|f| nid_of(f.id.0)).chain(EVERY_FILE).collect();
+        let nodes: Vec<u32> = self.ndb.nbt.keys().copied().collect();
+        nodes.into_iter().all(|nid| match nid & 0x1F {
+            TYPE_FOLDER | TYPE_SEARCH_FOLDER => listed.contains(&nid),
+            TYPE_ASSOC => self.table_of(nid).is_some_and(|(_, rows)| rows.is_empty()),
+            _ => true,
+        })
+    }
+
+    /// The mailbox written to `out` by the writer of today, as a file of the kind this one
+    /// is: every folder and item keeps its id, and the file goes on from the header's
+    /// counters. An error when an item cannot be read or an id cannot be kept.
+    fn renewed<W: Read + Write + Seek>(&mut self, out: W, seed: [u8; 16]) -> Result<(W, Written), PstError> {
+        let progress = self.progress.clone();
+        let (ver, counters) = (self.ndb.ver, self.ndb.counters);
+        let (out, done) = match crate::store_write::write_store_keeping(out, self, seed, progress.as_deref(), ver, counters) {
+            Err(PstError::Stopped) => return Err(PstError::Write(STOPPED.to_string())),
+            done => done?,
+        };
+        if done.unreadable > 0 {
+            return Err(PstError::Write("an item could not be read, and the file is not written anew".to_string()));
+        }
+        Ok((out, done))
     }
 
     /// The mailbox for another thread: a store of its own on the same file, with the

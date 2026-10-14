@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 75 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 76 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -8,7 +8,7 @@
    files the message in Outbox and says so.
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
    (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; what we write, saved whole or into the file, opens in
-   Outlook Classic with every folder and message as we wrote them (M3c.1), but no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
+   Outlook Classic with every folder and message as we wrote them (M3c.1), files from before M3c.1 too after one save (M3c.5), but no Outlook-written `.pst` has been saved into. Unsaved changes are journalled beside the file as they are made (M3b.1) and come back
    after a run that ended without saving; a power cut may cost the last second of them (M3b.7), and a folder that cannot be written no longer means no journal. An ANSI `.pst` takes changes and is saved as an ANSI file (M3b.21), and a 4K-page `.pst` as a 4K-page file, written whole (M3c.2); an `.ost` is read-only. Once a file has been saved, later changes are saved on their own after five minutes (M3c.3, `file.autoSave`). `file.export` copies a
    Unicode `.pst` as it is stored (M3b.2); from any other source it goes through the model: hidden
    (associated) items and folder properties beyond name, class and counts are not carried then, and
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 76 · 2026-10-14 — M3c.5: a file from before M3c.1 is written whole on its next save, keeping its ids, and Outlook opens it.
 - 75 · 2026-10-14 — M3c.4: a message changed by a save has as its size what is now stored of it.
 - 74 · 2026-10-14 — M3c.3: unsaved changes are saved on their own after five minutes, never for a file's first save.
 - 73 · 2026-10-14 — M3c.2: data files with 4K pages are written, take changes and are saved as that kind; Outlook Classic opens one of ours.

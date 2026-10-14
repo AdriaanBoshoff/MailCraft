@@ -264,6 +264,13 @@ pub(crate) struct NdbWriter<W: Read + Write + Seek> {
 mod onto;
 pub(crate) use onto::Onto;
 
+#[cfg(test)]
+thread_local! {
+    /// Nodes a test has the writer leave out: a file as an older version of this program,
+    /// or another program, wrote it.
+    pub(crate) static LEAVE_OUT: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl<W: Read + Write + Seek> NdbWriter<W> {
     /// `crypt` is how data blocks are encoded: 0 not at all, 1 permuted, 2 cyclic
     /// ([MS-PST] 2.2.2.6 bCryptMethod).
@@ -715,6 +722,10 @@ impl<W: Read + Write + Seek> NdbWriter<W> {
 
     /// A top-level node ([MS-PST] 2.2.2.7.7.4). `data` and `sub` are ids this writer gave out.
     pub(crate) fn node(&mut self, nid: u32, parent: u32, data: u64, sub: u64) {
+        #[cfg(test)]
+        if LEAVE_OUT.with(|l| l.borrow().contains(&nid)) {
+            return;
+        }
         self.note(nid);
         self.nodes.push((nid, data, sub, parent));
     }

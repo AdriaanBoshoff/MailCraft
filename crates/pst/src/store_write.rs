@@ -13,7 +13,7 @@ use openmailclient_model::{
     Attachment, FolderId, FolderKind, Item, ItemId, MSGFLAG_HASATTACH, MSGFLAG_READ, NameId, NamedKey, PropBag, PropValue, Store, codepage, pid,
     pset, ptype,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, Write};
 
 /// Well-known nodes ([MS-PST] 2.4.1, 2.7.1).
@@ -689,7 +689,7 @@ pub fn write_store_until<W: Read + Write + Seek>(
     uid: [u8; 16],
     progress: Option<&openmailclient_model::Progress>,
 ) -> Result<(W, Written), PstError> {
-    write_store_of(out, store, uid, progress, crate::ndb::Ver::Unicode)
+    write_store_of(out, store, uid, progress, crate::ndb::Ver::Unicode, None)
 }
 
 /// `write_store_until` for an ANSI data file ([MS-PST] 2.2.2.6, wVer 14): the kind older
@@ -703,7 +703,7 @@ pub fn write_store_ansi<W: Read + Write + Seek>(
     uid: [u8; 16],
     progress: Option<&openmailclient_model::Progress>,
 ) -> Result<(W, Written), PstError> {
-    write_store_of(out, store, uid, progress, crate::ndb::Ver::Ansi)
+    write_store_of(out, store, uid, progress, crate::ndb::Ver::Ansi, None)
 }
 
 /// A contents table in a file with 4K pages has two subnodes more, 0x521 and 0x541, each a
@@ -731,7 +731,36 @@ pub fn write_store_4k<W: Read + Write + Seek>(
     uid: [u8; 16],
     progress: Option<&openmailclient_model::Progress>,
 ) -> Result<(W, Written), PstError> {
-    write_store_of(out, store, uid, progress, crate::ndb::Ver::Unicode4k)
+    write_store_of(out, store, uid, progress, crate::ndb::Ver::Unicode4k, None)
+}
+
+/// `write_store_until` for a data file written whole again as the kind `ver` it is: every
+/// folder and message keeps the node id it has in `store`, and the file goes on from the
+/// header's `counters`. An error when an id cannot be kept (one of another kind, one given
+/// twice, or one this writer keeps for a node of its own).
+pub(crate) fn write_store_keeping<W: Read + Write + Seek>(
+    out: W,
+    store: &mut dyn Store,
+    uid: [u8; 16],
+    progress: Option<&openmailclient_model::Progress>,
+    ver: crate::ndb::Ver,
+    counters: (u32, [u32; 32]),
+) -> Result<(W, Written), PstError> {
+    write_store_of(out, store, uid, progress, ver, Some(counters))
+}
+
+/// The folders this writer gives node ids of their own.
+const OWN_FOLDERS: [u32; 5] = [NID_ROOT_FOLDER, NID_IPM_SUBTREE, NID_SEARCH_ROOT, NID_DELETED_ITEMS, NID_SPAM_SEARCH_FOLDER];
+
+/// The node id an item has, kept: one of the kind `ty`, not given twice, and not one of the
+/// folders this writer numbers itself, but for the deleted items folder, which keeps that one.
+fn kept_id(id: u64, ty: u32, deleted: bool, taken: &mut HashSet<u32>) -> Result<u32, PstError> {
+    u32::try_from(id)
+        .ok()
+        .filter(|n| n & 0x1F == ty && n >> 5 != 0)
+        .filter(|n| if deleted { *n == NID_DELETED_ITEMS } else { !OWN_FOLDERS.contains(n) })
+        .filter(|n| taken.insert(*n))
+        .ok_or_else(|| PstError::Write(format!("the id {id:#x} cannot be kept in a file written whole")))
 }
 
 fn write_store_of<W: Read + Write + Seek>(
@@ -740,6 +769,7 @@ fn write_store_of<W: Read + Write + Seek>(
     uid: [u8; 16],
     progress: Option<&openmailclient_model::Progress>,
     ver: crate::ndb::Ver,
+    keep: Option<(u32, [u32; 32])>,
 ) -> Result<(W, Written), PstError> {
     let source = |e: openmailclient_model::StoreError| PstError::Source(e.to_string());
     let listed = store.folders().map_err(source)?;
@@ -748,6 +778,10 @@ fn write_store_of<W: Read + Write + Seek>(
     }
     // Data blocks are permuted, as in the data files Outlook makes ([MS-PST] 2.2.2.6).
     let mut o = Out { w: NdbWriter::of(out, crate::write::crypt_of(ver), ver)?, names: Names::default(), uid, serial: 0 };
+    if let Some(counters) = keep {
+        o.w.carry(counters);
+    }
+    let mut taken: HashSet<u32> = HashSet::new();
     let mut done = Written::default();
 
     // 0: the top of the visible tree; 1…: the source's folders in its order.
@@ -771,7 +805,9 @@ fn write_store_of<W: Read + Write + Seek>(
     // The deleted items folder has a node of its own; the first folder of that kind takes it.
     let deleted = listed.iter().position(|f| f.kind == FolderKind::Deleted && f.parent.is_none());
     for (i, f) in listed.iter().enumerate() {
-        let nid = if Some(i) == deleted {
+        let nid = if keep.is_some() {
+            kept_id(f.id.0, TYPE_FOLDER, Some(i) == deleted, &mut taken)?
+        } else if Some(i) == deleted {
             NID_DELETED_ITEMS
         } else {
             let index = next;
@@ -841,9 +877,13 @@ fn write_store_of<W: Read + Write + Seek>(
                 done.unreadable += 1;
                 continue;
             };
-            let index = next;
-            next = next.checked_add(1).filter(|n| *n <= MAX_INDEX).ok_or_else(|| cannot("that many messages"))?;
-            let message = index << 5 | TYPE_MESSAGE;
+            let message = if keep.is_some() {
+                kept_id(s.id, TYPE_MESSAGE, false, &mut taken)?
+            } else {
+                let index = next;
+                next = next.checked_add(1).filter(|n| *n <= MAX_INDEX).ok_or_else(|| cannot("that many messages"))?;
+                index << 5 | TYPE_MESSAGE
+            };
             let (data, sub, cells) = o.message(&item, 0)?;
             o.w.node(message, nid, data, sub);
             let columns: Vec<(u16, u16)> = CONTENTS.iter().chain(CONTENTS_MORE).copied().collect();

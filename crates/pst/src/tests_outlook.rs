@@ -250,3 +250,95 @@ fn a_message_changed_by_a_save_has_the_size_now_stored() {
         }
     }
 }
+
+/// The nodes the files this program wrote before M3c.1 lack.
+const ASKED: [u32; 6] = [0x62B, 0x64C, 0x6B6, 0x6D7, 0x6F8, 0xEC1];
+
+/// The mailbox as a Unicode and an ANSI file without the nodes Outlook asks for.
+fn old_files() -> Vec<(Vec<u8>, bool)> {
+    crate::write::LEAVE_OUT.with(|l| *l.borrow_mut() = ASKED.to_vec());
+    // Blocks the nodes left out shared are counted as they were: the file is as sound as the
+    // ones written then, which the structure check does not ask about here.
+    let (unicode, _) = crate::write_store(Cursor::new(Vec::new()), &mut mailbox(), UID).unwrap();
+    let (out, _) = write_store_ansi(Cursor::new(Vec::new()), &mut mailbox(), UID, None).unwrap();
+    crate::write::LEAVE_OUT.with(|l| l.borrow_mut().clear());
+    vec![(unicode.into_inner(), false), (out.into_inner(), true)]
+}
+
+#[test]
+fn a_file_without_what_outlook_asks_for_is_written_whole_keeping_its_ids() {
+    use crate::tests_edit::{folder, same_mailbox, scratch, whole};
+    use openmailclient_model::ItemId;
+    for (bytes, ansi) in old_files() {
+        let ndb = open(&bytes);
+        assert!(ASKED.iter().all(|n| !ndb.nbt.contains_key(n)));
+        drop(ndb);
+        let dir = scratch(&format!("renew-{ansi}"));
+        let path = dir.join("old.pst");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut store = PstStore::open(&path).unwrap();
+        store.keep_original(false);
+        assert!(store.renews());
+        let inbox = folder(&mut store, "Inbox");
+        let first = ItemId(store.list(inbox.id).unwrap()[0].id);
+        let mut item = store.load(inbox.id, first).unwrap();
+        item.set_read(!item.is_read());
+        store.update(inbox.id, first, item).unwrap();
+        let want = whole(&mut store);
+        store.save(UID).unwrap();
+        // Written whole, not into the file where it is: it now has what Outlook asks for.
+        assert_eq!(store.saved_in_place(), 0);
+        let now = std::fs::read(&path).unwrap();
+        assert_eq!(now.get(10), Some(if ansi { &14 } else { &23 }));
+        let mut ndb = open(&now);
+        assert!(ASKED.iter().all(|n| ndb.nbt.contains_key(n)), "ansi: {ansi}");
+        assert!(ndb.nbt.contains_key(&0x2226) && !ndb.data(*ndb.nbt.get(&0x201).map(|e| &e.data).unwrap()).unwrap().is_empty());
+        drop(ndb);
+        assert!(check(&mut Cursor::new(&now)).unwrap().sound());
+        sizes_hold(&now, "renewed");
+        // Every folder and item has the id it had, and what it held.
+        same_mailbox(&want, &whole(&mut store));
+        same_mailbox(&want, &whole(&mut PstStore::open(&path).unwrap()));
+        assert!(!store.renews());
+        // The next save goes into the file where it is.
+        let mut item = store.load(inbox.id, first).unwrap();
+        item.set_read(!item.is_read());
+        store.update(inbox.id, first, item).unwrap();
+        store.save(UID).unwrap();
+        assert_eq!(store.saved_in_place(), 1);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn a_file_without_what_outlook_asks_for_and_with_hidden_items_is_copied_as_stored() {
+    use crate::tests_edit::{folder, scratch};
+    use openmailclient_model::ItemId;
+    let (bytes, _) = old_files().remove(0);
+    let mut plain = PstStore::from_bytes(bytes).unwrap();
+    // A hidden item in the Inbox's table of associated items, as another program keeps.
+    let inbox = folder(&mut plain, "Inbox");
+    let table = u32::try_from(inbox.id.0).unwrap() & !0x1F | 0x0F;
+    let (columns, _) = plain.table_of(table).unwrap();
+    let hidden = ltp::Row { id: 0x7FFF_0004 & !0x1F | 0x04, cells: Vec::new() };
+    crate::edit::TABLES.with(|t| t.borrow_mut().push((table, columns, vec![hidden])));
+    crate::write::LEAVE_OUT.with(|l| *l.borrow_mut() = ASKED.to_vec());
+    let (out, _) = plain.save_with(Cursor::new(Vec::new()), UID, Vec::new()).unwrap();
+    crate::write::LEAVE_OUT.with(|l| l.borrow_mut().clear());
+    let dir = scratch("renew-hidden");
+    let path = dir.join("old.pst");
+    std::fs::write(&path, out.into_inner()).unwrap();
+    let mut store = PstStore::open(&path).unwrap();
+    store.keep_original(false);
+    assert!(!store.renews());
+    let first = ItemId(store.list(inbox.id).unwrap()[0].id);
+    let mut item = store.load(inbox.id, first).unwrap();
+    item.set_read(!item.is_read());
+    store.update(inbox.id, first, item).unwrap();
+    store.save(UID).unwrap();
+    let mut back = PstStore::open(&path).unwrap();
+    assert_eq!(back.table_of(table).unwrap().1.len(), 1);
+    drop((store, back));
+    let _ = std::fs::remove_dir_all(&dir);
+}
