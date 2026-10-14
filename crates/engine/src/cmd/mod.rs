@@ -1,6 +1,7 @@
 //! The command registry. Every user-visible action is one [`CommandSpec`]; the ribbon, shortcuts,
 //! command search, the CLI and agents all dispatch by id.
 
+mod account;
 mod compose;
 mod file;
 mod folder;
@@ -38,6 +39,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(folder::commands());
         v.extend(view::commands());
         v.extend(settings::commands());
+        v.extend(account::commands());
         v
     })
 }

@@ -89,7 +89,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Save",
             shortcut: "",
-            params: r#"{"store": index}; default: every save and every export that is running. A data file being saved stays as it was and its changes stay unsaved; a file being exported to is not written; returns {"stopping": how many}"#,
+            params: r#"{"store": index}; default: every save, every export and all work with mail servers that is running. A data file being saved stays as it was and its changes stay unsaved; a file being exported to is not written; returns {"stopping": how many}"#,
             enabled: is_saving,
             run: stop_save,
         },
@@ -175,7 +175,7 @@ fn can_save(s: &Session) -> bool {
 }
 
 fn is_saving(s: &Session) -> bool {
-    !s.saves.is_empty() || !s.exports.is_empty()
+    !s.saves.is_empty() || !s.exports.is_empty() || !s.jobs.is_empty()
 }
 
 /// Ask saves that are running to stop. They end when their work notices.
@@ -188,6 +188,11 @@ fn stop_save(s: &mut Session, p: &Value) -> CmdResult {
     }
     for export in s.exports.iter().filter(|export| only.is_none_or(|i| i == export.store)) {
         export.progress.stop();
+        stopping += 1;
+    }
+    // Work with a server stops at the next step it comes to; what it did by then is kept.
+    for job in s.jobs.iter().filter(|_| only.is_none()) {
+        job.progress.stop();
         stopping += 1;
     }
     Ok(json!({ "stopping": stopping }))

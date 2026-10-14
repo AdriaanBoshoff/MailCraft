@@ -92,7 +92,8 @@ pub const FEATURES: &[Feature] = &[
     f("Mail", "Navigation", "", "Next Item", "mail.next"),
     f("Mail", "Navigation", "", "Previous Item", "mail.previous"),
     // File (backstage)
-    f("File", "Info", "", "Account Settings", ""),
+    f("File", "Info", "", "Account Settings", "account.list"),
+    f("File", "Info", "", "Add Account", "account.add"),
     f("File", "Info", "", "Automatic Replies", ""),
     f("File", "Info", "", "Mailbox Settings: Tools", ""),
     f("File", "Info", "", "Manage Rules & Alerts", ""),

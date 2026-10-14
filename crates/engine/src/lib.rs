@@ -1,14 +1,18 @@
 //! OpenMailClient engine: session, stores, command registry, Outlook feature catalog, sample mailbox.
 //!
 //! Everything a person can do is a command with an id (`cmd::registry`). The ribbon, shortcuts,
-//! the CLI and agents all go through [`Session::run`]; nothing here opens a dialog or a socket.
+//! the CLI and agents all go through [`Session::run`]; nothing here opens a dialog, and mail
+//! servers are reached only through the connector the host gives (`Session::connector`), on a
+//! thread of its own (`jobs`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod accounts;
 pub mod arrange;
 pub mod attachments;
 pub mod catalog;
 pub mod cmd;
 pub mod io;
+pub mod jobs;
 pub mod links;
 pub mod outgoing;
 pub mod pictures;
@@ -18,6 +22,8 @@ pub mod search;
 mod svg;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_accounts;
 #[cfg(test)]
 mod tests_pictures;
 pub mod undo;
@@ -227,6 +233,16 @@ pub(crate) struct AutoSave {
 }
 
 pub struct Session {
+    /// Mail accounts, as the owner set them up; their passwords are in `vault`.
+    pub accounts: Vec<accounts::Account>,
+    /// Where passwords are kept. Kept in memory until the host gives the system's store.
+    pub vault: std::sync::Arc<dyn openmailclient_net::Vault>,
+    /// How mail servers are reached; `None` until the host gives a way.
+    pub connector: Option<std::sync::Arc<dyn openmailclient_net::Connector>>,
+    /// Work done on a thread of its own, such as talking to a server (`jobs`).
+    pub jobs: Vec<jobs::Job>,
+    /// What the jobs that ended last came to, the newest last.
+    pub finished: Vec<Value>,
     /// Saves of data files that are being done away from the caller: `file.save` with
     /// `"wait": false` starts them, `Session::poll` ends them.
     pub saves: Vec<Saving>,
@@ -294,6 +310,11 @@ impl Session {
     pub fn new() -> Self {
         let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Self {
+            accounts: Vec::new(),
+            vault: std::sync::Arc::new(openmailclient_net::MemoryVault::default()),
+            connector: None,
+            jobs: Vec::new(),
+            finished: Vec::new(),
             saves: Vec::new(),
             exports: Vec::new(),
             stores: Vec::new(),
@@ -327,6 +348,17 @@ impl Session {
             print_style: print::Style::default(),
             print_list: print::Listing::default(),
         }
+    }
+
+    /// Reach mail servers over TCP and TLS, checked against the roots this system trusts, and
+    /// keep passwords in the system's credential store. The host calls it as it starts; tests
+    /// do not, and use the fake server. Says why when servers cannot be reached.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn use_this_system(&mut self) -> Result<(), String> {
+        self.vault = std::sync::Arc::new(openmailclient_net::SystemVault);
+        let connector = openmailclient_net::TcpConnector::new().map_err(|e| e.to_string())?;
+        self.connector = Some(std::sync::Arc::new(connector));
+        Ok(())
     }
 
     /// A session showing the built-in sample mailbox.
@@ -677,7 +709,8 @@ impl Session {
     /// when one ended.
     pub fn poll(&mut self) -> bool {
         let saved = self.end_saves(false);
-        self.end_exports(false) || saved
+        let jobs = self.end_jobs(false);
+        self.end_exports(false) || saved || jobs
     }
 
     /// Wait for every save and export that is running, and end it. The host asks before it
@@ -685,6 +718,7 @@ impl Session {
     pub fn finish_saves(&mut self) {
         self.end_saves(true);
         self.end_exports(true);
+        self.end_jobs(true);
     }
 
     fn end_exports(&mut self, wait: bool) -> bool {
@@ -733,6 +767,9 @@ impl Session {
     pub fn working(&self) -> Option<(String, f32)> {
         if let Some(done) = self.saving() {
             return Some((format!("Saving {}", self.saves.first().map_or("", |s| s.name.as_str())), done));
+        }
+        if let Some(job) = self.jobs.first().filter(|_| self.exports.is_empty()) {
+            return Some((job.what.clone(), job.progress.fraction().clamp(0.0, 1.0)));
         }
         let export = self.exports.first()?;
         let name = export.to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -863,6 +900,8 @@ impl Session {
                 "kind": d.kind, "to": d.to, "cc": d.cc, "subject": d.subject, "attachments": d.attachments.len(),
                 "cautions": outgoing::cautions(d).iter().map(|c| c.words()).collect::<Vec<_>>(),
             })),
+            "accounts": self.accounts.iter().map(accounts::Account::to_json).collect::<Vec<_>>(),
+            "jobs": { "running": self.jobs.iter().map(|j| j.what.clone()).collect::<Vec<_>>(), "finished": self.finished },
             "status": self.status,
         })
     }

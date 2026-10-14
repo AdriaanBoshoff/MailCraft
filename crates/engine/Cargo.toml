@@ -18,6 +18,7 @@ openmailclient-fonts = { workspace = true }
 openmailclient-layout = { workspace = true }
 openmailclient-render = { workspace = true }
 openmailclient-pdf = { workspace = true }
+openmailclient-net = { workspace = true }
 # Decodes the pictures a message body shows.
 image = { workspace = true, features = ["jpeg", "gif", "bmp", "webp", "tiff"] }
 resvg = { workspace = true }
@@ -27,5 +28,6 @@ serde_json = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+openmailclient-net = { workspace = true, features = ["fake"] }
 # Builds the attached objects the tests read.
 cfb = { workspace = true }

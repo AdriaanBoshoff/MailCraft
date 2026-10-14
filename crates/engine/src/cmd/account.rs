@@ -1,0 +1,259 @@
+//! Mail accounts: added, listed, changed, removed and tested. A password given to a command
+//! goes straight to the credential store and is never given back, put in the status bar or
+//! kept in the settings file.
+
+use super::{CommandSpec, always, need_str, p_bool};
+use crate::accounts::{self, Account, Kind, MAX_ACCOUNTS};
+use crate::{CmdResult, EngineError, Session};
+use openmailclient_net::imap::Imap;
+use openmailclient_net::pop3::Pop3;
+use openmailclient_net::smtp::Smtp;
+use openmailclient_net::{Connector, Login, NetError, Secret, Vault};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+fn has_accounts(s: &Session) -> bool {
+    !s.accounts.is_empty()
+}
+
+pub(super) fn commands() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec {
+            id: "account.add",
+            label: "Add Account",
+            tab: "File",
+            group: "Info",
+            shortcut: "",
+            params: r#"{"email", "kind": "imap" (the default) or "pop3", "incoming": {"host", "port", "security": "tls" (the default), "starttls" or "none"}, "outgoing": the same for SMTP (the incoming host over TLS when not given), "name", "displayName": the name mail is sent under, "user": the sign-in name (the address when not given), "signInToSend" (true), "leaveOnServer" (POP3, true), "password": kept in the system's credential store, never given back}; returns {"id", "account", "passwordKept"}"#,
+            enabled: always,
+            run: add,
+        },
+        CommandSpec {
+            id: "account.list",
+            label: "Account Settings",
+            tab: "File",
+            group: "Info",
+            shortcut: "",
+            params: r#"{}; returns {"accounts": [each account as account.add takes it, with its "id" and "hasPassword"]}; no password is ever given"#,
+            enabled: always,
+            run: list,
+        },
+        CommandSpec {
+            id: "account.edit",
+            label: "Change Account",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"id", and any field account.add takes}; fields not given stay as they were; returns {"account", "passwordKept"}"#,
+            enabled: has_accounts,
+            run: edit,
+        },
+        CommandSpec {
+            id: "account.remove",
+            label: "Remove Account",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"id"}; its password is taken out of the credential store as well; mail already taken down stays where it is"#,
+            enabled: has_accounts,
+            run: remove,
+        },
+        CommandSpec {
+            id: "account.setPassword",
+            label: "Set Password",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"id", "password": kept in the system's credential store; empty or null forgets it}; returns {"passwordKept"}"#,
+            enabled: has_accounts,
+            run: set_password,
+        },
+        CommandSpec {
+            id: "account.test",
+            label: "Test Account Settings",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"id", "wait": false to test on a thread of its own}; signs in to the incoming and the outgoing server and sends nothing; returns {"incoming": {"ok", "said"}, "outgoing": {"ok", "said"}}"#,
+            enabled: has_accounts,
+            run: test,
+        },
+    ]
+}
+
+fn find(s: &Session, p: &Value) -> Result<usize, EngineError> {
+    let id = need_str(p, "id")?;
+    s.accounts
+        .iter()
+        .position(|a| a.id == id)
+        .ok_or_else(|| EngineError::BadParams(format!("there is no account {}", id.chars().take(64).collect::<String>())))
+}
+
+/// A password as a command gives it: `None` to forget it.
+fn password(p: &Value) -> Result<Option<Option<Secret>>, EngineError> {
+    match p.get("password") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(s)) if s.is_empty() => Ok(Some(None)),
+        Some(Value::String(s)) if s.chars().count() <= 1024 && !s.chars().any(|c| matches!(c, '\r' | '\n' | '\0')) => {
+            Ok(Some(Some(Secret::new(s.clone()))))
+        }
+        Some(_) => Err(EngineError::BadParams("\"password\" is one line of no more than 1024 characters".into())),
+    }
+}
+
+/// Keep or forget a password; true when one is kept. What the store said goes in the status.
+fn keep(s: &mut Session, id: &str, password: Option<Secret>) -> bool {
+    let done = match &password {
+        Some(secret) => s.vault.set(id, secret),
+        None => s.vault.forget(id),
+    };
+    match done {
+        Ok(()) => password.is_some(),
+        Err(e) => {
+            s.status = format!("The password was not kept: {e}");
+            false
+        }
+    }
+}
+
+fn add(s: &mut Session, p: &Value) -> CmdResult {
+    if s.accounts.len() >= MAX_ACCOUNTS {
+        return Err(EngineError::BadParams(format!("no more than {MAX_ACCOUNTS} accounts are kept")));
+    }
+    let given = password(p)?;
+    let account = Account::from_json(&accounts::changes(p), &accounts::new_id(&s.accounts), None)?;
+    if s.accounts.iter().any(|a| a.email.eq_ignore_ascii_case(&account.email)) {
+        return Err(EngineError::BadParams(format!("there is an account for {} already", account.email)));
+    }
+    s.status = format!("Added the account {}", account.name);
+    let id = account.id.clone();
+    let value = account.to_json();
+    s.accounts.push(account);
+    let kept = matches!(given, Some(Some(_))) && keep(s, &id, given.flatten());
+    Ok(json!({ "id": id, "account": value, "passwordKept": kept }))
+}
+
+fn list(s: &mut Session, _: &Value) -> CmdResult {
+    let all: Vec<Value> = s
+        .accounts
+        .iter()
+        .map(|a| {
+            let mut v = a.to_json();
+            v["hasPassword"] = json!(s.vault.get(&a.id).is_ok_and(|p| p.is_some()));
+            v
+        })
+        .collect();
+    Ok(json!({ "accounts": all }))
+}
+
+fn edit(s: &mut Session, p: &Value) -> CmdResult {
+    let at = find(s, p)?;
+    let given = password(p)?;
+    let was = s.accounts.get(at).ok_or_else(|| EngineError::BadParams("there is no such account".into()))?;
+    let account = Account::from_json(&accounts::changes(p), &was.id, Some(was))?;
+    if s.accounts.iter().enumerate().any(|(i, a)| i != at && a.email.eq_ignore_ascii_case(&account.email)) {
+        return Err(EngineError::BadParams(format!("there is an account for {} already", account.email)));
+    }
+    s.status = format!("Changed the account {}", account.name);
+    let (id, value) = (account.id.clone(), account.to_json());
+    if let Some(slot) = s.accounts.get_mut(at) {
+        *slot = account;
+    }
+    let kept = match given {
+        Some(pw) => keep(s, &id, pw),
+        None => s.vault.get(&id).is_ok_and(|p| p.is_some()),
+    };
+    Ok(json!({ "account": value, "passwordKept": kept }))
+}
+
+fn remove(s: &mut Session, p: &Value) -> CmdResult {
+    let at = find(s, p)?;
+    let account = s.accounts.remove(at);
+    s.status = format!("Removed the account {}", account.name);
+    if let Err(e) = s.vault.forget(&account.id) {
+        s.status = format!("Removed the account {}; its password could not be taken out of the credential store: {e}", account.name);
+    }
+    Ok(json!({ "removed": account.id }))
+}
+
+fn set_password(s: &mut Session, p: &Value) -> CmdResult {
+    let at = find(s, p)?;
+    let given = password(p)?.ok_or_else(|| EngineError::BadParams("\"password\" is required (empty or null forgets it)".into()))?;
+    let (id, name) = s.accounts.get(at).map(|a| (a.id.clone(), a.name.clone())).unwrap_or_default();
+    let forgetting = given.is_none();
+    s.status = if forgetting { format!("Forgot the password of {name}") } else { format!("Kept the password of {name}") };
+    let kept = keep(s, &id, given);
+    Ok(json!({ "passwordKept": kept }))
+}
+
+/// What a session needs to reach an account's servers, taken away from it for a job.
+pub(crate) struct Reach {
+    pub account: Account,
+    pub connector: Arc<dyn Connector>,
+    pub vault: Arc<dyn Vault>,
+}
+
+impl Reach {
+    pub(crate) fn of(s: &Session, at: usize) -> Result<Self, EngineError> {
+        let account = s.accounts.get(at).cloned().ok_or_else(|| EngineError::BadParams("there is no such account".into()))?;
+        let connector = s.connector.clone().ok_or_else(|| EngineError::Format("this build cannot reach mail servers".into()))?;
+        Ok(Self { account, connector, vault: Arc::clone(&s.vault) })
+    }
+
+    /// The name and password to sign in with; read from the store only when needed.
+    pub(crate) fn login(&self) -> Result<Login, NetError> {
+        match self.vault.get(&self.account.id)? {
+            Some(password) => Ok(Login { user: self.account.user.clone(), password }),
+            None => Err(NetError::Unsupported(format!("no password is kept for {}; set one with account.setPassword", self.account.name))),
+        }
+    }
+}
+
+fn test_incoming(r: &Reach) -> Result<String, NetError> {
+    let login = r.login()?;
+    let to = r.account.incoming_endpoint();
+    match r.account.kind {
+        Kind::Imap => {
+            let mut imap = Imap::open(&*r.connector, &to, &login)?;
+            let folders = imap.folders()?.len();
+            imap.logout()?;
+            Ok(format!("signed in; {folders} folders on the server"))
+        }
+        Kind::Pop3 => {
+            let mut pop = Pop3::open(&*r.connector, &to, &login)?;
+            let messages = pop.list()?.len();
+            pop.quit()?;
+            Ok(format!("signed in; {messages} messages on the server"))
+        }
+    }
+}
+
+fn test_outgoing(r: &Reach) -> Result<String, NetError> {
+    let login = if r.account.sign_in_to_send { Some(r.login()?) } else { None };
+    let smtp = Smtp::open(&*r.connector, &r.account.outgoing_endpoint(), login.as_ref())?;
+    smtp.quit()?;
+    Ok(if login.is_some() { "signed in".to_string() } else { "answered".to_string() })
+}
+
+fn test(s: &mut Session, p: &Value) -> CmdResult {
+    let at = find(s, p)?;
+    let reach = Reach::of(s, at)?;
+    let wait = p_bool(p, "wait") != Some(false);
+    let name = reach.account.name.clone();
+    s.begin(format!("Testing {name}"), wait, move |progress| {
+        progress.begin(2);
+        let incoming = test_incoming(&reach);
+        progress.step();
+        let outgoing = test_outgoing(&reach);
+        progress.step();
+        let status = match (&incoming, &outgoing) {
+            (Ok(_), Ok(_)) => format!("{name}: both servers answered, and nothing was sent"),
+            (Err(e), Ok(_)) => format!("{name}: the incoming server failed: {e}"),
+            (Ok(_), Err(e)) => format!("{name}: the outgoing server failed: {e}"),
+            (Err(e), Err(_)) => format!("{name}: neither server could be used: {e}"),
+        };
+        let value = json!({ "incoming": accounts::outcome(incoming), "outgoing": accounts::outcome(outgoing) });
+        Box::new(move |_| (status, value))
+    })
+}

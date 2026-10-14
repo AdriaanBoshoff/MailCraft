@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 80 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 81 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -80,6 +80,7 @@
 
 ## Revision history
 
+- 81 · 2026-10-14 — M4.3: accounts are kept, changed and tested in the engine; passwords in the credential store.
 - 80 · 2026-10-14 — M4.2: TCP and TLS connections with checked certificates, and passwords in the system's credential store.
 - 79 · 2026-10-14 — M4.1: the `net` crate speaks IMAP, POP3 and SMTP against an in-process fake server.
 - 78 · 2026-10-14 — M3c.7: larger data blocks of a 4K-page file are written deflated, as Outlook writes them; M3c is closed.

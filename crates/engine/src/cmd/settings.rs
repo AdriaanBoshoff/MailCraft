@@ -1,5 +1,5 @@
-//! Settings kept between runs: the page setup, how the window is arranged, and which data
-//! files were open. The host says where the file is; nothing here chooses a place.
+//! Settings kept between runs: the page setup, how the window is arranged, which data files
+//! were open, and the mail accounts (never their passwords, which are in the credential store). The host says where the file is; nothing here chooses a place.
 //!
 //! The file is read as anything else from disk is: it may be damaged or written by someone
 //! else. What it says is taken a part at a time, and a part that makes no sense is left out.
@@ -73,6 +73,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "saveInPlace": s.save_in_place,
         "autoSaveMinutes": s.autosave_min,
         "dataFiles": files,
+        "accounts": s.accounts.iter().map(crate::accounts::Account::to_json).collect::<Vec<_>>(),
     });
     if let Some(ui) = ui.filter(|ui| ui.is_object() && ui.to_string().len() <= MAX_UI) {
         out["ui"] = ui.clone();
@@ -189,6 +190,14 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(minutes.is_some());
         if let Some(m) = minutes {
             s.autosave_min = m;
+        }
+    }
+    if let Some(v) = all.get("accounts") {
+        let (kept, left_out) = crate::accounts::from_settings(v);
+        took(v.is_array());
+        ignored += left_out;
+        if v.is_array() {
+            s.accounts = kept;
         }
     }
     let (mut opened, mut missing) = (0u32, 0u32);

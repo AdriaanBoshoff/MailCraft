@@ -185,6 +185,9 @@ fn convert(input: &Path, output: &Path) -> Result<(), String> {
 
 fn run_commands(args: &[String]) -> Result<(), String> {
     let mut session = Session::new();
+    if let Err(e) = session.use_this_system() {
+        eprintln!("openmailclient-cli: mail servers cannot be reached: {e}");
+    }
     let mut save: Option<&str> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {

@@ -2672,6 +2672,7 @@ dependencies = [
  "openmailclient-mime",
  "openmailclient-model",
  "openmailclient-msg",
+ "openmailclient-net",
  "openmailclient-pdf",
  "openmailclient-pst",
  "openmailclient-render",

@@ -241,6 +241,9 @@ fn settings_path() -> Option<std::path::PathBuf> {
 
 fn main() -> ExitCode {
     let mut session = Session::new();
+    if let Err(e) = session.use_this_system() {
+        eprintln!("openmailclient: mail servers cannot be reached: {e}");
+    }
     session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
