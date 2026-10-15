@@ -711,6 +711,7 @@ fn close_store(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     s.stores.remove(idx);
+    s.arrived.closed(idx);
     // The steps name data files by their place in the list, which has just changed.
     s.undo.clear();
     if idx < s.folders.len() {

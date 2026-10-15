@@ -272,7 +272,7 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
 }
 
 /// The words a send job begins with; one is under way while a job so named is.
-const SENDING: &str = "Sending";
+pub(crate) const SENDING: &str = "Sending";
 
 /// Take back what a send came to: what went is kept in Sent Items and leaves the Outbox; what
 /// did not stays, with the reason said.

@@ -6,6 +6,8 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod chime;
+
 use openmailclient_engine::Session;
 use openmailclient_ui_egui::{MailUi, UiRequest};
 use serde_json::{Value, json};
@@ -239,6 +241,13 @@ impl eframe::App for App {
         let ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if self.ui.session.autosave(ms) {
             ctx.request_repaint();
+        }
+        // Mail is sent and received on its own every so often, counted from the last time.
+        if let Some(left) = self.ui.session.send_receive_due(ms) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(left.clamp(50, 60_000)));
+        }
+        if self.ui.take_chimes() > 0 {
+            chime::play();
         }
         if self.ui.session.unsaved() {
             // A change made a moment after the last forcing is forced a second later.

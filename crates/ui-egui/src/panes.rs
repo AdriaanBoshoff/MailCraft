@@ -788,7 +788,12 @@ impl MailUi {
                     .fill(t.accent)
                     .min_size(vec2(72.0, 30.0)),
                 );
-                if send.on_hover_text("Files the message in Outbox. Sending needs an account, which is not built yet.").clicked() {
+                if send
+                    .on_hover_text(
+                        "Sends it through its account's server; it waits in the Outbox until it has gone, and a copy is kept in Sent Items.",
+                    )
+                    .clicked()
+                {
                     acts.push(("compose.send", json!({ "anyway": !cautions.is_empty(), "wait": false })));
                 }
                 for (label, cmd, params) in [

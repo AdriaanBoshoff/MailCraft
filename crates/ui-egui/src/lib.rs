@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod accounts;
+mod alert;
 mod body;
 mod faces;
 pub mod icons;
@@ -183,6 +184,7 @@ pub(crate) enum Menu {
     Move,
     Arrange,
     Reading,
+    Groups,
 }
 
 /// A link the person is being asked about.
@@ -256,6 +258,11 @@ pub struct MailUi {
     check_place: bool,
     /// The window is to go back to where a first one stands.
     reset_window: bool,
+    /// The last new message told of (`Arrived::seq`), and the alert standing for it.
+    told_seq: u64,
+    pub(crate) alert: Option<alert::Shown>,
+    /// Times the host is to play the new-mail sound (`take_chimes`).
+    chimes: u32,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -455,6 +462,9 @@ impl MailUi {
             window: None,
             check_place: false,
             reset_window: false,
+            told_seq: 0,
+            alert: None,
+            chimes: 0,
         }
     }
 
@@ -726,6 +736,7 @@ impl MailUi {
                     Some("move") => Menu::Move,
                     Some("arrange") => Menu::Arrange,
                     Some("reading") => Menu::Reading,
+                    Some("groups") => Menu::Groups,
                     _ => return Err("unknown menu".to_string()),
                 };
                 let coord = |key: &str| params.get(key).and_then(Value::as_f64).map_or(100.0, |v| v.clamp(0.0, 20_000.0) as f32);
@@ -840,6 +851,7 @@ impl MailUi {
         }
         // Saves that run on threads of their own are ended here, and shown while they run.
         self.session.poll();
+        self.new_mail(&ctx);
         if self.session.working().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -886,6 +898,7 @@ impl MailUi {
         self.link_window(&ctx);
         self.attachment_window(&ctx);
         self.preview_window(&ctx);
+        self.alert_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
             if let Err(e) = self.execute(&id, &params) {
@@ -1067,6 +1080,22 @@ impl MailUi {
         let y = rect.center().y - 7.5;
         let mut x = rect.left() + 10.0;
         let mut stop = false;
+        let mut open_new = false;
+        if !s.arrived.list.is_empty() {
+            // Mail that came and was not opened yet: a click goes to the newest.
+            let n = s.arrived.list.len();
+            let said = if n == 1 { "1 new message".to_string() } else { format!("{n} new messages") };
+            let w = text_width(&p, &said, bold(11.5)) + 22.0;
+            let hit = Rect::from_min_size(pos2(x - 4.0, rect.top()), vec2(w + 8.0, rect.height()));
+            let resp = ui.interact(hit, egui::Id::new("status-new-mail"), Sense::click());
+            if resp.hovered() {
+                p.rect_filled(hit.shrink2(vec2(0.0, 3.0)), 2.0, t.bar_text.gamma_multiply(0.2));
+            }
+            icons::paint(&p, Rect::from_center_size(pos2(x + 7.0, rect.center().y), vec2(14.0, 14.0)), Icon::Mail, t.bar_text);
+            p.text(pos2(x + 20.0, rect.center().y), Align2::LEFT_CENTER, &said, bold(11.5), t.bar_text);
+            open_new = resp.on_hover_text("Open the newest of them").clicked();
+            x += w + 16.0;
+        }
         if s.module == Module::Mail {
             let unread = s.current_folder().map_or(0, |f| f.unread);
             let counts =
@@ -1107,6 +1136,12 @@ impl MailUi {
         clip_text(&p, pos2(x, y), rect.right() - right_w - 30.0 - x, &s.status, font(11.5), t.bar_text);
         if stop {
             let _ = self.session.run("file.stopSave", &Value::Null);
+        }
+        if open_new {
+            self.alert = None;
+            if let Err(e) = self.session.run("mail.openArrived", &Value::Null) {
+                self.session.status = e.to_string();
+            }
         }
     }
 }

@@ -57,6 +57,7 @@ const SEND_RECEIVE: &[Group] = &[(
     &[
         with(big(Icon::Sync, "Send/Receive\nAll Folders", "mail.sendReceive"), r#"{"wait":false}"#),
         small(Icon::Sync, "Update Folder", ""),
+        small(Icon::Sort, "Send/Receive Groups", "menu:groups"),
         with(small(Icon::Send, "Send All", "mail.sendAll"), r#"{"wait":false}"#),
         small(Icon::People, "Account Settings", "ui.accountSettings"),
     ],
@@ -314,6 +315,31 @@ impl MailUi {
                     MenuItem { checked: s.sort.name() == key, ..item(&label, "view.sortBy", json!({ "key": key })) }
                 })
                 .collect(),
+            Menu::Groups => {
+                let every = s.send_receive_min;
+                let mut items: Vec<MenuItem> = [0u32, 5, 10, 15, 30, 60]
+                    .into_iter()
+                    .map(|m| {
+                        let label = if m == 0 { "Only when asked (F9)".to_string() } else { format!("Every {m} minutes") };
+                        MenuItem { checked: every == m, ..item(&label, "mail.sendReceiveEvery", json!({ "minutes": m })) }
+                    })
+                    .collect();
+                if ![0, 5, 10, 15, 30, 60].contains(&every) {
+                    items.push(MenuItem {
+                        checked: true,
+                        ..item(&format!("Every {every} minutes"), "mail.sendReceiveEvery", json!({ "minutes": every }))
+                    });
+                }
+                let a = s.alerts;
+                for (label, key, on) in [
+                    ("New mail: alert on the desktop", "alert", a.alert),
+                    ("New mail: a sound", "sound", a.sound),
+                    ("New mail: taskbar button", "flash", a.flash),
+                ] {
+                    items.push(MenuItem { checked: on, ..item(label, "mail.newMailAlerts", json!({ key: !on })) });
+                }
+                items
+            }
             Menu::Reading => [("Right", "right"), ("Bottom", "bottom"), ("Off", "off")]
                 .into_iter()
                 .map(|(label, position)| MenuItem {

@@ -31,7 +31,7 @@ const MAX_PER_RUN: usize = 300;
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The words a receive job begins with; one is under way while a job so named is.
-const RECEIVING: &str = "Receiving";
+pub(crate) const RECEIVING: &str = "Receiving";
 
 fn has_accounts(s: &Session) -> bool {
     !s.accounts.is_empty()
@@ -706,6 +706,15 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         let Some(&(_, Target { store, folder, own })) = targets.iter().find(|(id, _)| *id == t.id) else { continue };
         let into = into_of(s, Target { store, folder, own });
         let mut received = s.accounts.iter().find(|a| a.id == t.id).map(|a| a.received.kept_in(&into)).unwrap_or_default();
+        // Mail already on a server the first time it is received from, or all of an Inbox the
+        // server numbered anew, is not told of as new: only what came since.
+        let first = match t.uid_validity {
+            Some(v) => received.uid_validity == 0 || v != received.uid_validity,
+            None => received.seen.is_empty() && !s.arrived.heard_from.contains(&t.id),
+        };
+        if s.arrived.heard_from.len() < crate::accounts::MAX_ACCOUNTS && !s.arrived.heard_from.contains(&t.id) {
+            s.arrived.heard_from.push(t.id.clone());
+        }
         if let Some(v) = t.uid_validity
             && v != received.uid_validity
         {
@@ -754,8 +763,12 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 received.last_uid = received.last_uid.max(*uid);
                 continue;
             }
+            let told = (is_unread && !first).then(|| crate::arrival::Told::of(&item));
             match s.stores.get_mut(store).map(|st| st.add(folder, item)) {
-                Some(Ok(_)) => {
+                Some(Ok(new)) => {
+                    if let Some(told) = told {
+                        s.arrived.note(store, folder, new, &t.name, told);
+                    }
                     kept += 1;
                     unread += usize::from(is_unread);
                     match &got.uid {

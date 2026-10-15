@@ -16,6 +16,7 @@
 //! {"type": "words"}                          type into what has the keyboard
 //! {"fake": {"ownCertificate": "AB:CD:…"}}    reach the in-process fake server (with a
 //!                                            certificate of its own) instead of none
+//! {"arrive": "raw RFC 5322 text"}           put a message in the fake server's Inbox
 //! {"settle": true}                           draw until the jobs under way have ended
 //! ```
 //!
@@ -58,6 +59,7 @@ fn run() -> Result<(), String> {
         (at(0), at(1))
     });
     let scale = steps.iter().find_map(|s| s.get("scale")).and_then(Value::as_f64).map_or(1.0, |v| v.clamp(0.5, 3.0) as f32);
+    let mut fake_server: Option<openmailclient_net::fake::Fake> = None;
     let mut harness = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(scale)
@@ -83,7 +85,14 @@ fn run() -> Result<(), String> {
         } else if let Some(fake) = step.get("fake") {
             let server = openmailclient_net::fake::Fake::default();
             server.state().own_certificate = fake.get("ownCertificate").and_then(Value::as_str).and_then(openmailclient_net::Fingerprint::parse);
-            harness.state_mut().session.connector = Some(std::sync::Arc::new(server));
+            harness.state_mut().session.connector = Some(std::sync::Arc::new(server.clone()));
+            fake_server = Some(server);
+        } else if let Some(raw) = step.get("arrive").and_then(Value::as_str) {
+            if let Some(server) = &fake_server
+                && let Some(mailbox) = server.state().mailbox("INBOX")
+            {
+                mailbox.add(raw.as_bytes(), &[]);
+            }
         } else if step.get("settle").and_then(Value::as_bool) == Some(true) {
             for _ in 0..500 {
                 if harness.state().session.jobs.is_empty() {

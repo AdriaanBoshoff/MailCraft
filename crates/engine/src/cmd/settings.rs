@@ -72,6 +72,8 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "keepOriginal": s.keep_original,
         "saveInPlace": s.save_in_place,
         "autoSaveMinutes": s.autosave_min,
+        "sendReceiveMinutes": s.send_receive_min,
+        "newMail": s.alerts.to_json(),
         "dataFiles": files,
         "accounts": s.accounts.iter().map(crate::accounts::Account::to_settings).collect::<Vec<_>>(),
     });
@@ -190,6 +192,20 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(minutes.is_some());
         if let Some(m) = minutes {
             s.autosave_min = m;
+        }
+    }
+    if let Some(v) = all.get("sendReceiveMinutes") {
+        let minutes = v.as_u64().filter(|m| *m <= crate::arrival::MAX_EVERY_MIN).and_then(|m| u32::try_from(m).ok());
+        took(minutes.is_some());
+        if let Some(m) = minutes {
+            s.send_receive_min = m;
+        }
+    }
+    if let Some(v) = all.get("newMail") {
+        let alerts = v.is_object().then(|| s.alerts.with(v)).flatten();
+        took(alerts.is_some());
+        if let Some(a) = alerts {
+            s.alerts = a;
         }
     }
     if let Some(v) = all.get("accounts") {

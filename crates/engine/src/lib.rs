@@ -8,6 +8,7 @@
 
 pub mod accounts;
 pub mod arrange;
+pub mod arrival;
 pub mod attachments;
 pub mod catalog;
 pub mod cmd;
@@ -25,6 +26,8 @@ mod svg;
 mod tests;
 #[cfg(test)]
 mod tests_accounts;
+#[cfg(test)]
+mod tests_arrival;
 #[cfg(test)]
 mod tests_pictures;
 #[cfg(test)]
@@ -297,6 +300,14 @@ pub struct Session {
     /// (`file.autoSave`); 0 saves only when asked.
     pub autosave_min: u32,
     pub(crate) auto: AutoSave,
+    /// Every how many minutes mail is sent and received on its own while the host runs
+    /// (`mail.sendReceiveEvery`); 0 only when asked.
+    pub send_receive_min: u32,
+    pub(crate) timer: arrival::Timer,
+    /// Messages that came and were not told of or opened yet.
+    pub arrived: arrival::Arrivals,
+    /// How new mail is told of (`mail.newMailAlerts`).
+    pub alerts: arrival::Alerts,
     pub compose: Option<Draft>,
     pub status: String,
     /// Minutes east of UTC for dates shown and written into reply headers. Set by the host.
@@ -364,6 +375,10 @@ impl Session {
             save_in_place: true,
             autosave_min: 5,
             auto: AutoSave::default(),
+            send_receive_min: 30,
+            timer: arrival::Timer::default(),
+            arrived: arrival::Arrivals::default(),
+            alerts: arrival::Alerts::default(),
             compose: None,
             status: String::new(),
             tz_offset_min: 0,
@@ -934,6 +949,7 @@ impl Session {
             })),
             "accounts": self.accounts.iter().map(accounts::Account::to_json).collect::<Vec<_>>(),
             "jobs": { "running": self.jobs.iter().map(|j| j.what.clone()).collect::<Vec<_>>(), "finished": self.finished },
+            "arrived": self.arrived.list.iter().map(arrival::Arrived::to_json).collect::<Vec<_>>(),
             "status": self.status,
         })
     }

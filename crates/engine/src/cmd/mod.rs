@@ -2,6 +2,7 @@
 //! command search, the CLI and agents all dispatch by id.
 
 mod account;
+mod arrival;
 mod compose;
 mod file;
 mod folder;
@@ -15,6 +16,8 @@ pub(crate) mod settings;
 mod view;
 
 use crate::{CmdResult, EngineError, Session};
+pub(crate) use receive::RECEIVING;
+pub(crate) use send::SENDING;
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -47,6 +50,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(account::commands());
         v.extend(send::commands());
         v.extend(receive::commands());
+        v.extend(arrival::commands());
         v
     })
 }
