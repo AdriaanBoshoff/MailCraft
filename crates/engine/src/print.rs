@@ -459,7 +459,7 @@ impl Pictures {
         let data: Option<&[u8]> = match picture {
             Picture::Attached(id) => pictures::attached(item, id).map(|a| a.data.as_slice()),
             Picture::Inline(Some(index)) => doc.written.get(*index).map(|data| &data[..]),
-            Picture::Inline(None) | Picture::Remote | Picture::Object(_) | Picture::File(_) => None,
+            Picture::Inline(None) | Picture::Remote(_) | Picture::Object(_) | Picture::File(_) => None,
         };
         if let Some(pixels) = data.and_then(pictures::decode) {
             self.bytes = self.bytes.saturating_add(pixels.rgba.len());

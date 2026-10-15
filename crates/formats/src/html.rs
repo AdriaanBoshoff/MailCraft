@@ -32,6 +32,8 @@ const MAX_TABLE_DEPTH: usize = 24;
 const MAX_ATTRS: usize = 32;
 const MAX_ATTR_LEN: usize = 2048;
 const MAX_ALT_LEN: usize = 200;
+/// The longest address of a picture on a server that is kept.
+const MAX_REMOTE_ADDRESS: usize = 2048;
 /// Longest list of font names kept for a run.
 const MAX_FAMILY_LEN: usize = 160;
 /// A picture written into the body: the longest address read, and how many pictures and bytes
@@ -521,7 +523,7 @@ impl Builder {
             if !src.is_empty() {
                 self.doc.remote_blocked += 1;
             }
-            Picture::Remote
+            Picture::Remote(if src.len() <= MAX_REMOTE_ADDRESS { src.to_string() } else { String::new() })
         };
         // One-pixel pictures are trackers or spacers; there is nothing to show for them.
         let asked = |name: &str| attr(attrs, name).and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok()).filter(|v| v.is_finite());

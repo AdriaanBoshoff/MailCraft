@@ -367,8 +367,9 @@ pub enum Picture {
     /// Data written into the body itself: its place in [`Doc::written`], or `None` where the
     /// data was not kept (not readable, too large, or of a kind that is not read).
     Inline(Option<usize>),
-    /// On a server. Not fetched.
-    Remote,
+    /// On a server, by its address. Fetched only when the reader asks; an address too long
+    /// to keep is empty.
+    Remote(String),
     /// The place an RTF body keeps for an attachment (`\objattph`), by its number among such
     /// places. Which attachment stands there is for whoever has the message to say.
     Object(usize),

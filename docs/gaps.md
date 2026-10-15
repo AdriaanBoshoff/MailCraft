@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 86 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 87 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -45,7 +45,7 @@
    and tables with each cell's own lines, fill, place and merge down and across, and tables inside their cells; a metafile draws a part of a bitmap, one mirrored, turned or packed in runs, every way of mixing, hatched and patterned brushes and regions (M3b.28); not yet in a metafile: copies with a mask or see-through ones, pens that mix, palette colours, or text that needs shaping
    (a placeholder). List numbers follow what an override changes (`\lfolevel`) and a highlight is one of the sixteen marker colours (M3b.27). OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
-   text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (never fetched; their place is named),
+   text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **Calendar, People, Tasks** modules show a placeholder.
@@ -83,6 +83,7 @@
 
 ## Revision history
 
+- 87 · 2026-10-15 — M4.10: pictures on a server downloaded when asked for, over HTTPS only.
 - 86 · 2026-10-14 — M4.7: HTML messages laid out as Outlook lays them out (centring, padding, fills, rounded tables, picture boxes).
 - 85 · 2026-10-14 — M4.7: each account keeps its mail in a data file of its own; Account Settings laid out anew.
 - 84 · 2026-10-14 — M4.6: accounts are added, changed and tested in the window's Account Settings.

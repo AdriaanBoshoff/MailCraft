@@ -121,7 +121,10 @@ fn looks_are_carried_onto_the_page() {
         Block::Para(Para { runs: vec![run("item")], kind: ParaKind::Item("1.".into()), indent: 1, ..Para::default() }),
         Block::Para(Para { runs: vec![run("quoted")], quote: 2, ..Para::default() }),
         Block::Rule,
-        Block::Para(Para { runs: vec![Run { text: "a cat".into(), picture: Some(Picture::Remote), ..Run::default() }], ..Para::default() }),
+        Block::Para(Para {
+            runs: vec![Run { text: "a cat".into(), picture: Some(Picture::Remote(String::new())), ..Run::default() }],
+            ..Para::default()
+        }),
         Block::Para(Para { runs: vec![run("a\tb\u{a0}c\u{200b}d\u{7}")], ..Para::default() }),
     ]);
     let printed = print(&body, Paper::A4);
@@ -1181,7 +1184,7 @@ fn hostile_right_to_left_text_never_panics() {
             ..para("\u{644}\u{644}\u{644}\u{627}\u{627} \u{200f}\u{200e}(((")
         }),
         Block::Para(Para {
-            runs: vec![run("\u{644}"), Run { text: "x".into(), picture: Some(Picture::Remote), ..Run::default() }, run("\u{627}")],
+            runs: vec![run("\u{644}"), Run { text: "x".into(), picture: Some(Picture::Remote(String::new())), ..Run::default() }, run("\u{627}")],
             rtl: true,
             ..Para::default()
         }),

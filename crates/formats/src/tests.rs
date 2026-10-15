@@ -138,7 +138,10 @@ fn nothing_active_survives_and_remote_content_is_only_counted() {
     assert_eq!(doc.remote_blocked, 3, "tracker, logo and background");
     let p = paras(&doc);
     let pictures: Vec<&Picture> = p[0].runs.iter().filter_map(|r| r.picture.as_ref()).collect();
-    assert_eq!(pictures, [&Picture::Remote, &Picture::Attached("part1@example".to_string()), &Picture::Inline(Some(0))]);
+    assert_eq!(
+        pictures,
+        [&Picture::Remote("https://x.example/a.png".to_string()), &Picture::Attached("part1@example".to_string()), &Picture::Inline(Some(0))]
+    );
     let all = format!("{doc:?}");
     for gone in ["evil", "alert", "within", "embedded", "hidden", "comment", "AAAA"] {
         assert!(!all.contains(gone), "{gone} must not be in the document");

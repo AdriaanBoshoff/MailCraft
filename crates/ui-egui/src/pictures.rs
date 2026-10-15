@@ -9,6 +9,8 @@
 
 use std::collections::HashMap;
 
+use openmailclient_engine::remote::Downloaded;
+
 use egui::{ColorImage, Context, TextureHandle, TextureOptions, Vec2, vec2};
 use openmailclient_formats::rich::{Block, Doc, Picture};
 use openmailclient_model::Item;
@@ -111,6 +113,10 @@ pub(crate) struct Pictures {
     by_id: HashMap<String, Option<Shown>>,
     /// Pictures written into the body, in the document's order.
     written: Vec<Option<Shown>>,
+    /// Pictures on a server the reader had downloaded, by the address the message gave.
+    by_address: HashMap<String, Option<Shown>>,
+    /// The session's downloads as they were when these were looked for.
+    generation: u64,
     kept_bytes: usize,
     /// Whether pictures that move are played; else each stands on its first frame.
     pub moving: bool,
@@ -121,15 +127,34 @@ impl Pictures {
         self.by_id.get(content_id)?.as_ref()
     }
 
+    /// A picture on a server, once the reader had it downloaded.
+    pub(crate) fn remote(&self, address: &str) -> Option<&Shown> {
+        self.by_address.get(address)?.as_ref()
+    }
+
     /// A picture written into the body, by its place in the document's list.
     pub(crate) fn written(&self, index: usize) -> Option<&Shown> {
         self.written.get(index)?.as_ref()
     }
 
     /// Decode the pictures `doc` refers to, once per message. `key` names the message's body.
-    pub(crate) fn load(&mut self, ctx: &Context, key: u64, doc: &Doc, item: &Item) {
+    pub(crate) fn load(&mut self, ctx: &Context, key: u64, doc: &Doc, item: &Item, downloaded: &Downloaded) {
         if self.key != key {
             *self = Pictures { key, ..Pictures::default() };
+        }
+        if self.generation != downloaded.generation {
+            self.generation = downloaded.generation;
+            self.by_address.retain(|_, shown| shown.is_some());
+            for address in openmailclient_engine::remote::addresses(doc) {
+                if self.by_address.contains_key(&address) {
+                    continue;
+                }
+                let Some(data) = downloaded.get(&address) else { continue };
+                let count = self.by_id.len() + self.written.len() + self.by_address.len();
+                let within = count < MAX_PICTURES && self.kept_bytes < MAX_KEPT_BYTES;
+                let shown = if within { self.show(ctx, format!("remote-{count}"), data) } else { None };
+                self.by_address.insert(address, shown);
+            }
         }
         let mut wanted = Vec::new();
         content_ids(&doc.blocks, &mut wanted, 0);

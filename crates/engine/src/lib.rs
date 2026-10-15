@@ -17,6 +17,7 @@ pub mod links;
 pub mod outgoing;
 pub mod pictures;
 pub mod print;
+pub mod remote;
 pub mod sample;
 pub mod search;
 mod svg;
@@ -28,6 +29,8 @@ mod tests_accounts;
 mod tests_pictures;
 #[cfg(test)]
 mod tests_receive;
+#[cfg(test)]
+mod tests_remote;
 #[cfg(test)]
 mod tests_send;
 pub mod undo;
@@ -277,6 +280,8 @@ pub struct Session {
     /// Whether pictures that move in a message are played (`view.animations`); else each
     /// stands still on its first frame.
     pub animate: bool,
+    /// Pictures on a server, fetched on the reader's word (`mail.downloadPictures`).
+    pub downloaded: remote::Downloaded,
     /// Whether the file as it was stays beside a data file the first time it is saved
     /// (`file.keepOriginal`). It does until the owner says otherwise.
     pub keep_original: bool,
@@ -347,6 +352,7 @@ impl Session {
             reading_pane: ReadingPane::Right,
             folder_pane: true,
             animate: true,
+            downloaded: remote::Downloaded::default(),
             keep_original: true,
             save_in_place: true,
             autosave_min: 5,

@@ -709,7 +709,7 @@ impl<'f, 'l> Flow<'f, 'l> {
                 Some(Picture::File(_)) => &run.text,
                 Some(picture) => {
                     let what = match picture {
-                        Picture::Remote => "picture not downloaded",
+                        Picture::Remote(_) => "picture not downloaded",
                         _ => "picture",
                     };
                     let alt: String = run.text.chars().filter(|c| !c.is_control()).take(80).collect();

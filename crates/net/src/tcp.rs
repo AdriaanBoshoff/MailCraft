@@ -2,7 +2,7 @@
 //! for mail) by rustls, the server's certificate checked against the roots this system trusts
 //! and against the name the account gives. Not on the web build.
 
-use crate::{Connector, Endpoint, NetError, Security, Stream, one_line, said};
+use crate::{Connector, Endpoint, NetError, Protocol, Security, Stream, one_line, said};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -91,7 +91,10 @@ impl Connector for TcpConnector {
             .map_err(|_| NetError::Unsupported(format!("the server {} was not found", said(&to.host))))?;
         let mut last = None;
         let mut stream = None;
-        for address in addresses.take(MAX_ADDRESSES) {
+        // A web server a message named is not reached on this machine or the local network,
+        // whatever its name leads to.
+        let web = to.protocol == Protocol::Https;
+        for address in addresses.take(MAX_ADDRESSES).filter(|a| !(web && crate::http::local_ip(a.ip()))) {
             match TcpStream::connect_timeout(&address, self.wait) {
                 Ok(s) => {
                     stream = Some(s);

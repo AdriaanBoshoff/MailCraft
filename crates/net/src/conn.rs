@@ -91,6 +91,23 @@ impl Conn {
         Ok(out)
     }
 
+    /// What comes until the other end closes, no more than `limit` bytes of it.
+    pub fn until_closed(&mut self, limit: usize) -> Result<Vec<u8>, NetError> {
+        loop {
+            if self.pending().len() > limit {
+                return Err(NetError::TooLarge("what the server sent"));
+            }
+            match self.fill() {
+                Ok(()) => {}
+                Err(NetError::Closed) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        let out = self.pending().to_vec();
+        self.at = self.buf.len();
+        Ok(out)
+    }
+
     pub fn send(&mut self, bytes: &[u8]) -> Result<(), NetError> {
         self.s.write_all(bytes).map_err(|e| match e.kind() {
             ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted => NetError::Closed,

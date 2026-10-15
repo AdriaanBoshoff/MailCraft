@@ -357,11 +357,13 @@ fn hostile_servers_are_errors_never_panics() {
                         let _ = s.send("a@b.test", &["c@d.test".into()], b"x");
                     }
                 }
+                Protocol::Https => {}
             }
         }
     };
     for s in &scripts {
         run(s);
+        let _ = crate::http::get(&Fake::script(s), "https://pictures.example.com/a.png", 4096);
     }
     for seed in 0..150 {
         run(&noise(seed, 64 + (seed as usize % 7) * 300));

@@ -462,7 +462,7 @@ impl MailUi {
         let t = self.tokens.clone();
         let doc = self.body_doc();
         if let (Some(doc), Some((key, _)), Some(item)) = (&doc, &self.body_doc, self.session.open.as_ref()) {
-            self.pictures.load(ui.ctx(), *key, doc, item);
+            self.pictures.load(ui.ctx(), *key, doc, item, &self.session.downloaded);
             self.pictures.moving = self.session.animate;
             self.faces.load(ui.ctx(), *key, doc);
         }
@@ -562,6 +562,7 @@ impl MailUi {
         let mut save: Option<usize> = None;
         let mut link: Option<std::sync::Arc<str>> = None;
         let mut save_all = false;
+        let mut download = false;
         if !files.is_empty() {
             let mut ax = left;
             for (index, name, size, caution) in &files {
@@ -613,8 +614,21 @@ impl MailUi {
             y += 38.0;
         }
         // Says only what was held back; a formatted body needs no notice of its own.
+        // Pictures on a server not yet downloaded are downloaded from the bar, on the reader's word.
+        let (named, waiting) = doc.as_ref().map_or((0, 0), |d| {
+            let named = openmailclient_engine::remote::addresses(d);
+            let waiting = named.iter().filter(|a| !self.session.downloaded.contains(a)).count();
+            (named.len(), waiting)
+        });
+        let offer = waiting > 0 && !doc.as_ref().is_some_and(|d| d.truncated);
         let notice = match &doc {
             Some(d) if d.truncated => Some("This message is very long; the rest is not shown. Remote content is never downloaded."),
+            Some(_) if offer => {
+                Some("Pictures in this message were not downloaded, to keep you private. Click here, or right-click a picture, to download them.")
+            }
+            Some(d) if d.remote_blocked > 0 && named > 0 => {
+                Some("The pictures were downloaded as you asked. Other remote content is not downloaded.")
+            }
             Some(d) if d.remote_blocked > 0 => Some("Pictures and other remote content in this message were not downloaded."),
             Some(_) => None,
             None if item.body_html().is_some() || item.body_rtf().is_some() => {
@@ -625,6 +639,20 @@ impl MailUi {
         if let Some(notice) = notice {
             let bar = Rect::from_min_size(pos2(rect.left() + 1.0, y), vec2(rect.width() - 1.0, 24.0));
             p.rect_filled(bar, 0.0, t.info_bar);
+            if offer {
+                let resp = ui.interact(bar, egui::Id::new("download-pictures-bar"), Sense::click());
+                if resp.hovered() {
+                    p.rect_filled(bar, 0.0, t.hover);
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                download |= resp.clicked();
+                resp.context_menu(|ui| {
+                    if ui.button("Download Pictures").clicked() {
+                        download = true;
+                        ui.close();
+                    }
+                });
+            }
             icons::paint(&p, Rect::from_center_size(pos2(bar.left() + pad, bar.center().y), vec2(13.0, 13.0)), Icon::Info, t.text_dim);
             clip_text(&p, pos2(bar.left() + pad + 12.0, bar.center().y - 8.0), bar.width() - 40.0, notice, font(11.5), t.text_dim);
             y += 30.0;
@@ -660,6 +688,7 @@ impl MailUi {
                             let picked = body::draw(ui, doc, &t, &self.pictures, &self.faces);
                             save = picked.file.or(save);
                             link = picked.link;
+                            download |= picked.download;
                         }
                         None => {
                             ui.add(egui::Label::new(egui::RichText::new(plain).font(font(13.5)).color(t.text)).wrap().selectable(true));
@@ -679,6 +708,9 @@ impl MailUi {
         }
         if save_all {
             self.act("ui.saveAllAttachmentsDialog", Value::Null);
+        }
+        if download {
+            self.act("mail.downloadPictures", json!({ "wait": false }));
         }
     }
 

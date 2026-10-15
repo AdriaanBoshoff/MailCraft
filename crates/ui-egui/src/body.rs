@@ -92,6 +92,8 @@ struct Look<'a> {
     picked: &'a Cell<Option<usize>>,
     /// The link a click in the text was on.
     link: &'a RefCell<Option<Arc<str>>>,
+    /// The reader asked, on a picture not shown, for the message's pictures to be downloaded.
+    download: &'a Cell<bool>,
 }
 
 /// What a click in the body asked for.
@@ -101,6 +103,8 @@ pub(crate) struct Picked {
     pub file: Option<usize>,
     /// A link: the reader is asked whether to open it.
     pub link: Option<Arc<str>>,
+    /// The message's pictures on a server: the reader asked for them to be downloaded.
+    pub download: bool,
 }
 
 impl Look<'_> {
@@ -115,10 +119,11 @@ pub(crate) fn draw(ui: &mut Ui, doc: &Doc, t: &Tokens, pictures: &Pictures, face
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
     let picked = Cell::new(None);
     let link = RefCell::new(None);
+    let download = Cell::new(false);
     // A body that asks for a colour behind it is read against that colour.
     let on = page(doc).unwrap_or(t.surface);
-    blocks(ui, &doc.blocks, Look { t, pictures, faces, on, picked: &picked, link: &link }, 0);
-    Picked { file: picked.get(), link: link.into_inner() }
+    blocks(ui, &doc.blocks, Look { t, pictures, faces, on, picked: &picked, link: &link, download: &download }, 0);
+    Picked { file: picked.get(), link: link.into_inner(), download: download.get() }
 }
 
 /// The colour a body asks to be read on, for whoever paints the pane behind it.
@@ -460,7 +465,8 @@ fn shown<'a>(run: &'a Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
     let drawn = match run.picture.as_ref()? {
         Picture::Attached(id) => pictures.get(id),
         Picture::Inline(Some(index)) => pictures.written(*index),
-        Picture::Inline(None) | Picture::Remote | Picture::Object(_) => None,
+        Picture::Remote(address) => pictures.remote(address),
+        Picture::Inline(None) | Picture::Object(_) => None,
         Picture::File(filed) => return Some(Stand::File(filed)),
     };
     if let Some(drawn) = drawn {
@@ -473,7 +479,7 @@ fn shown<'a>(run: &'a Run, pictures: &'a Pictures) -> Option<Stand<'a>> {
 /// What a picture that is not drawn is called.
 fn missing(picture: &Picture) -> &'static str {
     match picture {
-        Picture::Remote => "Picture not downloaded",
+        Picture::Remote(_) => "Picture not downloaded",
         Picture::Attached(_) | Picture::Inline(_) => "Picture",
         Picture::Object(_) | Picture::File(_) => "Attachment",
     }
@@ -641,7 +647,8 @@ fn para(ui: &mut Ui, para: &Para, look: Look, after_another: bool, standing: &mu
             picture(ui, run, stand, spot, look);
             let id = ui.id().with(("aside", at, spot.min.x.to_bits(), spot.min.y.to_bits()));
             let tip = tip(run, stand);
-            let response = ui.interact(spot, id, Sense::hover());
+            let response = ui.interact(spot, id, if not_downloaded(run, stand) { Sense::click() } else { Sense::hover() });
+            offer_download(&response, run, stand, look);
             if !tip.is_empty() {
                 response.on_hover_text_at_pointer(tip);
             }
@@ -799,6 +806,25 @@ fn picture(ui: &Ui, run: &Run, stand: Stand, at: Rect, look: Look) {
         // their line.
         Stand::File(filed) => card(ui, filed, at.translate(vec2(0.0, BASELINE)), look),
     }
+}
+
+/// A picture on a server, shown as the frame that takes its place.
+fn not_downloaded(run: &Run, stand: Stand) -> bool {
+    matches!((stand, &run.picture), (Stand::Frame, Some(Picture::Remote(_))))
+}
+
+/// A right-click on a picture not downloaded offers to download the message's pictures, as
+/// nothing is fetched by itself.
+fn offer_download(response: &egui::Response, run: &Run, stand: Stand, look: Look) {
+    if !not_downloaded(run, stand) {
+        return;
+    }
+    response.context_menu(|ui| {
+        if ui.button("Download Pictures").clicked() {
+            look.download.set(true);
+            ui.close();
+        }
+    });
 }
 
 /// What is said about a picture when the pointer rests on it.
@@ -1398,6 +1424,17 @@ fn piece(ui: &mut Ui, para: &Para, runs: &[Run], look: Look, spot: Spot) -> Rect
         None => spots(&galley, &placed),
     };
     let spots: Vec<Rect> = spots.into_iter().map(|at| at.translate(pos.to_vec2())).collect();
+    // A picture not downloaded is a place of its own, that a right-click on offers to download.
+    for (n, (p, at)) in placed.iter().zip(&spots).enumerate() {
+        if not_downloaded(p.run, p.stand) && ui.is_rect_visible(*at) {
+            let spot = ui.interact(*at, response.id.with(("not downloaded", n)), Sense::click());
+            offer_download(&spot, p.run, p.stand, look);
+            let tip = tip(p.run, p.stand);
+            if !tip.is_empty() {
+                spot.on_hover_text_at_pointer(tip);
+            }
+        }
+    }
     // Where the pointer is: on a picture, or in the text, where a link shows its address and
     // nothing else happens.
     if let Some(pointer) = response.hover_pos() {

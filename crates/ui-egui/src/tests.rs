@@ -184,7 +184,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut shown = pictures::Pictures::default();
-    shown.load(&ctx, 7, &doc, ui.session.open.as_ref().unwrap());
+    shown.load(&ctx, 7, &doc, ui.session.open.as_ref().unwrap(), &Default::default());
     let proof = shown.get("proof-48213@printdepot.example.com").expect("the banner proof is decoded");
     assert_eq!(proof.size, egui::vec2(240.0, 96.0));
     assert_eq!(proof.texture.size(), [240, 96]);
@@ -212,7 +212,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
                 <td><img src=cid:drawing><img src=cid:missing><img src=\"https://x.example/r.png\"></table>";
     let doc = openmailclient_formats::html::parse(html);
     let mut shown = pictures::Pictures::default();
-    shown.load(&ctx, 1, &doc, &item);
+    shown.load(&ctx, 1, &doc, &item, &Default::default());
     assert!(shown.get("logo@example").is_some());
     assert!(["notes", "drawing", "missing", "https://x.example/r.png"].iter().all(|id| shown.get(id).is_none()));
     for dark in [false, true] {
@@ -222,7 +222,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
         output.textures_delta.clear();
     }
     // Another message: nothing of the last one is kept.
-    shown.load(&ctx, 2, &openmailclient_formats::html::parse("<p>text</p>"), &item);
+    shown.load(&ctx, 2, &openmailclient_formats::html::parse("<p>text</p>"), &item, &Default::default());
     assert!(shown.get("logo@example").is_none());
 }
 
@@ -296,7 +296,7 @@ fn pictures_written_into_the_body_and_at_its_sides_are_decoded_and_drawn() {
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut shown = pictures::Pictures::default();
-    shown.load(&ctx, 3, &doc, &openmailclient_model::Item::new_mail());
+    shown.load(&ctx, 3, &doc, &openmailclient_model::Item::new_mail(), &Default::default());
     assert_eq!(shown.written(0).map(|p| p.size), Some(egui::vec2(240.0, 96.0)));
     assert!(shown.written(1).is_none() && shown.written(usize::MAX).is_none());
     for dark in [false, true] {
@@ -308,15 +308,44 @@ fn pictures_written_into_the_body_and_at_its_sides_are_decoded_and_drawn() {
             output.textures_delta.clear();
         }
     }
-    shown.load(&ctx, 4, &openmailclient_formats::html::parse("<p>text</p>"), &openmailclient_model::Item::new_mail());
+    shown.load(&ctx, 4, &openmailclient_formats::html::parse("<p>text</p>"), &openmailclient_model::Item::new_mail(), &Default::default());
     assert!(shown.written(0).is_none(), "nothing of the last message is kept");
+}
+
+#[test]
+fn a_picture_on_a_server_is_shown_once_it_was_downloaded_and_a_frame_till_then() {
+    let html = "<p><img src=\"https://pictures.example.com/a.png\" width=60 height=40 alt=logo> beside <img src=\"https://pictures.example.com/a.png\" align=left width=60 height=40></p>";
+    let doc = openmailclient_formats::html::parse(html);
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut downloaded = openmailclient_engine::remote::Downloaded::default();
+    let mut shown = pictures::Pictures::default();
+    let item = openmailclient_model::Item::new_mail();
+    shown.load(&ctx, 5, &doc, &item, &downloaded);
+    assert!(shown.remote("https://pictures.example.com/a.png").is_none());
+    let draw = |shown: &pictures::Pictures| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let picked = body::draw(ui, &doc, &theme::Tokens::named(false), shown, &faces::Faces::default());
+            assert!(!picked.download, "nothing is downloaded by itself");
+        });
+        output.textures_delta.clear();
+    };
+    draw(&shown);
+    downloaded.keep("https://pictures.example.com/a.png".into(), sample_picture());
+    shown.load(&ctx, 5, &doc, &item, &downloaded);
+    assert!(shown.remote("https://pictures.example.com/a.png").is_some());
+    draw(&shown);
 }
 
 #[test]
 fn text_beside_a_picture_is_cut_where_the_picture_ends() {
     use openmailclient_formats::rich::{Picture, Run};
     let text = |t: &str| Run { text: t.to_string(), ..Run::default() };
-    let runs = [text("one two\n"), Run { text: "alt".to_string(), picture: Some(Picture::Remote), ..Run::default() }, text("thre\u{301}e four")];
+    let runs = [
+        text("one two\n"),
+        Run { text: "alt".to_string(), picture: Some(Picture::Remote(String::new())), ..Run::default() },
+        text("thre\u{301}e four"),
+    ];
     let ends = [8, 9, 20];
     let texts = |runs: &[Run]| runs.iter().map(|r| r.text.clone()).collect::<Vec<_>>();
     let (head, tail) = body::split(&runs, &ends, 8);
@@ -454,7 +483,7 @@ fn hostile_rtf_bodies_draw_without_panicking() {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         let mut shown = pictures::Pictures::default();
-        shown.load(&ctx, 1, &doc, &openmailclient_model::Item::new_mail());
+        shown.load(&ctx, 1, &doc, &openmailclient_model::Item::new_mail(), &Default::default());
         assert!(shown.written(0).is_none_or(|p| p.size.x > 0.0));
         for width in [0.0, 30.0, 800.0] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -1360,7 +1389,7 @@ fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut shown = pictures::Pictures::default();
-    shown.load(&ctx, 1, &doc, &item);
+    shown.load(&ctx, 1, &doc, &item, &Default::default());
     assert!(shown.get("still").unwrap().film.is_none());
     let moves = shown.get("moves").unwrap();
     assert_eq!(moves.size, egui::vec2(6.0, 4.0));
@@ -1410,7 +1439,7 @@ fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
             a.props.set_str(pid::ATTACH_CONTENT_ID, "moves");
             item.attachments.push(a);
             let mut shown = pictures::Pictures::default();
-            shown.load(&ctx, 2, &doc, &item);
+            shown.load(&ctx, 2, &doc, &item, &Default::default());
             if let Some(reel) = shown.get("moves").and_then(|s| s.film.as_ref()) {
                 assert!(reel.frames() >= 2 && reel.at(0.0).0 == 0);
             }
@@ -1520,7 +1549,7 @@ fn a_dark_picture_seen_through_is_given_paper_behind_it_on_the_dark_pane() {
     let backed = |html: &str, dark: bool| {
         let doc = openmailclient_formats::html::parse(html);
         let mut shown = pictures::Pictures::default();
-        shown.load(&ctx, 1, &doc, &item);
+        shown.load(&ctx, 1, &doc, &item, &Default::default());
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_max_width(500.0);
             body::draw(ui, &doc, &theme::Tokens::named(dark), &shown, &faces::Faces::default());

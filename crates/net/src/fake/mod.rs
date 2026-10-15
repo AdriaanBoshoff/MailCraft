@@ -6,6 +6,7 @@
 //! answered as an error. [`Fake::script`] instead plays back fixed bytes, for hostile-server
 //! tests.
 
+mod http;
 mod imap;
 mod pop3;
 mod smtp;
@@ -80,6 +81,8 @@ pub struct State {
     pub logins: usize,
     /// Every command line the server was sent, passwords and all: for the tests to look at.
     pub heard: Vec<String>,
+    /// What the fake web server answers, by host and path: the whole answer, head and body.
+    pub pages: Vec<(String, Vec<u8>)>,
 }
 
 impl Default for State {
@@ -98,6 +101,7 @@ impl Default for State {
             secured: 0,
             logins: 0,
             heard: Vec::new(),
+            pages: Vec::new(),
         }
     }
 }
@@ -155,6 +159,7 @@ impl Connector for Fake {
         let mode = self.mode.clone();
         let protocol = to.protocol;
         let tls = to.security == Security::Tls;
+        let host = to.host.clone();
         std::thread::spawn(move || {
             let _ = match mode {
                 Mode::Script(bytes) => script(server, &bytes),
@@ -162,6 +167,7 @@ impl Connector for Fake {
                     Protocol::Imap => imap::serve(server, &state, tls),
                     Protocol::Pop3 => pop3::serve(server, &state, tls),
                     Protocol::Smtp => smtp::serve(server, &state, tls),
+                    Protocol::Https => http::serve(server, &state, &host),
                 },
             };
         });

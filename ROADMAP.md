@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7) · revision 96 · 2026-10-14
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10) · revision 97 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 402, all passing |
+| Tests | 411, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -132,7 +132,8 @@
 80. Done: The window has Account Settings (File > Account Settings…, and on the Send / Receive tab): accounts are added, changed, tested and removed there, the password typed into a field that shows dots and gives nothing away; the ribbon's Send/Receive All Folders and Send All work (M4.6).
 81. Done: Each account keeps its mail in a data file of its own, as Outlook keeps one per account: received mail goes in its Inbox, what it sent in its Sent Items, and the file is saved on its own once mail is in it; Account Settings is laid out anew, and the live check against a real IMAP and SMTP server passed (M4.7).
 82. Done: HTML messages laid out as Outlook lays them out: a column of tables centred in its cell, each side of a cell's padding, pale fills and a table's own fill drawn, rounded table corners, tables standing flush under one another, a pale border kept pale, and a picture not downloaded shown as a box of the size it asks for (M4.7, from the live check).
-83. Next: M4.10: pictures on a server downloaded when asked for, from the info bar or a right-click on a picture, over HTTPS only and never by themselves; then M4.8.
+83. Done: Pictures on a server downloaded when asked for: from the info bar above the message or a right-click on a picture not shown (Download Pictures), over HTTPS only, never from this machine or the local network, kept in memory only and never by themselves (M4.10, `mail.downloadPictures`).
+84. Next: M4.8: IMAP folders kept in step with the server, and the Sent copy put on the server.
 
 ## Do later (from M2)
 
@@ -219,7 +220,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Borders on text within a line; rounded corners~~ | done: M3b.26 |
 | ~~Outlook's highlight colours; list numbers an override changes (`\lfolevel`)~~ | done: M3b.27 |
 | ~~Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes~~ | done: M3b.28 |
-| Pictures on a server, loaded on an explicit command (never by themselves): from the info bar and a right-click on a picture | M4.10, next |
+| Pictures on a server, loaded on an explicit command (never by themselves): from the info bar and a right-click on a picture | done: M4.10 |
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
 | A server's own certificate trusted on the owner's word, and kept for that server only | M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
@@ -1702,3 +1703,15 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   made only as much darker as it needs to be seen, where before it fell back to the colour of
   text and showed black; and a picture not downloaded that gives only its width is a box of
   that width, as Outlook draws one, rather than words in brackets. 3 tests.
+- **2026-10-15** - M4.10: pictures on a server downloaded when asked for.
+  A message's pictures on a web server are still never fetched by themselves. The bar above a
+  message that has some now says so and downloads them when clicked, and a right-click on a
+  picture not shown offers Download Pictures, as Outlook does (`mail.downloadPictures`, on a
+  thread of its own). Better than Outlook: only HTTPS is used, so nobody on the way sees or
+  changes what comes; no server on this machine or the local network is reached, by its address
+  or by a name that leads there (checked again where the connection is made, `http::local_ip`);
+  the request carries no cookie, referrer or language; only a picture the message names can be
+  asked for; each picture is capped at 8 MB and all of them at 64 MB, kept in memory only and
+  never in the data file; and what is not a picture is not kept. A small HTTP/1.1 client
+  (`crates/net/src/http.rs`) reads lengths, chunks and redirects (five at most, only to HTTPS),
+  with the head, body and chunks capped, tested against the fake server's web pages. 9 tests.

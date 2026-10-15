@@ -12,6 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod conn;
+pub mod http;
 pub mod imap;
 mod pipe;
 pub mod pop3;
@@ -91,6 +92,8 @@ pub enum Protocol {
     Imap,
     Pop3,
     Smtp,
+    /// A web server, for a picture a message names. Only over TLS.
+    Https,
 }
 
 impl Protocol {
@@ -103,6 +106,7 @@ impl Protocol {
             (Self::Pop3, _) => 110,
             (Self::Smtp, Security::Tls) => 465,
             (Self::Smtp, _) => 587,
+            (Self::Https, _) => 443,
         }
     }
 }
@@ -173,5 +177,7 @@ pub(crate) fn one_line(what: &'static str, text: &str) -> Result<(), NetError> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_http;
 #[cfg(test)]
 mod tests_tls;
