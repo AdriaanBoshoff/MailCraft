@@ -17,7 +17,7 @@ pub mod imap;
 mod pipe;
 pub mod pop3;
 pub mod smtp;
-mod utf7;
+pub mod utf7;
 mod vault;
 
 #[cfg(not(target_arch = "wasm32"))]

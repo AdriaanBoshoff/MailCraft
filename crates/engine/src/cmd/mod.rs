@@ -5,6 +5,7 @@ mod account;
 mod compose;
 mod file;
 mod folder;
+pub(crate) mod imap_sync;
 mod link;
 mod mail;
 mod picture;

@@ -71,6 +71,21 @@ pub struct Received {
     /// IMAP: the Message-IDs of messages sent from here and put in the server's Sent folder,
     /// so they are not taken down again beside the copy Sent Items keeps already.
     pub sent_here: Vec<String>,
+    /// IMAP: messages deleted here for good whose copy on the server is to go too, at the next
+    /// Send/Receive.
+    pub gone: Vec<Gone>,
+    /// IMAP: the messages taken down before each was marked with its place on the server have
+    /// been found there again by their Message-ID; until then nothing taken down earlier is put
+    /// on the server as if it were new.
+    pub matched: bool,
+}
+
+/// A message of an IMAP folder that is to be deleted from the server.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Gone {
+    pub raw: String,
+    pub uid_validity: u32,
+    pub uid: u32,
 }
 
 /// How far one IMAP folder was taken down.
@@ -87,6 +102,8 @@ pub const MAX_SEEN: usize = 100_000;
 /// IMAP folders followed at most, and Message-IDs of what was put in Sent remembered.
 pub const MAX_FOLDERS: usize = 1000;
 pub const MAX_SENT_HERE: usize = 1000;
+/// Deletions waiting to go to a server.
+pub const MAX_GONE: usize = 100_000;
 
 /// A name or id as kept in the settings: not empty, not too long, nothing that is not text.
 fn kept_text(v: &Value, max: usize) -> Option<&str> {
@@ -97,8 +114,9 @@ impl Received {
     fn to_json(&self) -> Value {
         let folders: Vec<Value> =
             self.folders.iter().map(|m| json!({ "raw": m.raw, "uidValidity": m.uid_validity, "lastUid": m.last_uid })).collect();
+        let gone: Vec<Value> = self.gone.iter().map(|g| json!({ "raw": g.raw, "uidValidity": g.uid_validity, "uid": g.uid })).collect();
         json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen, "into": self.into,
-                "folders": folders, "sentHere": self.sent_here })
+                "folders": folders, "sentHere": self.sent_here, "gone": gone, "matched": self.matched })
     }
 
     /// As a settings file gives it: what makes no sense is left as nothing taken down yet.
@@ -130,13 +148,34 @@ impl Received {
                     .collect()
             })
             .unwrap_or_default();
+        let mut gone: Vec<Gone> = Vec::new();
+        for g in v.get("gone").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_GONE) {
+            let Some(raw) = g.get("raw").and_then(|r| kept_text(r, 1000)) else { continue };
+            let one = Gone { raw: raw.to_string(), uid_validity: number(g, "uidValidity"), uid: number(g, "uid") };
+            if one.uid > 0 && one.uid_validity > 0 && !gone.contains(&one) {
+                gone.push(one);
+            }
+        }
+        let matched = v.get("matched").and_then(Value::as_bool).unwrap_or(false);
         let into = v.get("into").and_then(Value::as_str).filter(|p| p.len() <= 1024 && !p.chars().any(char::is_control)).unwrap_or_default();
-        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string(), folders, sent_here }
+        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string(), folders, sent_here, gone, matched }
     }
 
     /// What was taken down into the data file `into`: nothing, when it went into another.
     pub fn kept_in(&self, into: &str) -> Self {
         if self.into == into { self.clone() } else { Self { into: into.to_string(), sent_here: self.sent_here.clone(), ..Self::default() } }
+    }
+
+    /// Remember that a message of the server is to be deleted there.
+    pub fn delete_on_server(&mut self, g: Gone) {
+        if g.uid == 0 || self.gone.contains(&g) {
+            return;
+        }
+        self.gone.push(g);
+        if self.gone.len() > MAX_GONE {
+            let over = self.gone.len() - MAX_GONE;
+            self.gone.drain(..over);
+        }
     }
 
     /// Remember a message put in the server's Sent folder, the oldest forgotten past the bound.

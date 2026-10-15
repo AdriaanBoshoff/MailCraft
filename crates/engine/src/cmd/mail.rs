@@ -295,6 +295,7 @@ fn delete(s: &mut Session, _: &Value) -> CmdResult {
             let id = s.selected.ok_or(StoreError::NoItem)?;
             let st = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?;
             let item = Box::new(st.remove(folder, openmailclient_model::ItemId(id))?);
+            super::imap_sync::forget(s, store, &item);
             // Gone from the data file, and kept by the session so that it can be taken back.
             s.did(Step::Removed { what: "Delete", store, folder, was: id, item });
             s.selected = None;

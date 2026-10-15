@@ -33,6 +33,8 @@ mod tests_receive;
 mod tests_remote;
 #[cfg(test)]
 mod tests_send;
+#[cfg(test)]
+mod tests_sync;
 pub mod undo;
 
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
@@ -318,6 +320,8 @@ pub struct Session {
     /// host; `None` (tests, a run that keeps no settings) puts an account's mail where new
     /// mail goes.
     pub account_dir: Option<std::path::PathBuf>,
+    /// Where the messages of IMAP accounts are on their servers, as read before.
+    pub places: cmd::imap_sync::Places,
 }
 
 impl Default for Session {
@@ -368,6 +372,7 @@ impl Session {
             page_setup: openmailclient_layout::Setup::default(),
             journal_dir: None,
             account_dir: None,
+            places: cmd::imap_sync::Places::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),
         }

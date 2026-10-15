@@ -121,6 +121,9 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
             "FETCH" if uid => {
                 let range = args.first().and_then(Tok::atom).unwrap_or_default().to_string();
                 let want_body = args.get(1).is_some_and(|t| matches!(t, Tok::List(items) if items.iter().any(|i| i.atom() == Some("BODY.PEEK[]"))));
+                let want_id = args.get(1).is_some_and(
+                    |t| matches!(t, Tok::List(items) if items.iter().any(|i| i.atom().is_some_and(|a| a.starts_with("BODY.PEEK[HEADER.FIELDS")))),
+                );
                 let mut s = lock(state);
                 let messages = selected.clone().and_then(|n| s.mailbox(&n).map(|m| m.messages.clone())).unwrap_or_default();
                 let (lo, hi) = match range.split_once(':') {
@@ -138,7 +141,20 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                 }
                 let mut bytes = out.into_bytes();
                 for (i, m) in chosen {
-                    if want_body {
+                    if want_id {
+                        let text = String::from_utf8_lossy(&m.data);
+                        let line = text
+                            .split("\r\n")
+                            .take_while(|l| !l.is_empty())
+                            .find(|l| l.to_ascii_lowercase().starts_with("message-id:"))
+                            .map(|l| format!("{l}\r\n\r\n"))
+                            .unwrap_or_else(|| "\r\n".into());
+                        bytes.extend_from_slice(
+                            format!("* {} FETCH (UID {} BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n", i + 1, m.uid, line.len()).as_bytes(),
+                        );
+                        bytes.extend_from_slice(line.as_bytes());
+                        bytes.extend_from_slice(b")\r\n");
+                    } else if want_body {
                         bytes.extend_from_slice(format!("* {} FETCH (UID {} BODY[] {{{}}}\r\n", i + 1, m.uid, m.data.len()).as_bytes());
                         bytes.extend_from_slice(&m.data);
                         bytes.extend_from_slice(b")\r\n");
@@ -172,6 +188,59 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                     }
                 }
                 Ok("stored".into())
+            }
+            "MOVE" | "COPY" if uid => {
+                let id: u32 = args.first().and_then(Tok::number).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+                let to = args.get(1).and_then(Tok::text).unwrap_or_default();
+                let mut s = lock(state);
+                let from = selected.clone().unwrap_or_default();
+                let message = s.mailbox(&from).and_then(|m| m.messages.iter().find(|m| m.uid == id).cloned());
+                match (message, s.mailbox(&to).is_some()) {
+                    (Some(message), true) => {
+                        let f: Vec<&str> = message.flags.iter().map(String::as_str).filter(|f| *f != "\\Deleted").collect();
+                        let (validity, new) = match s.mailbox(&to) {
+                            Some(m) => (m.uid_validity, m.add(&message.data, &f)),
+                            None => (0, 0),
+                        };
+                        let code = format!("[COPYUID {validity} {id} {new}]");
+                        if verb == "MOVE" {
+                            if let Some(m) = s.mailbox(&from) {
+                                if let Some(at) = m.messages.iter().position(|m| m.uid == id) {
+                                    out.push_str(&format!("* {} EXPUNGE\r\n", at + 1));
+                                }
+                                m.messages.retain(|m| m.uid != id);
+                            }
+                            out.insert_str(0, &format!("* OK {code} moved\r\n"));
+                            Ok("moved".into())
+                        } else {
+                            Ok(format!("{code} copied"))
+                        }
+                    }
+                    (None, _) => Ok("nothing by that id".into()),
+                    (_, false) => Err("NO [TRYCREATE] no such folder".into()),
+                }
+            }
+            "EXPUNGE" => {
+                let only: Option<Vec<u32>> =
+                    uid.then(|| args.first().and_then(Tok::atom).unwrap_or_default().split(',').filter_map(|n| n.parse().ok()).collect());
+                let mut s = lock(state);
+                if let Some(m) = selected.clone().and_then(|n| s.mailbox(&n)) {
+                    let mut at = 0;
+                    let mut gone = Vec::new();
+                    m.messages.retain(|msg| {
+                        at += 1;
+                        let go = msg.flags.iter().any(|f| f == "\\Deleted") && only.as_ref().is_none_or(|o| o.contains(&msg.uid));
+                        if go {
+                            gone.push(at);
+                        }
+                        !go
+                    });
+                    // Each number as it stands once those before it are gone.
+                    for (n, at) in gone.iter().enumerate() {
+                        out.push_str(&format!("* {} EXPUNGE\r\n", at - n));
+                    }
+                }
+                Ok("expunged".into())
             }
             "CREATE" => {
                 let name = args.first().and_then(Tok::text).unwrap_or_default();

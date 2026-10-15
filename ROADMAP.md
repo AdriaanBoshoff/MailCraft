@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them and the Sent copy put on the server (M4.8) · revision 99 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8) · revision 100 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 416, all passing |
+| Tests | 424, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -135,7 +135,8 @@
 83. Done: Pictures on a server downloaded when asked for: from the info bar above the message or a right-click on a picture not shown (Download Pictures), over HTTPS only, never from this machine or the local network, kept in memory only and never by themselves (M4.10, `mail.downloadPictures`).
 84. Done: Attachments opened or saved on a double-click, as Outlook asks: Open, Save As or Cancel, from a double-click, Enter or a right-click on an attachment; a program, a script or a file whose name hides its kind is only saved; an opened file is a read-only copy marked as from the internet, cleared away when the program ends (M4.11, `file.openAttachment`).
 85. Done: IMAP folders taken down into the account's own data file as the server has them, and a copy of what is sent put in the server's Sent folder (M4.8, `accounts::Mark`, `sentOnServer`).
-86. Next: M4.8: read, flagged, moved and deleted messages kept in step both ways with the IMAP server.
+86. Done: IMAP kept in step both ways: read, flagged, moved and deleted messages, and messages put into the account from elsewhere, go to the server, and what was done there comes here (M4.8, `cmd/imap_sync.rs`, `Place`).
+87. Next: M4.9: a server's own certificate trusted on the owner's word, new mail told of, Send/Receive on a timer, Show Progress.
 
 ## Do later (from M2)
 
@@ -230,7 +231,10 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
 | The IMAP server's other folders taken down into the account's own data file, as the server has them | done: M4.8 |
-| IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | M4.8, second part |
+| IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | done: M4.8 |
+| Only what changed fetched from an IMAP server (CONDSTORE and QRESYNC, RFC 7162), and new mail told of as it comes (IDLE, RFC 2177) | M4.12 |
+| IMAP folders renamed, moved and deleted here or on the server, each side following the other; Drafts kept on the server as they are written | M4.12 |
+| The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | M4.12 |
 | New mail told of on the desktop and with a sound of our own, Send/Receive on a timer, and its progress shown in a window of its own (Show Progress) | M4.9, after the live check |
 | Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.9, with the window's message options |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
@@ -1748,3 +1752,31 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   first. A send or receive that ended while a data file was being saved no longer has its mail
   turned away from that file: what a job found waits for the save. Folders are made at the top
   of a `.pst` beside the Inbox (`Store::create_top_folder`), journalled as any change. 4 tests.
+- **2026-10-15** - M4.8: IMAP kept in step both ways.
+  Each message of an IMAP account's own data file knows its place on the server: the folder,
+  its numbering (UIDVALIDITY), its id and the read and flagged state both sides last agreed
+  on, kept as a property of this program's own on the message (`imap_sync::Place`). At each
+  Send/Receive what was done here goes first: read and flagged (STORE), a move to another
+  folder (MOVE, RFC 6851, or COPY, marked deleted and expunged, only that message where the
+  server has UIDPLUS), a folder made here that mail was moved into (CREATE, under the parent's
+  name), a message deleted for good (from Deleted Items or by emptying a folder, then deleted
+  and expunged there) and a message put into the account from another data file (APPEND, its
+  new id known from APPENDUID). Then what was done there comes here: read and flagged changes,
+  and a message the server no longer has goes from here. A folder the server has is made here
+  even while it is empty. A message deleted for good and taken back with Undo before the next
+  Send/Receive stays on the server; taken back after, it goes up again.
+  Better than Outlook: a message goes from here only when the server's whole list of a folder,
+  as many as it says the folder holds, lacks it, so a short answer never empties a folder; where
+  both sides changed the same flag, the change made here wins and the other side's other flag
+  still comes; nothing is taken down twice, not the messages this receive put there nor those
+  moved; a folder numbered anew finds its messages again by their Message-ID instead of taking
+  them down beside themselves; the first time, mail taken down before is found on the server
+  the same way and none of it is put there again; a change the server refuses is passed over and
+  tried at the next Send/Receive. The copy Sent Items keeps of what is sent is found again on the
+  server's Sent folder and given its place. The status line counts the changes kept in step, and
+  `account.receive` returns them ("inStep").
+  Fixed on the way: a folder written while empty had a contents table without the sender's and
+  the flag's columns, and a save into the file in place kept that table, so a flag set on a
+  message was gone from the list after a save, though the message kept it (`crates/pst/src/edit.rs`);
+  such a table is given the columns, filled from each message, when its folder next changes.
+  8 tests.

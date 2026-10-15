@@ -323,14 +323,18 @@ fn empty(s: &mut Session, p: &Value) -> CmdResult {
     let ids: Vec<u64> = rows.iter().filter(|r| cutoff.is_none_or(|cutoff| r.time > 0 && r.time < cutoff)).map(|r| r.id).collect();
     let kept = rows.len().saturating_sub(ids.len());
     let mut removed = in_folders;
+    let mut gone = Vec::new();
     for id in ids {
-        st.remove(folder, ItemId(id))?;
+        gone.push(st.remove(folder, ItemId(id))?);
         removed = removed.saturating_add(1);
     }
     if cutoff.is_none() {
         for child in children {
             st.delete_folder(child)?;
         }
+    }
+    for item in &gone {
+        super::imap_sync::forget(s, store, item);
     }
     s.selected = None;
     s.open = None;

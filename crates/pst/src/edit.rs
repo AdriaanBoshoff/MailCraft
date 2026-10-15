@@ -790,7 +790,19 @@ impl PstStore {
         // The tables of messages that changed ([MS-PST] 2.4.4.5).
         for f in folders.iter().filter(|f| f.contents_changed()) {
             let table = f.nid & !0x1F | TYPE_CONTENTS;
-            let (columns, rows) = self.table_of(table).unwrap_or_else(|| (CONTENTS.iter().chain(CONTENTS_MORE).copied().collect(), Vec::new()));
+            let (mut columns, rows) = self.table_of(table).unwrap_or_else(|| (CONTENTS.iter().chain(CONTENTS_MORE).copied().collect(), Vec::new()));
+            // A table written while its folder was empty has only the columns every table has;
+            // once it holds messages it has the sender and the flag too, as a whole save writes
+            // it, or a flag set on a message would never show in the list.
+            let mut grown = Vec::new();
+            if f.items.iter().flatten().next().is_some() {
+                for c in CONTENTS_MORE {
+                    if !columns.iter().any(|(id, _)| *id == c.0) {
+                        columns.push(*c);
+                        grown.push(*c);
+                    }
+                }
+            }
             let mut by: HashMap<u32, Vec<Raw>> = rows.into_iter().map(|r| (r.id, r.cells)).collect();
             let mut rows = Vec::new();
             for entry in f.items.iter().flatten() {
@@ -802,7 +814,13 @@ impl PstStore {
                         show(&mut cells, &columns, now);
                         cells.into_values().collect()
                     }
-                    (None, Some(was)) => was,
+                    (None, Some(was)) if grown.is_empty() => was,
+                    // The columns the table was given are filled from the message.
+                    (None, Some(mut was)) => {
+                        let stored = self.ndb.nbt.get(&entry.nid).copied().and_then(|e| self.open_pc(e).ok()).map(|p| p.0).unwrap_or_default();
+                        was.extend(stored.values().filter_map(|r| cell_for(&grown, r)));
+                        was
+                    }
                     // A message that came from another folder: what its own properties give.
                     (None, None) => {
                         let stored = self.ndb.nbt.get(&entry.nid).copied().and_then(|e| self.open_pc(e).ok()).map(|p| p.0).unwrap_or_default();

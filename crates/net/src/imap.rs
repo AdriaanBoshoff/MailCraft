@@ -647,6 +647,69 @@ impl Imap {
         self.run(vec![Part::Text(format!("UID STORE {uid} {sign}FLAGS.SILENT ({})", flags.join(" ")))]).map(|_| ())
     }
 
+    /// The Message-ID of each message of the selected folder up to `upto`, by its id; read
+    /// without marking anything read. Messages without one are left out.
+    pub fn message_ids(&mut self, upto: u32) -> Result<Vec<(u32, String)>, NetError> {
+        if upto == 0 {
+            return Ok(Vec::new());
+        }
+        let (data, _) = self.run(vec![Part::Text(format!("UID FETCH 1:{upto} (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"))])?;
+        let mut out = Vec::new();
+        for d in data {
+            let Some(items) = fetched(&d) else { continue };
+            let Some(uid) = item(items, "UID").and_then(Tok::number).and_then(|u| u32::try_from(u).ok()) else { continue };
+            // The section is named back as the server writes it ([RFC 9051] 7.5.2).
+            let header = items.chunks(2).find_map(|pair| match pair {
+                [Tok::Atom(name), Tok::Str(value)] if name.to_ascii_uppercase().starts_with("BODY[HEADER.FIELDS") => Some(value),
+                _ => None,
+            });
+            if let Some(id) = header.and_then(|h| message_id_in(h))
+                && uid <= upto
+            {
+                out.push((uid, id));
+            }
+        }
+        out.sort_by_key(|m| m.0);
+        out.dedup_by_key(|m| m.0);
+        Ok(out)
+    }
+
+    /// Moves a message of the selected folder to another: with MOVE where the server has it
+    /// ([RFC 6851]), otherwise copied and marked deleted, to be expunged. Its id and the folder's
+    /// UIDVALIDITY there, when the server says them ([RFC 4315] COPYUID).
+    pub fn move_to(&mut self, uid: u32, to: &str) -> Result<Moved, NetError> {
+        let verb = if self.has("MOVE") { "UID MOVE" } else { "UID COPY" };
+        let (data, code) = self.run(vec![Part::Text(format!("{verb} {uid} ")), astring(to.as_bytes())])?;
+        // MOVE says COPYUID before it has done; COPY in its answer.
+        let codes = data.iter().filter_map(|d| match d {
+            Resp::Status { tag: None, kind: Kind::Ok, code: Some(c), .. } => Some(c.as_str()),
+            _ => None,
+        });
+        let there = codes.chain(code.as_deref()).find_map(copy_uid);
+        let left = !self.has("MOVE");
+        if left {
+            self.flag(uid, true, &["\\Deleted"])?;
+        }
+        Ok(Moved { there, left })
+    }
+
+    /// Takes away the messages of the selected folder marked deleted: only these where the server
+    /// can be told which ([RFC 4315] UID EXPUNGE), otherwise all that are so marked.
+    pub fn expunge(&mut self, uids: &[u32]) -> Result<(), NetError> {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        if self.has("UIDPLUS") {
+            for chunk in uids.chunks(500) {
+                let set: Vec<String> = chunk.iter().map(u32::to_string).collect();
+                self.run(vec![Part::Text(format!("UID EXPUNGE {}", set.join(",")))])?;
+            }
+            Ok(())
+        } else {
+            self.run(vec![Part::Text("EXPUNGE".into())]).map(|_| ())
+        }
+    }
+
     /// Adds a message to a folder; its id there when the server says it ([RFC 4315] UIDPLUS).
     pub fn append(&mut self, raw: &str, flags: &[&str], message: &[u8]) -> Result<Option<u32>, NetError> {
         if message.len() > MAX_MESSAGE {
@@ -675,6 +738,48 @@ impl Imap {
     pub fn logout(mut self) -> Result<(), NetError> {
         self.run(vec![Part::Text("LOGOUT".into())]).map(|_| ())
     }
+}
+
+/// What a move came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moved {
+    /// The UIDVALIDITY of the folder it went to and its id there, when the server said them.
+    pub there: Option<(u32, u32)>,
+    /// It was copied and marked deleted where it was, and is there until it is expunged.
+    pub left: bool,
+}
+
+/// `COPYUID <validity> <from> <to>` for one message: the validity and its new id.
+fn copy_uid(code: &str) -> Option<(u32, u32)> {
+    let mut w = code.split_whitespace();
+    if !w.next()?.eq_ignore_ascii_case("COPYUID") {
+        return None;
+    }
+    let validity = w.next()?.parse().ok()?;
+    let _from = w.next()?;
+    let to = w.next()?;
+    // One message was moved, so one id; a range would be another server's business.
+    Some((validity, to.parse().ok()?))
+}
+
+/// The Message-ID in header lines, unfolded and trimmed, as at most 998 characters.
+fn message_id_in(header: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(header);
+    let mut value: Option<String> = None;
+    for line in text.split("\r\n").flat_map(|l| l.split('\n')) {
+        match &mut value {
+            Some(v) if line.starts_with([' ', '\t']) => v.push_str(line.trim()),
+            Some(_) => break,
+            None => {
+                if let Some((name, rest)) = line.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("Message-ID")
+                {
+                    value = Some(rest.trim().to_string());
+                }
+            }
+        }
+    }
+    value.map(|v| v.chars().filter(|c| !c.is_control()).take(998).collect::<String>()).filter(|v| !v.is_empty())
 }
 
 fn status_error(kind: Kind, text: String) -> NetError {

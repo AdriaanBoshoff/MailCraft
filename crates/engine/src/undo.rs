@@ -88,7 +88,8 @@ impl Session {
                 self.renumber(store, from, was, back);
                 (store, from, back)
             }
-            Step::Removed { store, folder, was, item, .. } => {
+            Step::Removed { store, folder, was, mut item, .. } => {
+                crate::cmd::imap_sync::back(self, store, &mut item);
                 let st = self.stores.get_mut(store).ok_or(StoreError::NoFolder).map_err(gone)?;
                 let back = st.add(folder, *item).map_err(gone)?.0;
                 self.renumber(store, folder, was, back);

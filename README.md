@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M4%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-48%20of%20118%20%C2%B7%2040%25-yellow)
-![tests](https://img.shields.io/badge/tests-416%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-424%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -41,8 +41,8 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 
 Closed milestones still have work left over: it is not dropped. Each piece is a row in
 [Do later](ROADMAP.md#do-later-from-m2) with the slot it lands in, and is struck when it lands.
-53 rows are done; 31 are open: 1 in M4, 17 in M5, 1 in M6, 2 with M1's checks against
-Outlook, and 10 that wait on something we do not have yet (an Outlook-written file of a kind we may
+55 rows are done; 37 are open: 9 in M4, 17 in M5, 1 in M6, 1 with M1's checks against
+Outlook, and 9 that wait on something we do not have yet (an Outlook-written file of a kind we may
 read, a reader we can try without driving a window, a printer we may use).
 
 ### Outlook Classic features with a command
@@ -65,7 +65,7 @@ read, a reader we can try without driving a window, a printer we may use).
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
-| IMAP, POP3, SMTP | accounts are set up and tested in Account Settings, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down and what is sent is put in the server's Sent folder; read and flag state going back to the server next (M4) | the same |
+| IMAP, POP3, SMTP | accounts are set up and tested in Account Settings, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down, what is sent is put in the server's Sent folder, and read, flagged, moved and deleted messages go both ways (M4) | the same |
 
 ## What works today
 
@@ -103,8 +103,9 @@ read, a reader we can try without driving a window, a printer we may use).
 
 ## What does not work yet
 
-- **IMAP changes going back.** Every folder of an IMAP server is taken down, but read, flagged,
-  moved and deleted messages do not go back to the server yet; they come with the rest of M4.8.
+- **IMAP folders changed.** Messages are kept in step with an IMAP server both ways, but a folder
+  renamed or deleted on one side is not yet followed on the other, Drafts stay here, and each
+  Send/Receive lists every folder rather than asking only for what changed (M4.12).
 - **Proof against Outlook.** `.pst` files written here open in Outlook Classic with every folder
   and message as written, whole, ANSI and saved into in place; a file written before M3c.1 is written
   whole on its next save, keeping its ids, and then opens too; an `.ost` is exported with its

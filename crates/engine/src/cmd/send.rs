@@ -10,6 +10,7 @@
 //! by `Session::poll`.
 
 use super::account::Reach;
+use super::imap_sync::Place;
 use super::{CommandSpec, p_bool};
 use crate::accounts::Account;
 use crate::jobs::Ended;
@@ -309,7 +310,15 @@ fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed:
                 // not sent again.
                 let kept = match own {
                     Some((at, f)) => {
-                        let kept = s.stores.get_mut(at).is_some_and(|st| st.add(f, going.kept.clone()).is_ok());
+                        let mut copy = going.kept.clone();
+                        // An IMAP account's copy is found on the server's Sent folder by its
+                        // Message-ID when one was put there; otherwise it stays here only and is
+                        // not put there later as if it were new.
+                        if let Some(a) = s.accounts.iter().find(|a| a.id == going.account && a.kind == crate::accounts::Kind::Imap) {
+                            let place = if a.sent_on_server { Place::Pending { raw: String::new() } } else { Place::Here };
+                            place.put(&mut copy);
+                        }
+                        let kept = s.stores.get_mut(at).is_some_and(|st| st.add(f, copy).is_ok());
                         if kept && !touched.contains(&at) {
                             touched.push(at);
                         }
