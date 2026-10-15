@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenMailClient</title>
+<meta name="description" content="A clean-room, open-source mail client written in Rust, with the layout and behaviour of Outlook Classic, data files that go both ways, and every feature reachable as a command.">
+<meta property="og:title" content="OpenMailClient">
+<meta property="og:description" content="An open-source mail client written in Rust, aiming at Outlook Classic parity.">
+<meta property="og:image" content="images/openmailclient-reading-pane.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 6.5 12 13l8.5-6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      OpenMailClient
+    </a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#progress">Progress</a>
+      <a href="#safety">Safety</a>
+      <a href="#start">Get started</a>
+      <a class="button small" href="https://github.com/AdriaanBoshoff/OpenMailClient">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <p class="stage">Early · milestone M4 (accounts) in progress</p>
+    <h1>The desktop mail client you know, <span>rebuilt in Rust and open.</span></h1>
+    <p class="lead">OpenMailClient is a clean-room, open-source mail client aiming at parity with Outlook Classic,
+      the Win32 desktop Outlook: the same layout and behaviour, <code>.pst</code> files that go both ways,
+      and every feature reachable as a command from the window, a CLI and, later, an MCP server for agents.</p>
+    <div class="actions">
+      <a class="button" href="https://github.com/AdriaanBoshoff/OpenMailClient">View on GitHub</a>
+      <a class="button ghost" href="#start">Build it</a>
+    </div>
+    <figure class="shot">
+      <picture>
+        <source srcset="images/openmailclient-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="images/openmailclient-reading-pane.png" width="1280" height="800" alt="The OpenMailClient window with its sample mailbox: folder pane, message list and a formatted message in the reading pane">
+      </picture>
+      <figcaption>The sample mailbox: invented content, drawn headlessly by the project's own screenshot tool.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="features" class="band">
+  <div class="wrap">
+    <h2>What works today</h2>
+    <div class="grid">
+      <article>
+        <h3>Outlook data files</h3>
+        <p>Opens <code>.pst</code> and <code>.ost</code> (ANSI, Unicode and 4K pages) and single <code>.msg</code>, <code>.oft</code> and <code>.eml</code> messages. Files written here open in Outlook Classic with every folder and message as written.</p>
+      </article>
+      <article>
+        <h3>Saves that cannot lose mail</h3>
+        <p>Nothing is written until you save. Unsaved changes are journalled beside the file and come back after a crash; a save writes with an undo file beside it, so a power cut leaves the file as it was.</p>
+      </article>
+      <article>
+        <h3>Formatted reading</h3>
+        <p>HTML and RTF bodies laid out and drawn in-process: tables, borders, lists, right-to-left text, pictures of many kinds (animated ones too) and Windows metafiles.</p>
+      </article>
+      <article>
+        <h3>Accounts</h3>
+        <p>IMAP, POP3 and SMTP over TLS with checked certificates, passwords in the system's credential store, each account in a data file of its own, Send/Receive on F9.</p>
+      </article>
+      <article>
+        <h3>Printing</h3>
+        <p>Memo Style and Table Style print to PDF, with a print window that shows the pages beside the page setup and a zoom.</p>
+      </article>
+      <article>
+        <h3>Everything is a command</h3>
+        <p>The ribbon, shortcuts, command search and the CLI all run the same commands by id, so whatever the window can do can be scripted, and soon driven by an agent.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="progress">
+  <div class="wrap">
+    <h2>Progress</h2>
+    <p class="muted">The numbers are measured, not estimated. The <a href="https://github.com/AdriaanBoshoff/OpenMailClient/blob/main/ROADMAP.md">roadmap</a> keeps the log, and work put off is kept as a scheduled "do later" row, never dropped.</p>
+    <ol class="milestones">
+      <li class="done"><b>M2</b> Formatted reading: HTML and RTF bodies, pictures, printing</li>
+      <li class="done"><b>M3</b> Writing <code>.pst</code>: a mailbox saved, changes kept, settings kept</li>
+      <li class="done"><b>M3b</b> The do-later batch: journalled changes, saving into a file where it is</li>
+      <li class="done"><b>M3c</b> Proof in Outlook: files we write open in Outlook Classic; 4K-page files</li>
+      <li class="now"><b>M4</b> Accounts: sending and receiving work; IMAP folders kept in step next</li>
+      <li><b>M1</b> Checks of the window's behaviour against Outlook, side by side</li>
+      <li><b>M5</b> Calendar, People and Tasks</li>
+      <li><b>M6</b> MCP server, control channel and a web build through WASM</li>
+    </ol>
+  </div>
+</section>
+
+<section id="safety" class="band">
+  <div class="wrap split">
+    <div>
+      <h2>Mail is hostile. The client treats it so.</h2>
+      <ul class="checks">
+        <li><b>Nothing in a message is run.</b> No scripts, ever.</li>
+        <li><b>Remote content is never fetched by itself.</b> Pictures download only when you ask, over HTTPS, and never from your own network.</li>
+        <li><b>Attachments open only on your answer.</b> A program or a script is only ever saved; an opened file is a read-only copy marked as from the internet.</li>
+        <li><b>Never crash, never lose mail.</b> No panics and no <code>unsafe</code> in the code; every file reader is tested with hostile input.</li>
+        <li><b>Clean room.</b> Formats come from public specifications. No Microsoft code, icons, fonts or wording: icons are drawn in code.</li>
+      </ul>
+    </div>
+    <figure class="shot small">
+      <img src="images/openmailclient-attachment.png" width="800" height="430" loading="lazy" alt="OpenMailClient asking about an attachment whose name reads as a PDF but is a web page: it can be saved, not opened">
+      <figcaption>A file that passes for a PDF is told of, and is only saved.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <h2>Get started</h2>
+    <p class="muted">There are no packaged releases yet. With a Rust toolchain (1.90 or newer):</p>
+    <pre><code>git clone https://github.com/AdriaanBoshoff/OpenMailClient
+cd OpenMailClient
+cargo run --release -p openmailclient -- --sample</code></pre>
+    <p class="muted">Open your own archive, or work without a window:</p>
+    <pre><code>cargo run --release -p openmailclient -- path/to/archive.pst
+cargo run --release -p openmailclient-cli -- inspect path/to/archive.pst --check
+cargo run --release -p openmailclient-cli -- convert message.msg message.eml</code></pre>
+    <p class="muted">Opening a data file never changes it; nothing is written until you save.</p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>MIT or Apache-2.0, at your option. · <a href="https://github.com/AdriaanBoshoff/OpenMailClient">Source</a> · <a href="https://github.com/AdriaanBoshoff/OpenMailClient/blob/main/ROADMAP.md">Roadmap</a></p>
+    <p class="muted">OpenMailClient is an independent project, not affiliated with or endorsed by Microsoft. Outlook is a trademark of Microsoft Corporation, named here only to say what the project aims to match.</p>
+  </div>
+</footer>
+</body>
+</html>
