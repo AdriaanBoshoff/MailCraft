@@ -1,12 +1,14 @@
 # Gaps
 
-**Status:** revision 88 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 89 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 1. **IMAP is taken down, not kept in step, and there is no Exchange.** Accounts are kept and tested
-   (M4.3), mail is sent (M4.4) and received by POP3 and from the IMAP Inbox (M4.5); the server's
-   other folders, and changes made here going back to the server, are a do-later item (M4.8);
+   (M4.3), mail is sent (M4.4) and received by POP3 and from the IMAP Inbox (M4.5); every folder
+   of an IMAP server is taken down into the account's own data file and a copy of what is sent
+   is put in the server's Sent folder (M4.8); read, flagged, moved and deleted messages going back
+   to the server are a do-later item (M4.8);
    accounts are set up in the window's Account Settings (M4.6), and each keeps its mail in a
    data file of its own (M4.7).
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
@@ -83,6 +85,7 @@
 
 ## Revision history
 
+- 89 · 2026-10-15 — M4.8: IMAP folders taken down as the server has them, the Sent copy put on the server.
 - 88 · 2026-10-15 — M4.11: attachments opened or saved on a double-click, a program or script only saved.
 - 87 · 2026-10-15 — M4.10: pictures on a server downloaded when asked for, over HTTPS only.
 - 86 · 2026-10-14 — M4.7: HTML messages laid out as Outlook lays them out (centring, padding, fills, rounded tables, picture boxes).

@@ -312,3 +312,114 @@ fn mail_taken_into_another_data_file_is_taken_down_again_into_the_account_s_own(
     s.run("file.closeStore", &json!({ "store": 1, "discard": true })).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn imap_folders_come_into_the_account_s_own_data_file_as_the_server_has_them() {
+    use openmailclient_net::fake::Mailbox;
+    let dir = std::env::temp_dir().join(format!("omc-imap-folders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = Fake::default();
+    add(&fake, "new", &[]);
+    {
+        let mut state = fake.state();
+        state.mailbox("Sent").unwrap().add(&message("went"), &["\\Seen"]);
+        state.mailbox("Trash").unwrap().add(&message("gone"), &["\\Seen"]);
+        state.mailboxes.push(Mailbox::new("Projects", &["\\HasChildren"]));
+        let mut plans = Mailbox::new("Projects/Plans", &[]);
+        plans.add(&message("plan"), &[]);
+        state.mailboxes.push(plans);
+        // A view of mail that is in other folders too, and a folder that holds none.
+        let mut all = Mailbox::new("All Mail", &["\\All"]);
+        all.add(&message("new"), &[]);
+        state.mailboxes.push(all);
+        state.mailboxes.push(Mailbox::new("Shared", &["\\Noselect"]));
+        // A folder named as the Outbox: its mail would be sent from here, so it is not kept.
+        let mut outbox = Mailbox::new("Outbox", &[]);
+        outbox.add(&message("not to go"), &[]);
+        state.mailboxes.push(outbox);
+    }
+    let mut s = with(&fake, "imap", json!({}));
+    s.account_dir = Some(dir.join("Accounts"));
+    s.journal_dir = Some(dir.join("journals"));
+    let got = s.run("account.receive", &Value::Null).unwrap();
+    assert_eq!(got["received"], 4, "{}", s.status);
+    assert_eq!(
+        (count_in(&s, 1, "Inbox"), count_in(&s, 1, "Sent Items"), count_in(&s, 1, "Deleted Items"), count_in(&s, 1, "Plans")),
+        (1, 1, 1, 1),
+        "{:?}",
+        s.folders[1]
+    );
+    assert_eq!(count_in(&s, 1, "Outbox"), 0, "nothing put in the Outbox to be sent");
+    assert!(!s.folders[1].iter().any(|f| f.name == "All Mail" || f.name == "Shared"));
+    let projects = s.folders[1].iter().find(|f| f.name == "Projects").unwrap().id;
+    assert_eq!(s.folders[1].iter().find(|f| f.name == "Plans").unwrap().parent, Some(projects));
+    // Read on the server, read here.
+    assert_eq!(s.folders[1].iter().find(|f| f.name == "Sent Items").unwrap().unread, 0);
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0, "and only once");
+
+    // What is sent from here is put in the server's Sent folder, read, and not taken down again.
+    s.run("mail.new", &Value::Null).unwrap();
+    s.run("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    s.run("compose.setField", &json!({ "field": "bcc", "value": "sam@example.test" })).unwrap();
+    s.run("compose.setField", &json!({ "field": "subject", "value": "From here" })).unwrap();
+    let sent = s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    assert_eq!((sent["sent"].as_u64(), sent["onServer"].as_u64()), (Some(1), Some(1)), "{sent} {}", s.status);
+    {
+        let mut state = fake.state();
+        let on_server = state.mailbox("Sent").unwrap();
+        assert_eq!(on_server.messages.len(), 2);
+        let copy = on_server.messages.last().unwrap();
+        assert_eq!(copy.flags, ["\\Seen"]);
+        let text = String::from_utf8_lossy(&copy.data);
+        assert!(text.contains("Subject: From here") && text.contains("sam@example.test"), "the sender's copy keeps the Bcc: {text}");
+    }
+    assert_eq!(count_in(&s, 1, "Sent Items"), 2, "{}", s.status);
+    assert_eq!(s.run("account.receive", &Value::Null).unwrap()["received"], 0, "{}", s.status);
+    assert_eq!(count_in(&s, 1, "Sent Items"), 2, "the copy on the server is not kept twice");
+    assert!(s.accounts[0].received.sent_here.is_empty(), "known once seen");
+
+    // What the account remembers is kept between runs.
+    let kept = s.accounts[0].to_settings();
+    let (again, ignored) = crate::accounts::from_settings(&json!([kept]));
+    assert_eq!((ignored, &again[0].received), (0, &s.accounts[0].received));
+    assert!(again[0].received.folders.iter().any(|m| m.raw == "Projects/Plans" && m.last_uid == 1));
+
+    // Asked not to, nothing is put on the server.
+    s.run("account.edit", &json!({ "id": "account-1", "sentOnServer": false })).unwrap();
+    s.run("mail.new", &Value::Null).unwrap();
+    s.run("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    s.run("compose.setField", &json!({ "field": "subject", "value": "Only here" })).unwrap();
+    assert_eq!(s.run("compose.send", &json!({ "anyway": true })).unwrap()["onServer"], 0);
+    assert_eq!(fake.state().mailbox("Sent").unwrap().messages.len(), 2);
+    settle(&mut s);
+    s.run("file.closeStore", &json!({ "store": 1, "discard": true })).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_server_without_a_sent_folder_is_given_one() {
+    let fake = Fake::default();
+    fake.state().mailboxes.retain(|m| m.name == "INBOX");
+    let mut s = with(&fake, "imap", json!({}));
+    s.run("mail.new", &Value::Null).unwrap();
+    s.run("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    s.run("compose.setField", &json!({ "field": "subject", "value": "First" })).unwrap();
+    assert_eq!(s.run("compose.send", &json!({ "anyway": true })).unwrap()["onServer"], 1, "{}", s.status);
+    assert_eq!(fake.state().mailbox("Sent").unwrap().messages.len(), 1);
+}
+
+#[test]
+fn a_sent_copy_the_server_refuses_leaves_what_went_as_it_went() {
+    let fake = Fake::default();
+    // The IMAP server offers no secure connection: the copy cannot go, the message has gone
+    // all the same.
+    fake.state().imap_without.push("STARTTLS".into());
+    let mut s = with(&fake, "imap", json!({}));
+    s.run("mail.new", &Value::Null).unwrap();
+    s.run("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    s.run("compose.setField", &json!({ "field": "subject", "value": "Gone" })).unwrap();
+    let sent = s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    assert_eq!((sent["sent"].as_u64(), sent["onServer"].as_u64()), (Some(1), Some(0)), "{sent}");
+    assert!(s.status.contains("could not be put in the server's Sent folder"), "{}", s.status);
+    assert_eq!(fake.state().submitted.len(), 1);
+}

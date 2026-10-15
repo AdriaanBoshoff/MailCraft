@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11) · revision 98 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them and the Sent copy put on the server (M4.8) · revision 99 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 413, all passing |
+| Tests | 416, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -134,7 +134,8 @@
 82. Done: HTML messages laid out as Outlook lays them out: a column of tables centred in its cell, each side of a cell's padding, pale fills and a table's own fill drawn, rounded table corners, tables standing flush under one another, a pale border kept pale, and a picture not downloaded shown as a box of the size it asks for (M4.7, from the live check).
 83. Done: Pictures on a server downloaded when asked for: from the info bar above the message or a right-click on a picture not shown (Download Pictures), over HTTPS only, never from this machine or the local network, kept in memory only and never by themselves (M4.10, `mail.downloadPictures`).
 84. Done: Attachments opened or saved on a double-click, as Outlook asks: Open, Save As or Cancel, from a double-click, Enter or a right-click on an attachment; a program, a script or a file whose name hides its kind is only saved; an opened file is a read-only copy marked as from the internet, cleared away when the program ends (M4.11, `file.openAttachment`).
-85. Next: M4.8: IMAP folders kept in step with the server, and the Sent copy put on the server.
+85. Done: IMAP folders taken down into the account's own data file as the server has them, and a copy of what is sent put in the server's Sent folder (M4.8, `accounts::Mark`, `sentOnServer`).
+86. Next: M4.8: read, flagged, moved and deleted messages kept in step both ways with the IMAP server.
 
 ## Do later (from M2)
 
@@ -227,8 +228,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
 | A server's own certificate trusted on the owner's word, and kept for that server only | M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
-| A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | M4.8, with IMAP folders kept in step |
-| IMAP folders kept in step both ways: the server's other folders, read, flagged, moved and deleted messages going back to the server | M4.8, after the live check |
+| A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
+| The IMAP server's other folders taken down into the account's own data file, as the server has them | done: M4.8 |
+| IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | M4.8, second part |
 | New mail told of on the desktop and with a sound of our own, Send/Receive on a timer, and its progress shown in a window of its own (Show Progress) | M4.9, after the live check |
 | Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.9, with the window's message options |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
@@ -1729,3 +1731,20 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   with it (Office opens it in Protected View); the copies are cleared away when the program
   ends, and those a run left are cleared a day on. An attached message opens here, as a
   message. Cancel is the answer a key press gives. 2 tests.
+- **2026-10-15** - M4.8: IMAP folders taken down as the server has them; the Sent copy put on the server.
+  An IMAP account with a data file of its own has every folder of the server there, not only
+  the Inbox: Sent, Drafts, Trash, Junk and Archive go to Sent Items, Drafts, Deleted Items, Junk
+  Email and Archive, as the server marks them (RFC 6154) or names them (Sent Messages, Spam,
+  INBOX.Trash and the like), and any other folder is made with the same name and place. Each
+  folder is followed by its own id mark, so nothing comes twice and a folder numbered anew is
+  taken down again; marks of folders the server no longer has are forgotten. What is sent is
+  put in the server's Sent folder, read, with its Bcc as the sender's copy keeps it, and a Sent
+  folder is made when the server has none ("sentOnServer", a box in Account Settings).
+  Better than Outlook: the copies put on the server are known by their Message-ID and not taken
+  down beside the copy Sent Items keeps; folders that are views of mail in other folders (All
+  Mail, Flagged, Important) are passed over, so nothing is there twice; a server folder named
+  as the Outbox is never filled, so nothing on a server is sent by being taken down; one budget
+  is shared by every folder, so a first receive of a large mailbox comes in parts, the Inbox
+  first. A send or receive that ended while a data file was being saved no longer has its mail
+  turned away from that file: what a job found waits for the save. Folders are made at the top
+  of a `.pst` beside the Inbox (`Store::create_top_folder`), journalled as any change. 4 tests.

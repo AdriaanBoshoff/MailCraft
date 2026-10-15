@@ -1,6 +1,9 @@
 //! Sending: what is in the Outbox goes out through its account's outgoing server, on a thread
 //! of its own, and what went out is kept in Sent Items. Nothing is sent unless it was put in
 //! the Outbox to be sent; what the server did not take stays in the Outbox with the reason.
+//! An IMAP account puts a copy of what went in the server's Sent folder too, as the owner's
+//! other mail programs expect (`Account::sent_on_server`); the receive that next reads that
+//! folder knows those copies by their Message-ID and does not keep them twice.
 //!
 //! The work on the thread gets copies of the messages as they are to go, written on the
 //! session's thread before it starts; the mailbox is changed only when the job is taken back
@@ -13,6 +16,7 @@ use crate::jobs::Ended;
 use crate::{CmdResult, EngineError, Session};
 use openmailclient_model::{FolderId, FolderKind, Item, ItemId, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, pid, recipient_email};
 use openmailclient_net::NetError;
+use openmailclient_net::imap::Imap;
 use openmailclient_net::smtp::Smtp;
 use serde_json::{Value, json};
 
@@ -60,6 +64,39 @@ struct Going {
 struct Batch {
     reach: Reach,
     going: Vec<Going>,
+    /// A copy of what went is put in the server's Sent folder.
+    to_server: bool,
+}
+
+/// How putting the copies of what went in an account's Sent folder on the server went.
+struct Copies {
+    account: String,
+    put: Result<usize, NetError>,
+}
+
+/// Put a copy of each message that went in the server's Sent folder, read, made when the
+/// server has none.
+fn put_in_sent(reach: &Reach, copies: &[Vec<u8>]) -> Result<usize, NetError> {
+    let login = reach.login()?;
+    let mut imap = Imap::open(&*reach.connector, &reach.account.incoming_endpoint(), &login)?;
+    let folders = imap.folders()?;
+    let sent = folders.iter().filter(|f| f.selectable()).find(|f| f.has("\\Sent")).or_else(|| {
+        folders.iter().filter(|f| f.selectable()).find(|f| super::receive::kind_of(f, &super::receive::path_of(f)) == Some(FolderKind::Sent))
+    });
+    let raw = match sent {
+        Some(f) => f.raw.clone(),
+        None => {
+            imap.create("Sent")?;
+            "Sent".to_string()
+        }
+    };
+    let mut put = 0;
+    for copy in copies {
+        imap.append(&raw, &["\\Seen"], copy)?;
+        put += 1;
+    }
+    imap.logout()?;
+    Ok(put)
 }
 
 /// What came of one message.
@@ -170,7 +207,11 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
         };
         match batches.iter_mut().find(|b| b.reach.account.id == account.id) {
             Some(b) => b.going.push(going),
-            None => batches.push(Batch { reach: Reach::of(s, at)?, going: vec![going] }),
+            None => batches.push(Batch {
+                reach: Reach::of(s, at)?,
+                going: vec![going],
+                to_server: account.kind == crate::accounts::Kind::Imap && account.sent_on_server,
+            }),
         }
     }
     let count: usize = batches.iter().map(|b| b.going.len()).sum();
@@ -179,11 +220,22 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
             if skipped.is_empty() { "There is nothing in the Outbox to send".to_string() } else { "Nothing in the Outbox could be sent".to_string() };
         return Ok(json!({ "sent": 0, "failed": skipped, "refused": [] }));
     }
+    // Known before the copies are on the server, so a receive running meanwhile already
+    // passes over them.
+    for batch in batches.iter().filter(|b| b.to_server) {
+        if let Some(a) = s.accounts.iter_mut().find(|a| a.id == batch.reach.account.id) {
+            for going in &batch.going {
+                a.received.put_in_sent(going.kept.props.str(pid::INTERNET_MESSAGE_ID).unwrap_or_default());
+            }
+        }
+    }
     let what = format!("{SENDING} {count} message{}", if count == 1 { "" } else { "s" });
     s.begin(what, wait, move |progress| {
         progress.begin(u64::try_from(count).unwrap_or(u64::MAX));
         let mut done: Vec<(Going, Outcome)> = Vec::new();
+        let mut copies: Vec<Copies> = Vec::new();
         for batch in batches {
+            let first = done.len();
             let mut smtp = batch
                 .reach
                 .account
@@ -206,8 +258,14 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
             if let Ok(c) = smtp {
                 let _ = c.quit();
             }
+            // What went, as Sent Items keeps it: Bcc and all, as only the sender sees it.
+            let went: Vec<Vec<u8>> =
+                done.get(first..).unwrap_or_default().iter().filter(|(_, o)| o.is_ok()).map(|(g, _)| openmailclient_mime::write(&g.kept)).collect();
+            if batch.to_server && !went.is_empty() {
+                copies.push(Copies { account: batch.reach.account.name.clone(), put: put_in_sent(&batch.reach, &went) });
+            }
         }
-        let step: Ended = Box::new(move |s: &mut Session| ended(s, store, done, skipped));
+        let step: Ended = Box::new(move |s: &mut Session| ended(s, store, done, skipped, copies));
         step
     })
 }
@@ -217,7 +275,7 @@ const SENDING: &str = "Sending";
 
 /// Take back what a send came to: what went is kept in Sent Items and leaves the Outbox; what
 /// did not stays, with the reason said.
-fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed: Vec<Value>) -> (String, Value) {
+fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed: Vec<Value>, copies: Vec<Copies>) -> (String, Value) {
     let sent_folder = s.find_folder(store, FolderKind::Sent);
     // Each account's Sent Items: in its own data file where it has one, as Outlook keeps it.
     let mut kept_in: Vec<(String, Option<(usize, FolderId)>)> = Vec::new();
@@ -299,5 +357,13 @@ fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed:
     if std::mem::take(&mut s.send_again) && send_outbox(s, false).is_ok_and(|started| started["started"] == true) {
         status.push_str("; sending what came into the Outbox meanwhile");
     }
-    (status, json!({ "sent": sent, "failed": failed, "refused": refused }))
+    let mut on_server = 0usize;
+    for c in &copies {
+        match &c.put {
+            Ok(n) => on_server += n,
+            // What went has gone: only the server's copy is missing, and that is said.
+            Err(e) => status.push_str(&format!("; {}: a copy could not be put in the server's Sent folder ({e})", c.account)),
+        }
+    }
+    (status, json!({ "sent": sent, "failed": failed, "refused": refused, "onServer": on_server }))
 }

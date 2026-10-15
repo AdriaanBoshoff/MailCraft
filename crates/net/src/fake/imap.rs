@@ -173,6 +173,16 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                 }
                 Ok("stored".into())
             }
+            "CREATE" => {
+                let name = args.first().and_then(Tok::text).unwrap_or_default();
+                let mut s = lock(state);
+                if name.is_empty() || s.mailbox(&name).is_some() {
+                    Err("NO it is there already".into())
+                } else {
+                    s.mailboxes.push(super::Mailbox::new(&name, &[]));
+                    Ok("created".into())
+                }
+            }
             "APPEND" => {
                 let name = args.first().and_then(Tok::text).unwrap_or_default();
                 let flags: Vec<String> = match args.get(1) {

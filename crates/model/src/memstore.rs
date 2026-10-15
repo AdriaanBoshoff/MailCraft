@@ -136,6 +136,10 @@ impl Store for MemStore {
         Ok(self.push_folder(Some(parent), name, &class))
     }
 
+    fn create_top_folder(&mut self, name: &str) -> Result<FolderId, StoreError> {
+        Ok(self.push_folder(None, name, "IPF.Note"))
+    }
+
     fn rename_folder(&mut self, folder: FolderId, name: &str) -> Result<(), StoreError> {
         self.folder_mut(folder)?.info.name = name.to_string();
         Ok(())

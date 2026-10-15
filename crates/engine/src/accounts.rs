@@ -66,20 +66,58 @@ pub struct Received {
     /// The data file what was taken down went into; empty for the one new mail is kept in.
     /// Taken into another file, nothing of it is in this one: all of it is taken down again.
     pub into: String,
+    /// IMAP: how far each folder of the server other than the Inbox was taken down.
+    pub folders: Vec<Mark>,
+    /// IMAP: the Message-IDs of messages sent from here and put in the server's Sent folder,
+    /// so they are not taken down again beside the copy Sent Items keeps already.
+    pub sent_here: Vec<String>,
+}
+
+/// How far one IMAP folder was taken down.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Mark {
+    /// The folder's name as the server knows it.
+    pub raw: String,
+    pub uid_validity: u32,
+    pub last_uid: u32,
 }
 
 /// POP3 ids remembered at most; the server's list is the bound in practice.
 pub const MAX_SEEN: usize = 100_000;
+/// IMAP folders followed at most, and Message-IDs of what was put in Sent remembered.
+pub const MAX_FOLDERS: usize = 1000;
+pub const MAX_SENT_HERE: usize = 1000;
+
+/// A name or id as kept in the settings: not empty, not too long, nothing that is not text.
+fn kept_text(v: &Value, max: usize) -> Option<&str> {
+    v.as_str().filter(|t| !t.is_empty() && t.len() <= max && !t.chars().any(char::is_control))
+}
 
 impl Received {
     fn to_json(&self) -> Value {
-        json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen, "into": self.into })
+        let folders: Vec<Value> =
+            self.folders.iter().map(|m| json!({ "raw": m.raw, "uidValidity": m.uid_validity, "lastUid": m.last_uid })).collect();
+        json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen, "into": self.into,
+                "folders": folders, "sentHere": self.sent_here })
     }
 
     /// As a settings file gives it: what makes no sense is left as nothing taken down yet.
     fn from_json(v: Option<&Value>) -> Self {
         let Some(v) = v else { return Self::default() };
-        let n = |key: &str| v.get(key).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+        let number = |v: &Value, key: &str| v.get(key).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+        let n = |key: &str| number(v, key);
+        let mut folders: Vec<Mark> = Vec::new();
+        for f in v.get("folders").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_FOLDERS) {
+            let Some(raw) = f.get("raw").and_then(|r| kept_text(r, 1000)) else { continue };
+            if !folders.iter().any(|m| m.raw == raw) {
+                folders.push(Mark { raw: raw.to_string(), uid_validity: number(f, "uidValidity"), last_uid: number(f, "lastUid") });
+            }
+        }
+        let sent_here = v
+            .get("sentHere")
+            .and_then(Value::as_array)
+            .map(|all| all.iter().take(MAX_SENT_HERE).filter_map(|m| kept_text(m, 998)).map(str::to_string).collect())
+            .unwrap_or_default();
         let seen = v
             .get("seen")
             .and_then(Value::as_array)
@@ -93,12 +131,25 @@ impl Received {
             })
             .unwrap_or_default();
         let into = v.get("into").and_then(Value::as_str).filter(|p| p.len() <= 1024 && !p.chars().any(char::is_control)).unwrap_or_default();
-        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string() }
+        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string(), folders, sent_here }
     }
 
     /// What was taken down into the data file `into`: nothing, when it went into another.
     pub fn kept_in(&self, into: &str) -> Self {
-        if self.into == into { self.clone() } else { Self { into: into.to_string(), ..Self::default() } }
+        if self.into == into { self.clone() } else { Self { into: into.to_string(), sent_here: self.sent_here.clone(), ..Self::default() } }
+    }
+
+    /// Remember a message put in the server's Sent folder, the oldest forgotten past the bound.
+    pub fn put_in_sent(&mut self, message_id: &str) {
+        let id = message_id.trim();
+        if id.is_empty() || self.sent_here.iter().any(|m| m == id) {
+            return;
+        }
+        self.sent_here.push(id.to_string());
+        if self.sent_here.len() > MAX_SENT_HERE {
+            let over = self.sent_here.len() - MAX_SENT_HERE;
+            self.sent_here.drain(..over);
+        }
     }
 }
 
@@ -120,6 +171,9 @@ pub struct Account {
     pub sign_in_to_send: bool,
     /// POP3: a copy of each message is left on the server once taken down.
     pub leave_on_server: bool,
+    /// IMAP: a copy of what is sent is put in the server's Sent folder, so the owner's other
+    /// mail programs see it too.
+    pub sent_on_server: bool,
     /// What was taken down so far; kept in the settings, not given by `account.list`.
     pub received: Received,
     /// The data file the account's mail is kept in, as Outlook keeps one for each account:
@@ -255,6 +309,7 @@ impl Account {
             user: pick("user", 320, was.map(|w| w.user.as_str()), &email)?,
             sign_in_to_send: flag(p, "signInToSend")?.unwrap_or(was.is_none_or(|w| w.sign_in_to_send)),
             leave_on_server: flag(p, "leaveOnServer")?.unwrap_or(was.is_none_or(|w| w.leave_on_server)),
+            sent_on_server: flag(p, "sentOnServer")?.unwrap_or(was.is_none_or(|w| w.sent_on_server)),
             // What was taken down stays with the account while it reads from the same place.
             received: was
                 .filter(|w| w.kind == kind && w.incoming.host == incoming.host && w.user == p_user(p, w))
@@ -282,6 +337,7 @@ impl Account {
             "outgoing": server(&self.outgoing),
             "signInToSend": self.sign_in_to_send,
             "leaveOnServer": self.leave_on_server,
+            "sentOnServer": self.sent_on_server,
             "dataFile": self.data_file.as_ref().map(|p| p.display().to_string()),
         })
     }

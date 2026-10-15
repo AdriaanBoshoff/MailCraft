@@ -36,6 +36,9 @@ const MAX_DEPTH: usize = 16;
 /// it is made, which is what a crash of the program needs; a power cut may cost the last few.
 const SYNC_EVERY: u32 = 64;
 
+/// The parent journalled for a folder made at the top of the tree: no folder has the id 0.
+pub(crate) const TOP: u64 = 0;
+
 /// One request, as it is journalled.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Op {
@@ -57,6 +60,7 @@ pub(crate) enum Op {
         folder: u64,
         id: u64,
     },
+    /// `parent` is `TOP` for a folder at the top of the tree.
     CreateFolder {
         parent: u64,
         name: String,

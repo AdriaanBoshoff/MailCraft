@@ -575,6 +575,10 @@ impl Store for PstStore {
         self.e_create_folder(parent, name)
     }
 
+    fn create_top_folder(&mut self, name: &str) -> Result<FolderId, StoreError> {
+        self.e_create_top_folder(name)
+    }
+
     fn rename_folder(&mut self, folder: FolderId, name: &str) -> Result<(), StoreError> {
         self.e_rename_folder(folder, name)
     }

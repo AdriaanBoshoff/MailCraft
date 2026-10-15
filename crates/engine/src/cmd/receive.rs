@@ -1,7 +1,10 @@
 //! Receiving: new mail is taken down from each account's incoming server into the Inbox of the
 //! account's own data file (`account::account_store`), or, where the host keeps none, of the
-//! data file new mail is kept in, on a thread of its own. An account's own data file is saved
-//! once mail has come into it. Nothing is taken down twice: an
+//! data file new mail is kept in, on a thread of its own. An IMAP account with a data file of
+//! its own has every folder of the server there: Sent, Drafts, Deleted Items, Junk Email and
+//! Archive are the ones the server marks so ([RFC 6154]) or names so, and any other is made
+//! with the same name and place. An account's own data file is saved once mail has come into
+//! it. Nothing is taken down twice: an
 //! account remembers what it took (`accounts::Received`), and that is moved on only once the
 //! message is in the Inbox.
 //!
@@ -12,12 +15,12 @@
 
 use super::account::Reach;
 use super::{CommandSpec, p_bool};
-use crate::accounts::{Kind, MAX_SEEN, Received};
+use crate::accounts::{Kind, MAX_FOLDERS, MAX_SEEN, Mark, Received};
 use crate::jobs::Ended;
 use crate::{CmdResult, EngineError, Session};
 use openmailclient_model::{Attachment, FolderId, FolderKind, Item, MSGFLAG_READ, PropValue, pid};
 use openmailclient_net::NetError;
-use openmailclient_net::imap::Imap;
+use openmailclient_net::imap::{Folder, Imap, Selected};
 use openmailclient_net::pop3::Pop3;
 use serde_json::{Value, json};
 
@@ -90,6 +93,9 @@ struct Taking {
     received: Received,
     /// POP3: messages taken down before are taken off the server this time.
     take_off: bool,
+    /// IMAP: every folder of the server is taken down, not only the Inbox; so when the mail
+    /// goes into a data file of the account's own, where the folders can be as the server's.
+    folders: bool,
 }
 
 /// A message taken down.
@@ -117,7 +123,81 @@ struct Took {
     on_server: Option<Vec<String>>,
     /// Messages left on the server for the next receive.
     waiting: usize,
+    /// IMAP: what came from the server's other folders.
+    others: Vec<FromFolder>,
+    /// IMAP: every folder the server has, by the name it knows it by, when it said them.
+    listed: Option<Vec<String>>,
     error: Option<NetError>,
+}
+
+/// What was taken down from one IMAP folder other than the Inbox.
+struct FromFolder {
+    raw: String,
+    /// The folder's place as it reads, its parents first.
+    path: Vec<String>,
+    /// The kind of folder it is, as the server marks it or names it.
+    kind: Option<FolderKind>,
+    uid_validity: Option<u32>,
+    got: Vec<Got>,
+}
+
+/// What one receive may still take down from an account, shared by its folders.
+struct Budget {
+    /// Messages that may still come.
+    messages: usize,
+    /// Bytes taken down so far.
+    bytes: u64,
+}
+
+/// The kind of folder a server's folder is: by the special use it is marked with
+/// ([RFC 6154] 2), and otherwise by the names other programs give such folders.
+pub(super) fn kind_of(f: &Folder, path: &[String]) -> Option<FolderKind> {
+    for (mark, kind) in [
+        ("\\Sent", FolderKind::Sent),
+        ("\\Drafts", FolderKind::Drafts),
+        ("\\Trash", FolderKind::Deleted),
+        ("\\Junk", FolderKind::Junk),
+        ("\\Archive", FolderKind::Archive),
+    ] {
+        if f.has(mark) {
+            return Some(kind);
+        }
+    }
+    // A name at the top, or under the Inbox as some servers keep every folder.
+    let name = match path {
+        [name] => name,
+        [inbox, name] if inbox.eq_ignore_ascii_case("Inbox") => name,
+        _ => return None,
+    };
+    match name.trim().to_lowercase().as_str() {
+        "sent" | "sent items" | "sent messages" | "sent mail" => Some(FolderKind::Sent),
+        "drafts" | "draft" => Some(FolderKind::Drafts),
+        "trash" | "deleted items" | "deleted messages" | "deleted" | "bin" => Some(FolderKind::Deleted),
+        "junk" | "spam" | "junk e-mail" | "junk email" | "bulk mail" => Some(FolderKind::Junk),
+        "archive" | "archives" => Some(FolderKind::Archive),
+        _ => None,
+    }
+}
+
+/// A folder's place as it reads: its name split where the server's delimiter is, each part
+/// bounded as a folder name is.
+pub(super) fn path_of(f: &Folder) -> Vec<String> {
+    let parts: Vec<String> = match f.delimiter {
+        Some(d) => f.name.split(d).map(str::to_string).collect(),
+        None => vec![f.name.clone()],
+    };
+    parts
+        .into_iter()
+        .map(|p| p.chars().filter(|c| !c.is_control()).take(255).collect::<String>().trim().to_string())
+        .filter(|p| !p.is_empty())
+        .take(32)
+        .collect()
+}
+
+/// Folders whose mail is in other folders too, as a view: taken down, the mail would be there
+/// twice ([RFC 6154] 2).
+fn is_view(f: &Folder) -> bool {
+    ["\\All", "\\Flagged", "\\Important"].iter().any(|a| f.has(a))
 }
 
 /// Where an account's new mail goes: the Inbox of a data file, and whether the file is the
@@ -176,7 +256,7 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
         let saved = s.stores.get(target.store).is_some_and(|st| st.path().is_some() && !st.unsaved());
         let (received, take_off) = (account.received.kept_in(&into_of(s, target)), !account.leave_on_server && saved);
         targets.push((account.id.clone(), target));
-        taking.push(Taking { reach: Reach::of(s, at)?, received, take_off });
+        taking.push(Taking { reach: Reach::of(s, at)?, received, take_off, folders: target.own });
     }
     if taking.is_empty() {
         return Err(EngineError::Format(skipped.first().cloned().unwrap_or_else(|| "there is no account to receive from".into())));
@@ -211,6 +291,8 @@ fn took(t: &Taking) -> Took {
         uid_validity: None,
         on_server: None,
         waiting: 0,
+        others: Vec::new(),
+        listed: None,
         error: None,
     }
 }
@@ -228,22 +310,77 @@ fn imap_into(t: &Taking, progress: &openmailclient_model::Progress, out: &mut To
     let mut imap = Imap::open(&*t.reach.connector, &t.reach.account.incoming_endpoint(), &login)?;
     let inbox = imap.select("INBOX")?;
     out.uid_validity = inbox.uid_validity;
-    // Numbered anew, or never read: every message is new.
-    let from = if inbox.uid_validity.is_some_and(|v| v == t.received.uid_validity) { t.received.last_uid.saturating_add(1) } else { 1 };
-    let listed = if inbox.exists == 0 { Vec::new() } else { imap.list(from)? };
-    let mut bytes = 0u64;
+    let mut budget = Budget { messages: MAX_PER_RUN, bytes: 0 };
+    (out.got, out.waiting) = take(&mut imap, &inbox, t.received.uid_validity, t.received.last_uid, &mut budget, progress)?;
+    // What the Inbox gave is kept even when the other folders cannot be read.
+    if t.folders
+        && let Err(e) = others_into(&mut imap, t, &mut budget, progress, out)
+    {
+        out.error = Some(e);
+        return Ok(());
+    }
+    imap.logout()
+}
+
+/// The new messages of the selected folder, as far as the budget goes: those after `last_uid`,
+/// or every one when the folder was numbered anew or never read. Returns them and how many are
+/// left for next time.
+fn take(
+    imap: &mut Imap,
+    selected: &Selected,
+    uid_validity: u32,
+    last_uid: u32,
+    budget: &mut Budget,
+    progress: &openmailclient_model::Progress,
+) -> Result<(Vec<Got>, usize), NetError> {
+    let same = selected.uid_validity.is_some_and(|v| v == uid_validity);
+    let from = if same { last_uid.saturating_add(1) } else { 1 };
+    // Nothing came since, as the folder's next id says: there is nothing to ask for.
+    if selected.exists == 0 || (same && selected.uid_next.is_some_and(|next| next <= from)) {
+        return Ok((Vec::new(), 0));
+    }
+    let listed = imap.list(from)?;
+    let mut got = Vec::new();
     for (n, m) in listed.iter().enumerate() {
-        if n >= MAX_PER_RUN || (bytes > 0 && bytes.saturating_add(m.size) > MAX_BYTES) || progress.stopped() {
-            out.waiting = listed.len().saturating_sub(n);
-            break;
+        // The first message of a receive comes whatever its size; after it, what fits.
+        let fits = budget.bytes == 0 || budget.bytes.saturating_add(m.size) <= MAX_BYTES;
+        if budget.messages == 0 || !fits || progress.stopped() {
+            return Ok((got, listed.len().saturating_sub(n)));
         }
         // One that is gone by now is passed over.
         if let Some(data) = imap.fetch(m.uid)? {
-            bytes = bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
-            out.got.push(Got { uid: Uid::Imap(m.uid), read: m.flags.iter().any(|f| f.eq_ignore_ascii_case("\\Seen")), data });
+            budget.messages = budget.messages.saturating_sub(1);
+            budget.bytes = budget.bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX).max(1));
+            got.push(Got { uid: Uid::Imap(m.uid), read: m.flags.iter().any(|f| f.eq_ignore_ascii_case("\\Seen")), data });
         }
     }
-    imap.logout()
+    Ok((got, 0))
+}
+
+/// Every folder of the server but the Inbox, each from where it was left.
+fn others_into(imap: &mut Imap, t: &Taking, budget: &mut Budget, progress: &openmailclient_model::Progress, out: &mut Took) -> Result<(), NetError> {
+    let folders = imap.folders()?;
+    out.listed = Some(folders.iter().map(|f| f.raw.clone()).collect());
+    for f in folders.iter().filter(|f| f.selectable() && !f.raw.eq_ignore_ascii_case("INBOX") && !is_view(f)).take(MAX_FOLDERS) {
+        if progress.stopped() {
+            break;
+        }
+        let path = path_of(f);
+        if path.is_empty() {
+            continue;
+        }
+        // A folder the server will not open now is passed over, and tried again next time.
+        let selected = match imap.select(&f.raw) {
+            Ok(s) => s,
+            Err(NetError::Refused(_)) => continue,
+            Err(e) => return Err(e),
+        };
+        let mark = t.received.folders.iter().find(|m| m.raw == f.raw).cloned().unwrap_or_default();
+        let (got, waiting) = take(imap, &selected, mark.uid_validity, mark.last_uid, budget, progress)?;
+        out.waiting = out.waiting.saturating_add(waiting);
+        out.others.push(FromFolder { raw: f.raw.clone(), path, kind: kind_of(f, &path_of(f)), uid_validity: selected.uid_validity, got });
+    }
+    Ok(())
 }
 
 fn from_pop3(t: &Taking, progress: &openmailclient_model::Progress) -> Took {
@@ -307,6 +444,106 @@ fn item_of(got: &Got, now: i64) -> Item {
     item
 }
 
+/// The folder of the account's data file a server's folder is kept in: the one of its kind, or
+/// the one of the same name and place, made when it is not there yet. None for a folder that
+/// mail must not go into here: the Outbox, whose mail would be sent, and folders of
+/// appointments, contacts and the like.
+fn local_folder(s: &mut Session, store: usize, from: &FromFolder) -> Result<Option<FolderId>, String> {
+    if let Some(kind) = from.kind
+        && let Some(id) = s.find_folder(store, kind)
+    {
+        return Ok(Some(id));
+    }
+    // The server's top is where the Inbox stands.
+    let list = s.folders.get(store).ok_or("the data file is not open")?;
+    let mut parent = list.iter().find(|f| f.kind == FolderKind::Inbox).and_then(|f| f.parent);
+    for part in &from.path {
+        let wanted = part.to_lowercase();
+        let here =
+            s.folders.get(store).and_then(|l| l.iter().find(|f| f.parent == parent && f.name.to_lowercase() == wanted).map(|f| (f.id, f.kind)));
+        parent = match here {
+            Some((
+                _,
+                FolderKind::Outbox
+                | FolderKind::Calendar
+                | FolderKind::Contacts
+                | FolderKind::Tasks
+                | FolderKind::Notes
+                | FolderKind::Journal
+                | FolderKind::Search
+                | FolderKind::Root,
+            )) => return Ok(None),
+            Some((id, _)) => Some(id),
+            None => {
+                let st = s.stores.get_mut(store).ok_or("the data file is not open")?;
+                let made = match parent {
+                    Some(p) => st.create_folder(p, part),
+                    None => st.create_top_folder(part),
+                };
+                let id = made.map_err(|e| format!("the folder {part} could not be made: {e}"))?;
+                s.refresh_folders(store);
+                Some(id)
+            }
+        };
+    }
+    Ok(parent)
+}
+
+/// Keep what came from one of the server's folders other than the Inbox, and move its mark on
+/// past each message once it is kept. A message this program put in the server's Sent folder
+/// is not kept again: Sent Items has it already. Returns how many were kept, how many of them
+/// unread, and what went wrong.
+fn keep_folder(s: &mut Session, store: usize, from: &FromFolder, received: &mut Received, now: i64) -> (usize, usize, Option<String>) {
+    let at = received.folders.iter().position(|m| m.raw == from.raw);
+    let mut mark = at.and_then(|i| received.folders.get(i).cloned()).unwrap_or_else(|| Mark { raw: from.raw.clone(), ..Mark::default() });
+    if let Some(v) = from.uid_validity
+        && v != mark.uid_validity
+    {
+        mark = Mark { raw: from.raw.clone(), uid_validity: v, last_uid: 0 };
+    }
+    let (mut kept, mut unread, mut why) = (0, 0, None);
+    if !from.got.is_empty() {
+        match local_folder(s, store, from) {
+            Ok(Some(folder)) => {
+                let sent = s.folders.get(store).and_then(|l| l.iter().find(|f| f.id == folder)).is_some_and(|f| f.kind == FolderKind::Sent);
+                for got in &from.got {
+                    let Uid::Imap(uid) = got.uid else { continue };
+                    let item = item_of(got, now);
+                    let id = item.props.str(pid::INTERNET_MESSAGE_ID).map(str::trim).unwrap_or_default().to_string();
+                    if sent && !id.is_empty() && received.sent_here.contains(&id) {
+                        received.sent_here.retain(|m| *m != id);
+                        mark.last_uid = mark.last_uid.max(uid);
+                        continue;
+                    }
+                    match s.stores.get_mut(store).map(|st| st.add(folder, item)) {
+                        Some(Ok(_)) => {
+                            kept += 1;
+                            unread += usize::from(!got.read);
+                            mark.last_uid = mark.last_uid.max(uid);
+                        }
+                        Some(Err(e)) => {
+                            why = Some(format!("a message could not be kept: {e}"));
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+            }
+            // Mail that has no place here is passed over for good.
+            Ok(None) => {
+                mark.last_uid = from.got.iter().filter_map(|g| if let Uid::Imap(u) = g.uid { Some(u) } else { None }).fold(mark.last_uid, u32::max);
+            }
+            Err(e) => why = Some(e),
+        }
+    }
+    if let Some(m) = at.and_then(|i| received.folders.get_mut(i)) {
+        *m = mark;
+    } else if received.folders.len() < MAX_FOLDERS {
+        received.folders.push(mark);
+    }
+    (kept, unread, why)
+}
+
 /// Take back what a receive came to: each message into the Inbox, and the account moved on
 /// past it only once it is there.
 fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut said: Vec<String>) -> (String, Value) {
@@ -328,10 +565,23 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         if let Some(v) = t.uid_validity
             && v != received.uid_validity
         {
-            received = Received { uid_validity: v, into, ..Received::default() };
+            // The Inbox was numbered anew; the other folders keep their own marks.
+            received = Received { uid_validity: v, into, folders: received.folders, sent_here: received.sent_here, ..Received::default() };
         }
         let mut kept = 0usize;
         let mut trouble = t.error.as_ref().map(ToString::to_string);
+        for from in &t.others {
+            let (n, unread_here, why) = keep_folder(s, store, from, &mut received, now);
+            kept += n;
+            unread += unread_here;
+            if let Some(why) = why {
+                trouble.get_or_insert(why);
+            }
+        }
+        // Marks of folders the server no longer has are forgotten.
+        if let Some(listed) = &t.listed {
+            received.folders.retain(|m| listed.contains(&m.raw));
+        }
         let mut new_seen = Vec::new();
         for got in &t.got {
             let item = item_of(got, now);

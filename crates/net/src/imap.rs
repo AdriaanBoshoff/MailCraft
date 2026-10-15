@@ -666,6 +666,12 @@ impl Imap {
         }))
     }
 
+    /// Make a folder on the server ([RFC 9051] 6.3.4), as an APPEND that was answered
+    /// `[TRYCREATE]` asks for.
+    pub fn create(&mut self, raw: &str) -> Result<(), NetError> {
+        self.run(vec![Part::Text("CREATE ".into()), astring(raw.as_bytes())]).map(|_| ())
+    }
+
     pub fn logout(mut self) -> Result<(), NetError> {
         self.run(vec![Part::Text("LOGOUT".into())]).map(|_| ())
     }

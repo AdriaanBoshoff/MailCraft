@@ -35,6 +35,8 @@ pub(crate) struct Form {
     pub has_password: bool,
     pub sign_in: bool,
     pub leave: bool,
+    /// IMAP: a copy of what is sent goes in the server's Sent folder.
+    pub sent_on_server: bool,
     /// The data file its mail is kept in, where it has one of its own.
     pub data_file: String,
 }
@@ -58,6 +60,7 @@ impl Form {
             has_password: false,
             sign_in: true,
             leave: true,
+            sent_on_server: true,
             data_file: String::new(),
         }
     }
@@ -92,6 +95,7 @@ impl Form {
             has_password: a.get("hasPassword").and_then(Value::as_bool) == Some(true),
             sign_in: a.get("signInToSend").and_then(Value::as_bool) != Some(false),
             leave: a.get("leaveOnServer").and_then(Value::as_bool) != Some(false),
+            sent_on_server: a.get("sentOnServer").and_then(Value::as_bool) != Some(false),
             data_file: a.get("dataFile").and_then(Value::as_str).map(one_line).unwrap_or_default(),
         }
     }
@@ -120,6 +124,7 @@ impl Form {
             "outgoing": outgoing,
             "signInToSend": self.sign_in,
             "leaveOnServer": self.leave,
+            "sentOnServer": self.sent_on_server,
         });
         if let (Some(id), Some(map)) = (&self.id, p.as_object_mut()) {
             map.insert("id".into(), json!(id));
@@ -459,6 +464,11 @@ impl MailUi {
                             if f.pop3 {
                                 label(ui, &t, "");
                                 ui.checkbox(&mut f.leave, "Leave a copy of each message on the server");
+                                ui.end_row();
+                            } else {
+                                label(ui, &t, "");
+                                ui.checkbox(&mut f.sent_on_server, "Put a copy of what is sent in the server's Sent folder")
+                                    .on_hover_text("So the mail programs on your other devices see what was sent from here");
                                 ui.end_row();
                             }
                         });

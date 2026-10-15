@@ -47,7 +47,10 @@ fn busy(store: &mut PstStore) -> u32 {
     store.move_folder(made, sent.id).unwrap();
     let doomed = store.create_folder(inbox.id, "Short-lived").unwrap();
     store.delete_folder(doomed).unwrap();
-    13
+    // A folder at the top, beside the Inbox, with a message in it.
+    let top = store.create_top_folder("Beside the Inbox").unwrap();
+    store.add(top, mail("At the top", false)).unwrap();
+    15
 }
 
 /// What was played back is what was there: every folder and every message, value for value.

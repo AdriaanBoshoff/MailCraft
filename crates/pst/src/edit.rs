@@ -7,7 +7,7 @@
 //! A changed message keeps every stored property that was not changed. The new file is checked,
 //! read back and only then put in the old one's place.
 
-use crate::journal::{self, Diff, Found, Journal, Op};
+use crate::journal::{self, Diff, Found, Journal, Op, TOP};
 use crate::ltp::{self, Raw, Row};
 use crate::ltp_write::{Late, NID_TYPE_OBJECT, Subs, encode, write_pc_late};
 use crate::ndb::{NbtEntry, Ndb, Subnodes, u32_at};
@@ -336,6 +336,7 @@ impl PstStore {
                 Ok(())
             }
             Op::Remove { folder, id } => self.e_remove(FolderId(folder), ItemId(id)).map(|_| ()),
+            Op::CreateFolder { parent: TOP, name } => self.e_create_top_folder(&name).map(|_| ()),
             Op::CreateFolder { parent, name } => self.e_create_folder(FolderId(parent), &name).map(|_| ()),
             Op::RenameFolder { folder, name } => self.e_rename_folder(FolderId(folder), &name),
             Op::DeleteFolder { folder } => self.e_delete_folder(FolderId(folder)),
@@ -512,13 +513,26 @@ impl PstStore {
     }
 
     pub(crate) fn e_create_folder(&mut self, parent: FolderId, name: &str) -> Result<FolderId, StoreError> {
+        self.e_create_in(Some(parent), name)
+    }
+
+    /// A mail folder at the top of the folder tree, under the root of the mailbox as the Inbox
+    /// is ([MS-PST] 2.4.3).
+    pub(crate) fn e_create_top_folder(&mut self, name: &str) -> Result<FolderId, StoreError> {
+        self.e_create_in(None, name)
+    }
+
+    fn e_create_in(&mut self, parent: Option<FolderId>, name: &str) -> Result<FolderId, StoreError> {
         let edits = self.edits()?;
-        let class = edits.folders.get(edits.at(parent)?).map(|f| f.info.container_class.clone()).unwrap_or_default();
+        let class = match parent {
+            Some(parent) => edits.folders.get(edits.at(parent)?).map(|f| f.info.container_class.clone()).unwrap_or_default(),
+            None => "IPF.Note".to_string(),
+        };
         let nid = edits.fresh(TYPE_FOLDER)?;
         let id = FolderId(u64::from(nid));
         let info = FolderInfo {
             id,
-            parent: Some(parent),
+            parent,
             name: name.to_string(),
             kind: FolderKind::guess(name, &class),
             container_class: class,
@@ -526,11 +540,11 @@ impl PstStore {
             unread: 0,
             has_children: false,
         };
-        let at = edits.end_of(parent);
+        let at = parent.map_or(edits.folders.len(), |p| edits.end_of(p));
         edits.folders.insert(at, EFolder { info, nid, new: true, items: Some(Vec::new()), had: Vec::new() });
         edits.mark_parents();
         edits.dirty = true;
-        self.log(&Op::CreateFolder { parent: parent.0, name: name.to_string() });
+        self.log(&Op::CreateFolder { parent: parent.map_or(TOP, |p| p.0), name: name.to_string() });
         Ok(id)
     }
 

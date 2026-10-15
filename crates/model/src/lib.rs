@@ -700,6 +700,10 @@ pub trait Store {
     fn create_folder(&mut self, _parent: FolderId, _name: &str) -> Result<FolderId, StoreError> {
         Err(StoreError::ReadOnly)
     }
+    /// A mail folder at the top of the data file, beside the Inbox.
+    fn create_top_folder(&mut self, _name: &str) -> Result<FolderId, StoreError> {
+        Err(StoreError::ReadOnly)
+    }
     fn rename_folder(&mut self, _folder: FolderId, _name: &str) -> Result<(), StoreError> {
         Err(StoreError::ReadOnly)
     }

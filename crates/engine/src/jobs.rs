@@ -41,6 +41,9 @@ impl Session {
         let progress = Arc::new(Progress::default());
         if wait || cfg!(target_arch = "wasm32") {
             let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&progress))).unwrap_or_else(|_| broke(what.clone()));
+            // A data file being saved takes no change until the save ends: what the job found
+            // waits for it, so none of it is turned away.
+            self.end_saves(true);
             let (status, value) = ended(self);
             self.status = status;
             return Ok(value);
@@ -63,6 +66,11 @@ impl Session {
     /// Take what the jobs that are done found; with `wait`, wait for every one first. True
     /// when one ended.
     pub(crate) fn end_jobs(&mut self, wait: bool) -> bool {
+        // What a job found is taken once no data file is being saved: a file being saved takes
+        // no change, and mail that came or went would be turned away from it.
+        if !wait && !self.saves.is_empty() {
+            return false;
+        }
         let mut ended = false;
         let mut at = 0;
         while let Some(job) = self.jobs.get(at) {
