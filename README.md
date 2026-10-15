@@ -11,6 +11,8 @@ A clean-room, open-source mail client written in Rust, aiming at parity with Mic
 (the Win32 desktop Outlook): the same layout and behaviour, files that go both ways, and every feature
 reachable as a command from the UI, a CLI and (later) an MCP server.
 
+Project page: https://adriaanboshoff.github.io/OpenMailClient/
+
 OpenMailClient is an independent concept project. It is not affiliated with Microsoft. It follows the
 conventions of [`storytold/wordcraft`](https://github.com/storytold/wordcraft).
 
@@ -92,7 +94,7 @@ read, a reader we can try without driving a window, a printer we may use).
   that are drawings, with the bitmaps, hatched and patterned brushes and clipped regions in them) are decoded in-process and drawn in the text; animated GIF, PNG and WebP
   pictures are played, or stand still when asked (`view.animations`); pictures stand at the sides of
   a paragraph with the text beside them; an attachment that stands in the
-  text is a card that a click saves.
+  text is a card that a click asks about: open it or save it.
 - **Printing.** A message (Memo Style) or a folder's list (Table Style) prints to a PDF file, with
   tables, borders and pictures; a print window shows the pages beside the page setup (paper,
   direction, margins, header and footer) and has a zoom; Table Style prints the columns chosen,
@@ -101,7 +103,8 @@ read, a reader we can try without driving a window, a printer we may use).
 
 ## What does not work yet
 
-- **Sending and receiving.** There are no accounts. "Send" files the message in Outbox and stops.
+- **IMAP folders in step.** Mail is taken down from the IMAP Inbox only; the server's other folders,
+  and read, flagged, moved and deleted messages going back to it, come with M4.8.
 - **Proof against Outlook.** `.pst` files written here open in Outlook Classic with every folder
   and message as written, whole, ANSI and saved into in place; a file written before M3c.1 is written
   whole on its next save, keeping its ids, and then opens too; an `.ost` is exported with its
