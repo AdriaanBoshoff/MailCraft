@@ -247,3 +247,69 @@ pub fn free_path(folder: &Path, name: &str, taken: &mut HashSet<String>) -> Opti
     }
     None
 }
+
+/// Why an attachment is not opened from here, only saved: opening it would run it, or its name
+/// hides what it is. `None` when it may be opened, with the reader's word.
+pub fn not_opened(attachment: &Attachment) -> Option<String> {
+    match caution_of(attachment)? {
+        Caution::Runs { ending } => {
+            Some(format!("A .{ending} file is a program or a script, so it is not opened from here. Save it if you know it is safe."))
+        }
+        Caution::Program { .. } => Some("The content is a program, so it is not opened from here.".to_string()),
+        Caution::TwoEndings { is, .. } => Some(format!("The name hides that it is a .{is} file, so it is not opened from here.")),
+        Caution::Reversed { .. } => Some("The name hides what kind of file it is, so it is not opened from here.".to_string()),
+        Caution::Macros { .. } | Caution::Page { .. } => None,
+    }
+}
+
+/// Hours an opened copy is kept before a later run clears it away.
+const KEEP_OPENED_HOURS: u64 = 24;
+
+/// The folder copies of opened attachments are put in, one for each run of the program: the
+/// program they open in reads them from there, and they are cleared away when the program ends.
+/// `None` where there is no file system.
+pub fn opened_folder() -> Option<PathBuf> {
+    opened_root().map(|root| root.join(std::process::id().to_string()))
+}
+
+fn opened_root() -> Option<PathBuf> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    Some(std::env::temp_dir().join("OpenMailClient").join("Opened"))
+}
+
+/// Clear away the copies of opened attachments: this run's (`all`), or, when the program
+/// starts, those of earlier runs a day old. A copy still open in another program stays.
+pub fn clear_opened(all: bool) {
+    let Some(root) = opened_root() else { return };
+    let mine = opened_folder();
+    let Ok(runs) = std::fs::read_dir(&root) else { return };
+    let old = std::time::Duration::from_secs(KEEP_OPENED_HOURS * 3600);
+    for run in runs.flatten().take(10_000) {
+        let path = run.path();
+        let is_mine = mine.as_deref() == Some(path.as_path());
+        let aged = run.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > old);
+        if (all && is_mine) || (!is_mine && aged) {
+            remove_copies(&path);
+        }
+    }
+}
+
+/// A run's folder of copies, which holds files only: each is made writable again so it can go.
+fn remove_copies(folder: &Path) {
+    let Ok(files) = std::fs::read_dir(folder) else { return };
+    for file in files.flatten().take(10_000) {
+        let path = file.path();
+        if let Ok(meta) = std::fs::symlink_metadata(&path)
+            && meta.is_file()
+        {
+            let mut perms = meta.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(&path, perms);
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    let _ = std::fs::remove_dir(folder);
+}

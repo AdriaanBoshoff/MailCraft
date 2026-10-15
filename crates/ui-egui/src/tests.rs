@@ -559,6 +559,39 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
 }
 
 #[test]
+fn an_attachment_is_asked_about_and_only_the_answer_opens_it() {
+    let mut ui = MailUi::new(Session::with_sample());
+    assert!(ui.execute("ui.attachmentDialog", &json!({"index": 0})).is_err(), "no message is open");
+    ui.execute("mail.select", &json!({"folder": "Inbox", "index": 0})).unwrap();
+    assert!(ui.execute("ui.attachmentDialog", &json!({"index": 9})).is_err() && ui.execute("ui.attachmentDialog", &Value::Null).is_err());
+    ui.execute("ui.attachmentDialog", &json!({"index": 0})).unwrap();
+    let ask = ui.attachment_ask.as_ref().unwrap();
+    assert_eq!((ask.name.as_str(), ask.refused.is_none(), ask.caution.is_none()), ("launch-timeline.csv", true, true));
+    // Drawn in both themes, it opens nothing by itself, and other keys are not taken meanwhile.
+    for dark in [false, true] {
+        ui.execute("ui.theme", &json!({"theme": if dark { "dark" } else { "light" }})).unwrap();
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 700.0))),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |u| ui.ui(u));
+            output.textures_delta.clear();
+        }
+    }
+    assert!(ui.requests.is_empty() && ui.attachment_ask.is_some());
+    // A page that passes for a document is told of, and can only be saved.
+    ui.execute("mail.select", &json!({"folder": "Junk Email", "index": 0})).unwrap();
+    let index = ui.session.open.as_ref().unwrap().attachments.iter().position(|a| a.name() == "Mailbox-quota.pdf.htm").unwrap();
+    ui.execute("ui.attachmentDialog", &json!({"index": index})).unwrap();
+    let ask = ui.attachment_ask.as_ref().unwrap();
+    assert!(ask.caution.as_ref().is_some_and(|c| c.contains(".htm")), "{:?}", ask.caution);
+    assert!(ask.refused.as_ref().is_some_and(|r| r.contains("not opened")), "{:?}", ask.refused);
+}
+
+#[test]
 fn a_click_on_a_link_asks_and_only_the_answer_opens_it() {
     use openmailclient_formats::rich::{Block, Doc, Para, Run, Style};
     let link: std::sync::Arc<str> = "https://example.org/help".into();

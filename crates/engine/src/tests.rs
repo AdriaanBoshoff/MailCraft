@@ -1376,6 +1376,56 @@ fn messages_save_and_reopen_as_msg_and_eml() {
 }
 
 #[test]
+fn an_attachment_is_opened_only_on_the_reader_s_word_and_never_a_program() {
+    use openmailclient_model::{Attachment, Item};
+    let mut s = Session::new();
+    let mut item = Item::new_mail();
+    item.attachments.push(Attachment::file("notes.txt", "text/plain", b"plain words".to_vec()));
+    item.attachments.push(Attachment::file("setup.exe", "application/octet-stream", b"MZ".to_vec()));
+    item.attachments.push(Attachment::file("invoice.pdf.js", "text/javascript", b"x".to_vec()));
+    let mut inner = Item::new_mail();
+    inner.set_subject("Inside");
+    let mut message = Attachment::file("Inside", "message/rfc822", Vec::new());
+    message.embedded = Some(Box::new(inner));
+    item.attachments.push(message);
+    s.open = Some(item);
+    s.selected = Some(1);
+    // Asked without the reader's answer, nothing is written.
+    assert!(s.run("file.openAttachment", &json!({"index": 0})).is_err());
+    assert!(s.run("file.openAttachment", &json!({"index": 9, "confirm": true})).is_err());
+    // A program or a script under a name that hides it is only ever saved.
+    for index in [1, 2] {
+        let refused = s.run("file.openAttachment", &json!({"index": index, "confirm": true})).unwrap_err().to_string();
+        assert!(refused.contains("not opened"), "{refused}");
+    }
+    let opened = run(&mut s, "file.openAttachment", json!({"index": 0, "confirm": true}));
+    assert_eq!(opened["inside"], false);
+    let path = std::path::PathBuf::from(opened["untrusted_content"]["open"].as_str().unwrap());
+    assert!(path.starts_with(crate::attachments::opened_folder().unwrap()), "{}", path.display());
+    assert_eq!(std::fs::read(&path).unwrap(), b"plain words");
+    assert!(std::fs::metadata(&path).unwrap().permissions().readonly());
+    if cfg!(windows) {
+        let mut zone = path.clone().into_os_string();
+        zone.push(":Zone.Identifier");
+        assert!(std::fs::read_to_string(zone).unwrap().contains("ZoneId=3"));
+    }
+    // Opened again while the first copy stands, it takes a name of its own.
+    let again = run(&mut s, "file.openAttachment", json!({"index": 0, "confirm": true}));
+    assert_ne!(again["untrusted_content"]["open"], opened["untrusted_content"]["open"]);
+    // An attached message is opened in the program itself.
+    let message = run(&mut s, "file.openAttachment", json!({"index": 3, "confirm": true}));
+    assert_eq!(message["inside"], true);
+    let copy = message["untrusted_content"]["open"].as_str().unwrap().to_string();
+    assert!(copy.ends_with(".msg"), "{copy}");
+    let mut other = Session::new();
+    run(&mut other, "file.open", json!({"path": copy}));
+    assert_eq!(other.open.as_ref().unwrap().subject(), "Inside");
+    // The copies go when the program ends, read-only as they are.
+    crate::attachments::clear_opened(true);
+    assert!(!path.exists());
+}
+
+#[test]
 fn attachment_names_are_made_safe_and_told_apart() {
     use crate::attachments::{Caution, caution, ending, safe_name};
     for (name, want) in [

@@ -434,6 +434,84 @@ impl MailUi {
         }
     }
 
+    /// Ask what to do with an attachment, as Outlook does on a double-click: open it, save it,
+    /// or neither. What the reader should know of it is said first, a program or a script is
+    /// only ever saved, and the answer a key press gives is the safe one.
+    pub(crate) fn attachment_window(&mut self, ctx: &egui::Context) {
+        let Some(ask) = self.attachment_ask.as_ref() else { return };
+        let t = self.tokens.clone();
+        #[derive(Clone, Copy)]
+        enum Answer {
+            Open,
+            Save,
+            Cancel,
+        }
+        let mut done: Option<Answer> = None;
+        egui::Window::new("Opening an attachment").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
+            ui.set_max_width(440.0);
+            let words = |text: &str, size: f32, color: Color32| egui::Label::new(crate::seen_line(text, font(size), color)).wrap();
+            ui.add(words("Do you want to open this file or save it?", 12.5, t.text_dim));
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(crate::seen_line(&ask.name, bold(16.0), t.text)).wrap());
+            ui.add(words(&openmailclient_engine::attachments::size_words(ask.size), 12.0, t.text_dim));
+            ui.add_space(4.0);
+            if let Some(caution) = &ask.caution {
+                ui.add(words(caution, 13.0, t.danger));
+                ui.add_space(4.0);
+            }
+            match &ask.refused {
+                Some(refused) => ui.add(words(refused, 13.0, t.text)),
+                None if ask.message => ui.add(words("The attached message opens here, as a message.", 12.0, t.text_dim)),
+                None => ui.add(words(
+                    "It opens in the program your system uses for this kind of file, as a read-only copy that is cleared away when OpenMailClient closes. Only open files from people you trust.",
+                    12.0,
+                    t.text_dim,
+                )),
+            };
+            ui.add_space(8.0);
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                done = Some(Answer::Cancel);
+            }
+            ui.horizontal(|ui| {
+                if ui.add_enabled(ask.refused.is_none(), egui::Button::new("Open")).clicked() {
+                    done = Some(Answer::Open);
+                }
+                if ui.button("Save As…").clicked() {
+                    done = Some(Answer::Save);
+                }
+                let cancel = ui.button("Cancel");
+                if !cancel.has_focus() && ui.memory(|m| m.focused().is_none()) {
+                    cancel.request_focus();
+                }
+                if cancel.clicked() {
+                    done = Some(Answer::Cancel);
+                }
+            });
+        });
+        let Some(answer) = done else { return };
+        let Some(ask) = self.attachment_ask.take() else { return };
+        match answer {
+            Answer::Cancel => {}
+            Answer::Save => self.requests.push(crate::UiRequest::SaveAttachment(ask.index)),
+            // The engine makes the copy and checks the attachment again; the person said yes.
+            Answer::Open => match self.execute("file.openAttachment", &json!({ "index": ask.index, "confirm": true })) {
+                Ok(result) => {
+                    let path = result.pointer("/untrusted_content/open").and_then(Value::as_str).map(str::to_string);
+                    match (path, result["inside"].as_bool() == Some(true)) {
+                        (Some(path), true) => {
+                            if let Err(e) = self.execute("file.open", &json!({ "path": path })) {
+                                self.session.status = e;
+                            }
+                        }
+                        (Some(path), false) => self.requests.push(crate::UiRequest::OpenAttachment(path)),
+                        (None, _) => {}
+                    }
+                }
+                Err(e) => self.session.status = e,
+            },
+        }
+    }
+
     pub(crate) fn prompt_window(&mut self, ctx: &egui::Context) {
         let Some(prompt) = self.prompt.as_mut() else { return };
         let mut done: Option<bool> = None;

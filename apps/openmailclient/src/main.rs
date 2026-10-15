@@ -152,6 +152,12 @@ impl App {
                         Err(e) => format!("The browser could not be started: {e}"),
                     };
                 }
+                UiRequest::OpenAttachment(path) => {
+                    self.ui.session.status = match open_copy(&path) {
+                        Ok(()) => format!("Opened {}", std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy()).unwrap_or_default()),
+                        Err(e) => format!("The attachment could not be opened: {e}"),
+                    };
+                }
                 UiRequest::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
@@ -180,6 +186,30 @@ fn open_in_browser(address: &str) -> std::io::Result<()> {
         std::process::Command::new("xdg-open")
     };
     command.arg(address).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command.spawn().map(|_| ())
+}
+
+/// Hand a copy of an attachment to the program the system opens such files with. The copy was
+/// made by the engine (`file.openAttachment`), which refuses programs and scripts; it is checked
+/// once more here to be a file in the program's own folder of copies, and is passed as one
+/// argument, never through a shell.
+fn open_copy(path: &str) -> std::io::Result<()> {
+    let refused = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, why.to_string());
+    let path = std::path::Path::new(path);
+    let folder = openmailclient_engine::attachments::opened_folder().ok_or_else(|| refused("there is no folder for copies"))?;
+    if !path.starts_with(&folder) || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) || !path.is_file() {
+        return Err(refused("not a copy this program made"));
+    }
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("shell32.dll,ShellExec_RunDLL");
+        command
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command.arg(path).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     command.spawn().map(|_| ())
 }
 
@@ -223,6 +253,8 @@ impl eframe::App for App {
         self.ui.session.finish_saves();
         self.ui.session.settle();
         self.keep_settings(true);
+        // The copies of attachments opened this run go with it.
+        openmailclient_engine::attachments::clear_opened(true);
     }
 }
 
@@ -245,6 +277,8 @@ fn main() -> ExitCode {
         eprintln!("openmailclient: mail servers cannot be reached: {e}");
     }
     session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
+    // Copies of attachments an earlier run opened and could not clear away, a day on.
+    openmailclient_engine::attachments::clear_opened(false);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let settings = if args.iter().any(|a| a == "--no-settings") { None } else { settings_path() };
     // Journals that cannot be kept beside their data file go beside the settings.

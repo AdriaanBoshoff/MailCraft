@@ -124,6 +124,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: save_all_attachments,
         },
         CommandSpec {
+            id: "file.openAttachment",
+            label: "Open Attachment",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"index": attachment number, "confirm": true, as the reader's answer to being asked}; puts a copy of the attachment, made read-only and marked as come from the internet, in a folder of the program's own, cleared when it ends; a program, a script or a file whose name hides what it is is not opened, only saved; nothing is started here: returns {"inside": true for an attached message, which the window opens itself with file.open, "untrusted_content": {"open": the copy's path}} for the window to hand to the program the system opens such files with"#,
+            enabled: has_selection,
+            run: open_attachment,
+        },
+        CommandSpec {
             id: "file.print",
             label: "Print",
             tab: "File",
@@ -497,6 +507,50 @@ fn save_attachment(s: &mut Session, p: &Value) -> CmdResult {
     save_one(att, &target)?;
     s.status = format!("Saved {}", target.display());
     Ok(json!({"untrusted_content": {"path": target.display().to_string()}}))
+}
+
+/// A copy of an attachment for the program the system opens it with, on the reader's word.
+fn open_attachment(s: &mut Session, p: &Value) -> CmdResult {
+    let index = usize::try_from(p_u64(p, "index").unwrap_or(0)).unwrap_or(usize::MAX);
+    let item = s.open.as_ref().ok_or(StoreError::NoItem)?;
+    let att = item
+        .attachments
+        .get(index)
+        .ok_or_else(|| EngineError::BadParams(format!("there is no attachment {index}; the message has {}", item.attachments.len())))?;
+    if p_bool(p, "confirm") != Some(true) {
+        return Err(EngineError::BadParams("an attachment is opened only when the reader says so: give \"confirm\": true".into()));
+    }
+    if let Some(why) = attachments::not_opened(att) {
+        return Err(EngineError::Format(why));
+    }
+    let folder = attachments::opened_folder().ok_or_else(|| EngineError::Disabled("Opening attachments (no file system)".into()))?;
+    std::fs::create_dir_all(&folder)?;
+    let target = attachments::free_path(&folder, &attachments::file_name(att), &mut HashSet::new()).ok_or_else(|| full(&folder))?;
+    save_one(att, &target)?;
+    // Marked as come from the internet, so the program it opens in is careful with it, as it is
+    // with a download (Office opens it in Protected View); and read-only, so a change to it is
+    // not taken for a change to the attachment.
+    if cfg!(windows) {
+        let mut zone = target.clone().into_os_string();
+        zone.push(":Zone.Identifier");
+        let _ = std::fs::write(
+            zone,
+            "[ZoneTransfer]
+
+ZoneId=3
+
+",
+        );
+    }
+    if let Ok(meta) = std::fs::metadata(&target) {
+        let mut perms = meta.permissions();
+        perms.set_readonly(true);
+        let _ = std::fs::set_permissions(&target, perms);
+    }
+    // An attached message is opened here, as a message, not handed to another mail program.
+    let inside = att.embedded.is_some();
+    s.status = format!("Opening {}", attachments::file_name(att));
+    Ok(json!({"inside": inside, "untrusted_content": {"open": target.display().to_string()}}))
 }
 
 fn full(folder: &Path) -> EngineError {

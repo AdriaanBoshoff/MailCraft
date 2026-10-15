@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 87 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 88 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -83,6 +83,7 @@
 
 ## Revision history
 
+- 88 · 2026-10-15 — M4.11: attachments opened or saved on a double-click, a program or script only saved.
 - 87 · 2026-10-15 — M4.10: pictures on a server downloaded when asked for, over HTTPS only.
 - 86 · 2026-10-14 — M4.7: HTML messages laid out as Outlook lays them out (centring, padding, fills, rounded tables, picture boxes).
 - 85 · 2026-10-14 — M4.7: each account keeps its mail in a data file of its own; Account Settings laid out anew.

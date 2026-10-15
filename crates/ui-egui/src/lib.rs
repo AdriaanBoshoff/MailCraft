@@ -74,6 +74,10 @@ pub enum UiRequest {
     /// Hand a web address to the system's browser. Queued only when the person presses Open in
     /// the link dialog, with an address the engine has checked.
     OpenLink(String),
+    /// Hand a copy of an attachment to the program the system opens such files with. Queued
+    /// only when the person presses Open in the attachment dialog, with a copy the engine made
+    /// in its own folder (`file.openAttachment`).
+    OpenAttachment(String),
     Quit,
 }
 
@@ -97,6 +101,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     },
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
     UiCommand { id: "ui.saveAllAttachmentsDialog", label: "Save All Attachments…", params: "" },
+    UiCommand {
+        id: "ui.attachmentDialog",
+        label: "Open or Save Attachment…",
+        params: r#"{"index": attachment number}; asks whether to open the attachment, save it or do neither, saying what the reader should know of it first; nothing is opened until the person answers"#,
+    },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
     UiCommand {
         id: "ui.linkDialog",
@@ -189,6 +198,19 @@ pub(crate) struct LinkAsk {
     pub mailbox: bool,
 }
 
+/// An attachment the person is being asked about: open it, save it, or neither.
+pub(crate) struct AttachmentAsk {
+    pub index: usize,
+    /// As it would be saved, so nothing in it is hidden or reversed.
+    pub name: String,
+    pub size: usize,
+    pub caution: Option<String>,
+    /// Why it is only saved, never opened from here, when it is.
+    pub refused: Option<String>,
+    /// An attached message, which opens here.
+    pub message: bool,
+}
+
 pub(crate) struct Prompt {
     pub title: &'static str,
     pub command: &'static str,
@@ -219,6 +241,7 @@ pub struct MailUi {
     pub(crate) prompt: Option<Prompt>,
     pub(crate) account_window: Option<accounts::AccountsWindow>,
     pub(crate) link_ask: Option<LinkAsk>,
+    pub(crate) attachment_ask: Option<AttachmentAsk>,
     pub(crate) preview: Option<preview::Preview>,
     pub(crate) scroll_to_selected: bool,
     fonts_ready: bool,
@@ -422,6 +445,7 @@ impl MailUi {
             prompt: None,
             account_window: None,
             link_ask: None,
+            attachment_ask: None,
             preview: None,
             scroll_to_selected: false,
             fonts_ready: false,
@@ -633,6 +657,21 @@ impl MailUi {
                 self.requests.push(UiRequest::SaveAttachment(number("index").and_then(|n| usize::try_from(n).ok()).unwrap_or(0)))
             }
             "ui.saveAllAttachmentsDialog" => self.requests.push(UiRequest::SaveAllAttachments),
+            "ui.attachmentDialog" => {
+                let item = self.session.open.as_ref().ok_or("No message is open")?;
+                let index = number("index").and_then(|n| usize::try_from(n).ok()).ok_or("\"index\" is missing")?;
+                let att = item.attachments.get(index).ok_or("The message has no such attachment")?;
+                use openmailclient_engine::attachments;
+                self.menu = None;
+                self.attachment_ask = Some(AttachmentAsk {
+                    index,
+                    name: attachments::file_name(att),
+                    size: att.size(),
+                    caution: attachments::caution_of(att).map(|c| c.words()),
+                    refused: attachments::not_opened(att),
+                    message: att.embedded.is_some(),
+                });
+            }
             "ui.attachDialog" => self.requests.push(UiRequest::Attach),
             "ui.linkDialog" => {
                 let item = self.session.open.as_ref().ok_or("No message is open")?;
@@ -845,6 +884,7 @@ impl MailUi {
         self.prompt_window(&ctx);
         self.accounts_window(&ctx);
         self.link_window(&ctx);
+        self.attachment_window(&ctx);
         self.preview_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
@@ -855,7 +895,12 @@ impl MailUi {
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {
-        if self.prompt.is_some() || self.link_ask.is_some() || self.preview.is_some() || self.account_window.is_some() {
+        if self.prompt.is_some()
+            || self.link_ask.is_some()
+            || self.attachment_ask.is_some()
+            || self.preview.is_some()
+            || self.account_window.is_some()
+        {
             return;
         }
         let typing = ui.ctx().memory(|m| m.focused().is_some());

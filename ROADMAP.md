@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10) · revision 97 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11) · revision 98 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 411, all passing |
+| Tests | 413, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -133,7 +133,8 @@
 81. Done: Each account keeps its mail in a data file of its own, as Outlook keeps one per account: received mail goes in its Inbox, what it sent in its Sent Items, and the file is saved on its own once mail is in it; Account Settings is laid out anew, and the live check against a real IMAP and SMTP server passed (M4.7).
 82. Done: HTML messages laid out as Outlook lays them out: a column of tables centred in its cell, each side of a cell's padding, pale fills and a table's own fill drawn, rounded table corners, tables standing flush under one another, a pale border kept pale, and a picture not downloaded shown as a box of the size it asks for (M4.7, from the live check).
 83. Done: Pictures on a server downloaded when asked for: from the info bar above the message or a right-click on a picture not shown (Download Pictures), over HTTPS only, never from this machine or the local network, kept in memory only and never by themselves (M4.10, `mail.downloadPictures`).
-84. Next: M4.8: IMAP folders kept in step with the server, and the Sent copy put on the server.
+84. Done: Attachments opened or saved on a double-click, as Outlook asks: Open, Save As or Cancel, from a double-click, Enter or a right-click on an attachment; a program, a script or a file whose name hides its kind is only saved; an opened file is a read-only copy marked as from the internet, cleared away when the program ends (M4.11, `file.openAttachment`).
+85. Next: M4.8: IMAP folders kept in step with the server, and the Sent copy put on the server.
 
 ## Do later (from M2)
 
@@ -221,6 +222,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~Outlook's highlight colours; list numbers an override changes (`\lfolevel`)~~ | done: M3b.27 |
 | ~~Metafiles: a part of a bitmap, one mirrored, turned or packed in runs, copies that are not plain, patterned brushes, regions of many boxes~~ | done: M3b.28 |
 | Pictures on a server, loaded on an explicit command (never by themselves): from the info bar and a right-click on a picture | done: M4.10 |
+| Attachments opened on a double-click (Open, Save As, Cancel), a program or script only saved | done: M4.11 |
+| An attachment shown in the reading pane on a click (Attachment Preview) without another program | M5, with the item windows |
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
 | A server's own certificate trusted on the owner's word, and kept for that server only | M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
@@ -1715,3 +1718,14 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   never in the data file; and what is not a picture is not kept. A small HTTP/1.1 client
   (`crates/net/src/http.rs`) reads lengths, chunks and redirects (five at most, only to HTTPS),
   with the head, body and chunks capped, tested against the fake server's web pages. 9 tests.
+- **2026-10-15** - M4.11: attachments opened or saved on a double-click.
+  A double-click on an attachment, or Enter on the one picked, asks whether to open it, save it
+  or do neither, as Outlook does; a right-click offers Open, Save As and Save All Attachments.
+  Better than Outlook: the dialog says first what the reader should know of the file (a name
+  that reads as a .pdf and is a page, a document that carries macros); a program, a script or a
+  file whose name hides its kind is never opened from here, only saved; what is opened is a
+  copy in a folder of the program's own, read-only so a change to it is not taken for a change
+  to the attachment, and marked as come from the internet so the program it opens in is careful
+  with it (Office opens it in Protected View); the copies are cleared away when the program
+  ends, and those a run left are cleared a day on. An attached message opens here, as a
+  message. Cancel is the answer a key press gives. 2 tests.

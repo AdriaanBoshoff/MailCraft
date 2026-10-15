@@ -551,7 +551,8 @@ impl MailUi {
             y += 26.0;
         }
 
-        // Attachments: a click only asks where to save. Nothing is opened or run.
+        // Attachments: a click picks one, a double-click or Enter asks whether to open or save it,
+        // and a right-click offers the same. Nothing is opened or run without that answer.
         // The name is shown as it would be saved, so nothing in it is hidden or reversed.
         let files: Vec<(usize, String, usize, Option<String>)> = openmailclient_engine::attachments::files(item)
             .map(|(i, a)| {
@@ -560,6 +561,9 @@ impl MailUi {
             .take(32)
             .collect();
         let mut save: Option<usize> = None;
+        let mut ask: Option<usize> = None;
+        let picked_id = egui::Id::new(("attachment-picked", self.session.selected));
+        let mut picked: Option<usize> = ui.data(|d| d.get_temp(picked_id));
         let mut link: Option<std::sync::Arc<str>> = None;
         let mut save_all = false;
         let mut download = false;
@@ -574,7 +578,18 @@ impl MailUi {
                 }
                 let chip = Rect::from_min_size(pos2(ax, y), vec2(w, 28.0));
                 let resp = ui.interact(chip, egui::Id::new(("attachment", *index)), Sense::click());
-                p.rect_filled(chip, 3.0, if resp.hovered() { t.hover } else { t.pane });
+                let is_picked = picked == Some(*index);
+                p.rect_filled(
+                    chip,
+                    3.0,
+                    if is_picked {
+                        t.selected
+                    } else if resp.hovered() {
+                        t.hover
+                    } else {
+                        t.pane
+                    },
+                );
                 // An attachment a reader should think twice about says so before it is pointed at.
                 let (line, icon, tint) = match caution {
                     Some(_) => ((1.5, t.danger), Icon::Importance, t.danger),
@@ -587,13 +602,38 @@ impl MailUi {
                 let label = if text_width(&p, &label, font(12.0)) > room { crate::middle_cut(&p, &label, room, font(12.0)) } else { label };
                 clip_text(&p, pos2(chip.left() + 26.0, chip.center().y - 8.0), room, &label, font(12.0), t.text);
                 if resp.clicked() {
-                    save = Some(*index);
+                    picked = Some(*index);
                 }
-                resp.on_hover_text(match caution {
-                    Some(words) => format!("{words}\nSave this attachment to a file. Nothing is opened or run from here."),
-                    None => "Save this attachment to a file. Nothing is opened or run from here.".to_string(),
+                if resp.double_clicked() {
+                    ask = Some(*index);
+                }
+                let resp = resp.on_hover_text(match caution {
+                    Some(words) => format!("{words}\nDouble-click to open or save it. Nothing is opened or run without your answer."),
+                    None => "Double-click to open or save it. Nothing is opened or run without your answer.".to_string(),
+                });
+                resp.context_menu(|ui| {
+                    picked = Some(*index);
+                    if ui.button("Open…").clicked() {
+                        ask = Some(*index);
+                        ui.close();
+                    }
+                    if ui.button("Save As…").clicked() {
+                        save = Some(*index);
+                        ui.close();
+                    }
+                    if files.len() > 1 && ui.button("Save All Attachments…").clicked() {
+                        save_all = true;
+                        ui.close();
+                    }
                 });
                 ax += w + 8.0;
+            }
+            // Enter asks about the picked one, as a double-click does.
+            if let Some(index) = picked.filter(|i| files.iter().any(|f| f.0 == *i))
+                && ui.memory(|m| m.focused().is_none())
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            {
+                ask = Some(index);
             }
             if files.len() > 1 {
                 let label = "Save all…";
@@ -608,7 +648,7 @@ impl MailUi {
                     p.rect_filled(chip, 3.0, t.hover);
                 }
                 p.text(chip.center(), egui::Align2::CENTER_CENTER, label, font(12.0), t.accent);
-                save_all = resp.clicked();
+                save_all |= resp.clicked();
                 resp.on_hover_text("Save every attachment into a folder. No file there is replaced.");
             }
             y += 38.0;
@@ -683,12 +723,12 @@ impl MailUi {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(pad as i8, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     match &doc {
-                        // An attachment that stands in the text is saved like one in the list above.
+                        // An attachment that stands in the text is asked about like one in the list above.
                         Some(doc) => {
-                            let picked = body::draw(ui, doc, &t, &self.pictures, &self.faces);
-                            save = picked.file.or(save);
-                            link = picked.link;
-                            download |= picked.download;
+                            let chosen = body::draw(ui, doc, &t, &self.pictures, &self.faces);
+                            ask = chosen.file.or(ask);
+                            link = chosen.link;
+                            download |= chosen.download;
                         }
                         None => {
                             ui.add(egui::Label::new(egui::RichText::new(plain).font(font(13.5)).color(t.text)).wrap().selectable(true));
@@ -700,8 +740,17 @@ impl MailUi {
         for cmd in acts {
             self.act(cmd, Value::Null);
         }
+        ui.data_mut(|d| match picked {
+            Some(index) => {
+                d.insert_temp(picked_id, index);
+            }
+            None => d.remove::<usize>(picked_id),
+        });
         if let Some(index) = save {
             self.act("ui.saveAttachmentDialog", json!({ "index": index }));
+        }
+        if let Some(index) = ask {
+            self.act("ui.attachmentDialog", json!({ "index": index }));
         }
         if let Some(link) = link {
             self.act("ui.linkDialog", json!({ "address": link.chars().filter(|c| !c.is_control()).collect::<String>() }));
