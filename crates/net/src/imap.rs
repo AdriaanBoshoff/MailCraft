@@ -408,7 +408,7 @@ impl Imap {
             }
             i.run(vec![Part::Text("STARTTLS".into())])?;
             let Self { c, tag, .. } = i;
-            i = Self { c: c.secure(with, &to.host)?, tag, caps: Vec::new() };
+            i = Self { c: c.secure(with, to)?, tag, caps: Vec::new() };
             secure = true;
         }
         if !secure {

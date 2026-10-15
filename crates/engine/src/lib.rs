@@ -253,6 +253,9 @@ pub struct Session {
     pub vault: std::sync::Arc<dyn openmailclient_net::Vault>,
     /// How mail servers are reached; `None` until the host gives a way.
     pub connector: Option<std::sync::Arc<dyn openmailclient_net::Connector>>,
+    /// Certificates servers showed in this run that were not trusted: the only ones the owner
+    /// may trust (`account.trustCertificate`).
+    pub certificates: accounts::Shown,
     /// Work done on a thread of its own, such as talking to a server (`jobs`).
     pub jobs: Vec<jobs::Job>,
     /// What the jobs that ended last came to, the newest last.
@@ -373,6 +376,7 @@ impl Session {
             journal_dir: None,
             account_dir: None,
             places: cmd::imap_sync::Places::default(),
+            certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),
         }

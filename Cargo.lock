@@ -2746,6 +2746,7 @@ dependencies = [
  "keyring",
  "openmailclient-net",
  "rcgen",
+ "ring",
  "rustls",
  "rustls-native-certs",
  "thiserror 2.0.21",

@@ -34,7 +34,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Info",
             shortcut: "",
-            params: r#"{}; returns {"accounts": [each account as account.add takes it, with its "id" and "hasPassword"]}; no password is ever given"#,
+            params: r#"{}; returns {"accounts": [each account as account.add takes it, with its "id" and "hasPassword"; each server with "trusted" (the fingerprint of a certificate of its own the owner trusted, or null) and "certificates" (those it showed in this run that were not trusted: "host", "fingerprint", "reason", "trustable", "changed", "subject", "issuer", "ownMaking", "names", "notBefore", "notAfter")]}; no password is ever given"#,
             enabled: always,
             run: list,
         },
@@ -67,6 +67,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"id", "password": kept in the system's credential store; empty or null forgets it}; returns {"passwordKept"}"#,
             enabled: has_accounts,
             run: set_password,
+        },
+        CommandSpec {
+            id: "account.trustCertificate",
+            label: "Trust Certificate",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"id", "fingerprint": the SHA-256 of a certificate one of the account's servers showed in this run and that was not trusted, as account.list or a test gives it; null forgets the one trusted, "server": "incoming", "outgoing" or "both" (the default: each server of the account that showed it)}; the certificate is then taken for that server only, and only while it shows exactly that one; returns {"trusted": [the servers]}"#,
+            enabled: has_accounts,
+            run: trust_certificate,
         },
         CommandSpec {
             id: "account.test",
@@ -146,6 +156,10 @@ fn list(s: &mut Session, _: &Value) -> CmdResult {
         .map(|a| {
             let mut v = a.to_json();
             v["hasPassword"] = json!(s.vault.get(&a.id).is_ok_and(|p| p.is_some()));
+            for (key, server) in [("incoming", &a.incoming), ("outgoing", &a.outgoing)] {
+                let shown: Vec<Value> = s.certificates.of(&server.host).iter().map(accounts::shown).collect();
+                v[key]["certificates"] = json!(shown);
+            }
             v
         })
         .collect();
@@ -249,6 +263,70 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "removed": account.id }))
 }
 
+/// Trust a certificate a server showed, for that server only; or forget the one trusted.
+fn trust_certificate(s: &mut Session, p: &Value) -> CmdResult {
+    let at = find(s, p)?;
+    let which = match p.get("server").and_then(Value::as_str) {
+        None | Some("both") => &["incoming", "outgoing"][..],
+        Some("incoming") => &["incoming"][..],
+        Some("outgoing") => &["outgoing"][..],
+        Some(_) => return Err(EngineError::BadParams("\"server\" is \"incoming\", \"outgoing\" or \"both\"".into())),
+    };
+    let fingerprint = match p.get("fingerprint") {
+        Some(Value::Null) => None,
+        Some(Value::String(f)) => Some(
+            openmailclient_net::Fingerprint::parse(f)
+                .ok_or_else(|| EngineError::BadParams("\"fingerprint\" is a SHA-256 as 64 hex digits, colons between pairs or not".into()))?,
+        ),
+        _ => return Err(EngineError::BadParams("\"fingerprint\" (as account.list gives it, or null to forget) is required".into())),
+    };
+    let account = s.accounts.get(at).cloned().ok_or_else(|| EngineError::BadParams("there is no such account".into()))?;
+    let mut done = Vec::new();
+    let mut refused = None;
+    for key in which {
+        let server = if *key == "incoming" { &account.incoming } else { &account.outgoing };
+        let ok = match fingerprint {
+            // Only what the server itself showed, and was not revoked, can be trusted.
+            Some(f) => match s.certificates.of(&server.host).into_iter().find(|seen| seen.fingerprint == f) {
+                Some(seen) if seen.trustable => true,
+                Some(seen) => {
+                    refused = Some(format!("the certificate of {} cannot be trusted: {}", seen.host, seen.reason));
+                    false
+                }
+                None => false,
+            },
+            None => server.trusted.is_some(),
+        };
+        if ok {
+            done.push((*key, server.host.clone()));
+        }
+    }
+    if done.is_empty() {
+        return Err(EngineError::BadParams(refused.unwrap_or_else(|| match fingerprint {
+            Some(_) => format!("no server of {} showed that certificate in this run; test the account to be shown it", account.name),
+            None => format!("no certificate is trusted for a server of {}", account.name),
+        })));
+    }
+    if let Some(a) = s.accounts.get_mut(at) {
+        for (key, host) in &done {
+            let server = if *key == "incoming" { &mut a.incoming } else { &mut a.outgoing };
+            server.trusted = fingerprint;
+            if let Some(f) = fingerprint {
+                s.certificates.forget(host, f);
+            }
+        }
+    }
+    let hosts: Vec<&str> = done.iter().map(|(_, h)| h.as_str()).collect();
+    let mut hosts_said = hosts.clone();
+    hosts_said.dedup();
+    s.status = match fingerprint {
+        Some(_) => format!("Trusted the certificate of {} for {} only", hosts_said.join(" and "), account.name),
+        None => format!("{} is checked against what this system trusts again", hosts_said.join(" and ")),
+    };
+    let trusted: Vec<&str> = done.iter().map(|(k, _)| *k).collect();
+    Ok(json!({ "trusted": trusted }))
+}
+
 fn set_password(s: &mut Session, p: &Value) -> CmdResult {
     let at = find(s, p)?;
     let given = password(p)?.ok_or_else(|| EngineError::BadParams("\"password\" is required (empty or null forgets it)".into()))?;
@@ -270,6 +348,7 @@ impl Reach {
     pub(crate) fn of(s: &Session, at: usize) -> Result<Self, EngineError> {
         let account = s.accounts.get(at).cloned().ok_or_else(|| EngineError::BadParams("there is no such account".into()))?;
         let connector = s.connector.clone().ok_or_else(|| EngineError::Format("this build cannot reach mail servers".into()))?;
+        let connector: Arc<dyn Connector> = Arc::new(accounts::Noting { inner: connector, shown: s.certificates.clone() });
         Ok(Self { account, connector, vault: Arc::clone(&s.vault) })
     }
 

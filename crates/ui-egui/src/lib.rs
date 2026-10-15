@@ -846,7 +846,7 @@ impl MailUi {
         let t = self.tokens.clone();
         if self.theme_applied != Some(t.dark) {
             // egui's own widgets (text fields, the name prompt) follow the same light or dark set.
-            ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
+            t.apply(&ctx);
             self.theme_applied = Some(t.dark);
         }
         ui.painter().rect_filled(full, 0.0, t.window);

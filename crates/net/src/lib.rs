@@ -11,6 +11,7 @@
 //! Passwords are held in a [`Secret`], which never prints and is never put in an error.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod cert;
 mod conn;
 pub mod http;
 pub mod imap;
@@ -28,6 +29,7 @@ pub use tcp::TcpConnector;
 #[cfg(feature = "fake")]
 pub mod fake;
 
+pub use cert::{About, Fingerprint, Seen};
 pub use conn::Conn;
 pub use pipe::{End, pipe};
 pub use utf7::{decode as decode_mailbox_name, encode as encode_mailbox_name};
@@ -56,6 +58,9 @@ pub enum NetError {
     NotSecure,
     #[error("the server's certificate was not accepted: {0}")]
     Certificate(String),
+    /// A certificate this system does not trust, which the owner may trust for this server.
+    #[error("the certificate of {} is not trusted: {}", .0.host, .0.reason)]
+    Untrusted(Box<Seen>),
     #[error("the system's credential store could not be used: {0}")]
     Vault(String),
     #[error("{0}")]
@@ -118,6 +123,9 @@ pub struct Endpoint {
     pub host: String,
     pub port: u16,
     pub security: Security,
+    /// A certificate the owner trusted for this server, though this system does not: the
+    /// server is taken to be itself when it shows exactly that one.
+    pub trusted: Option<Fingerprint>,
 }
 
 /// A password or token. It never prints, so it does not end up in a log or an error.
@@ -156,8 +164,9 @@ impl<T: Read + Write + Send> Stream for T {}
 pub trait Connector: Send + Sync {
     /// A connection to the endpoint, made secure from the first byte when it asks for TLS.
     fn connect(&self, to: &Endpoint) -> Result<Box<dyn Stream>, NetError>;
-    /// The same connection after STARTTLS: TLS over it, the certificate checked against `host`.
-    fn secure(&self, plain: Box<dyn Stream>, host: &str) -> Result<Box<dyn Stream>, NetError>;
+    /// The same connection after STARTTLS: TLS over it, the certificate checked as `connect`
+    /// checks it for that endpoint.
+    fn secure(&self, plain: Box<dyn Stream>, to: &Endpoint) -> Result<Box<dyn Stream>, NetError>;
 }
 
 /// SASL PLAIN ([RFC 4616]): authorisation identity left empty, the user and the password.
@@ -177,6 +186,8 @@ pub(crate) fn one_line(what: &'static str, text: &str) -> Result<(), NetError> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_cert;
 #[cfg(test)]
 mod tests_http;
 #[cfg(test)]

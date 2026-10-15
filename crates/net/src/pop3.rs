@@ -34,7 +34,7 @@ impl Pop3 {
             }
             p.command("STLS")?;
             let Self { c, .. } = p;
-            p = Self { c: c.secure(with, &to.host)?, caps: Vec::new() };
+            p = Self { c: c.secure(with, to)?, caps: Vec::new() };
             p.caps = p.capabilities().unwrap_or_default();
             secure = true;
         }

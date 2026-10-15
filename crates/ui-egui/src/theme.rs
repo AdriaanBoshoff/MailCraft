@@ -52,6 +52,38 @@ impl Default for Tokens {
 }
 
 impl Tokens {
+    /// egui's own widgets (buttons, text fields, check boxes) in this set. Buttons have room
+    /// round their words, a fill, a line round them and rounded corners, so they read as buttons
+    /// and are easy to hit; the line turns the accent under the pointer and the fill when pressed.
+    pub fn apply(&self, ctx: &egui::Context) {
+        ctx.set_theme(if self.dark { egui::Theme::Dark } else { egui::Theme::Light });
+        let theme = if self.dark { egui::Theme::Dark } else { egui::Theme::Light };
+        ctx.style_mut_of(theme, |s| {
+            s.spacing.button_padding = egui::vec2(14.0, 6.0);
+            s.spacing.interact_size.y = 28.0;
+            s.spacing.item_spacing.x = s.spacing.item_spacing.x.max(8.0);
+            if let Some(f) = s.text_styles.get_mut(&egui::TextStyle::Button) {
+                f.size = f.size.max(13.0);
+            }
+            let radius = egui::CornerRadius::same(5);
+            let w = &mut s.visuals.widgets;
+            w.inactive.weak_bg_fill = self.surface;
+            w.inactive.bg_stroke = egui::Stroke::new(1.0, if self.dark { self.hover } else { self.line });
+            w.inactive.fg_stroke.color = self.text;
+            w.hovered.weak_bg_fill = self.hover;
+            w.hovered.bg_stroke = egui::Stroke::new(1.0, self.accent);
+            w.hovered.fg_stroke.color = self.text;
+            w.active.weak_bg_fill = self.accent_soft;
+            w.active.bg_stroke = egui::Stroke::new(1.0, self.accent);
+            w.active.fg_stroke.color = self.text;
+            for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+                state.corner_radius = radius;
+                // No growing under the pointer, so a row of buttons does not shift.
+                state.expansion = 0.0;
+            }
+        });
+    }
+
     pub fn named(dark: bool) -> Self {
         if dark { Self::dark() } else { Self::light() }
     }

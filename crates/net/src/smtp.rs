@@ -62,7 +62,7 @@ impl Smtp {
                 return Err(NetError::Refused(r.text()));
             }
             let Self { c, .. } = s;
-            s = Self { c: c.secure(with, &to.host)?, ext: Vec::new(), secure: true };
+            s = Self { c: c.secure(with, to)?, ext: Vec::new(), secure: true };
             // What was said before is forgotten ([RFC 3207] 4.2).
             s.ehlo()?;
         }

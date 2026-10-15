@@ -121,10 +121,10 @@ impl Conn {
     /// TLS over this connection (after STARTTLS or STLS). Anything the server sent after its
     /// answer and before TLS began is refused: it was said in the clear and could have been
     /// put there by someone between us and the server ([RFC 3207] 4.2, [RFC 9051] 6.2.1).
-    pub fn secure(self, with: &dyn Connector, host: &str) -> Result<Self, NetError> {
+    pub fn secure(self, with: &dyn Connector, to: &crate::Endpoint) -> Result<Self, NetError> {
         if !self.pending().is_empty() {
             return Err(NetError::protocol("the server said more before the connection was made secure"));
         }
-        Ok(Self::new(with.secure(self.s, host)?))
+        Ok(Self::new(with.secure(self.s, to)?))
     }
 }

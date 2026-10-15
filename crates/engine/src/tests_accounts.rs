@@ -196,3 +196,61 @@ fn accounts_are_kept_between_runs_without_their_passwords() {
     assert!(loaded["ignored"].as_u64().unwrap() >= 6, "{loaded}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A server with a certificate of its own: refused and shown, trusted on the owner's word for
+/// that server only, kept between runs, and dropped when the account points elsewhere.
+#[test]
+fn a_servers_own_certificate_is_trusted_on_the_owners_word() {
+    let own = openmailclient_net::Fingerprint([0x5A; 32]);
+    let fake = Fake::default();
+    fake.state().own_certificate = Some(own);
+    let mut s = with_fake(fake.clone());
+    s.run("account.add", &imap_account()).unwrap();
+    let id = json!({ "id": "account-1" });
+    // Nothing that was not shown can be trusted, and nothing is trusted by an edit.
+    let made_up = json!({ "id": "account-1", "fingerprint": own.to_string() });
+    assert!(s.run("account.trustCertificate", &made_up).is_err());
+    let mut edit = json!({ "id": "account-1", "incoming": { "trusted": own.to_string() } });
+    s.run("account.edit", &edit).unwrap();
+    assert_eq!(s.accounts[0].incoming.trusted, None);
+    let tested = s.run("account.test", &id).unwrap();
+    assert_eq!(tested["incoming"]["ok"], false, "{tested}");
+    assert_eq!(tested["incoming"]["certificate"]["fingerprint"], own.to_string(), "{tested}");
+    assert_eq!(tested["incoming"]["certificate"]["ownMaking"], true, "{tested}");
+    assert!(fake.state().logins == 0);
+    let listed = s.run("account.list", &Value::Null).unwrap();
+    assert_eq!(listed["accounts"][0]["incoming"]["certificates"][0]["fingerprint"], own.to_string(), "{listed}");
+    assert_eq!(listed["accounts"][0]["incoming"]["trusted"], Value::Null);
+    // Another fingerprint than the one shown is not trusted; the one shown is, for both servers
+    // on that host.
+    let other = json!({ "id": "account-1", "fingerprint": "00".repeat(32) });
+    assert!(s.run("account.trustCertificate", &other).is_err());
+    assert!(s.run("account.trustCertificate", &json!({ "id": "account-1", "fingerprint": "junk" })).is_err());
+    let trusted = s.run("account.trustCertificate", &made_up).unwrap();
+    assert_eq!(trusted["trusted"], json!(["incoming", "outgoing"]), "{trusted}");
+    assert!(s.status.contains("for pat@example.test only"), "{}", s.status);
+    let tested = s.run("account.test", &id).unwrap();
+    assert_eq!((tested["incoming"]["ok"].as_bool(), tested["outgoing"]["ok"].as_bool()), (Some(true), Some(true)), "{tested}");
+    let listed = s.run("account.list", &Value::Null).unwrap();
+    assert_eq!(listed["accounts"][0]["incoming"]["trusted"], own.to_string(), "{listed}");
+    assert_eq!(listed["accounts"][0]["incoming"]["certificates"], json!([]), "{listed}");
+    // Kept between runs.
+    let (again, _) = crate::accounts::from_settings(&s.settings(None)["accounts"]);
+    assert_eq!(again[0].incoming.trusted, Some(own));
+    assert_eq!(again[0].outgoing.trusted, Some(own));
+    // A server that now shows another certificate is refused again, and said to have changed.
+    fake.state().own_certificate = Some(openmailclient_net::Fingerprint([0x77; 32]));
+    let tested = s.run("account.test", &id).unwrap();
+    assert_eq!(tested["incoming"]["certificate"]["changed"], true, "{tested}");
+    fake.state().own_certificate = Some(own);
+    // Forgotten: checked against what this system trusts again.
+    s.run("account.trustCertificate", &json!({ "id": "account-1", "fingerprint": null, "server": "outgoing" })).unwrap();
+    assert_eq!((s.accounts[0].incoming.trusted, s.accounts[0].outgoing.trusted), (Some(own), None));
+    // Another server for the account: what was trusted for the old one does not follow it.
+    edit["incoming"] = json!({ "host": "imap.example.test" });
+    s.run("account.edit", &edit).unwrap();
+    assert_eq!(s.accounts[0].incoming.trusted, None);
+    for bad in [json!({ "id": "account-1", "fingerprint": null, "server": "sideways" }), json!({ "id": "account-1" })] {
+        assert!(s.run("account.trustCertificate", &bad).is_err(), "{bad}");
+    }
+}

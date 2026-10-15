@@ -165,7 +165,7 @@ enum Answer {
 }
 
 fn once(with: &dyn Connector, at: &Address, limit: usize) -> Result<Answer, NetError> {
-    let to = Endpoint { protocol: Protocol::Https, host: at.host.clone(), port: at.port, security: Security::Tls };
+    let to = Endpoint { protocol: Protocol::Https, host: at.host.clone(), port: at.port, security: Security::Tls, trusted: None };
     let mut conn = Conn::new(with.connect(&to)?);
     let host = if at.port == 443 { at.host.clone() } else { format!("{}:{}", at.host, at.port) };
     let request = format!(

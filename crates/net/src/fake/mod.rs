@@ -11,7 +11,7 @@ mod imap;
 mod pop3;
 mod smtp;
 
-use crate::{Connector, End, Endpoint, NetError, Protocol, Security, Stream, pipe};
+use crate::{About, Connector, End, Endpoint, Fingerprint, NetError, Protocol, Security, Seen, Stream, pipe};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A message held by the fake server.
@@ -83,6 +83,9 @@ pub struct State {
     pub heard: Vec<String>,
     /// What the fake web server answers, by host and path: the whole answer, head and body.
     pub pages: Vec<(String, Vec<u8>)>,
+    /// A certificate of the server's own making, which no system trusts: a connection made
+    /// secure is refused unless the endpoint trusts exactly this one.
+    pub own_certificate: Option<Fingerprint>,
 }
 
 impl Default for State {
@@ -102,6 +105,7 @@ impl Default for State {
             logins: 0,
             heard: Vec::new(),
             pages: Vec::new(),
+            own_certificate: None,
         }
     }
 }
@@ -148,12 +152,39 @@ impl Fake {
 
     /// An endpoint of this server for a protocol, secured with STARTTLS.
     pub fn endpoint(protocol: Protocol) -> Endpoint {
-        Endpoint { protocol, host: "mail.example.test".into(), port: protocol.port(Security::StartTls), security: Security::StartTls }
+        Endpoint { protocol, host: "mail.example.test".into(), port: protocol.port(Security::StartTls), security: Security::StartTls, trusted: None }
+    }
+
+    /// The certificate of the server's own making refused, as a TLS connector refuses it.
+    fn check(&self, to: &Endpoint) -> Result<(), NetError> {
+        let Some(own) = self.state().own_certificate else { return Ok(()) };
+        if to.trusted == Some(own) {
+            return Ok(());
+        }
+        let about = About {
+            subject: to.host.clone(),
+            issuer: to.host.clone(),
+            names: vec![to.host.clone()],
+            not_before: "2026-01-01".into(),
+            not_after: "2036-01-01".into(),
+        };
+        let reason = "it was not signed by anyone this system trusts; a server can make one of its own like this".to_string();
+        Err(NetError::Untrusted(Box::new(Seen {
+            host: to.host.clone(),
+            fingerprint: own,
+            reason,
+            trustable: true,
+            changed: to.trusted.is_some(),
+            about,
+        })))
     }
 }
 
 impl Connector for Fake {
     fn connect(&self, to: &Endpoint) -> Result<Box<dyn Stream>, NetError> {
+        if to.security == Security::Tls {
+            self.check(to)?;
+        }
         let (client, server) = pipe();
         let state = self.state.clone();
         let mode = self.mode.clone();
@@ -175,7 +206,8 @@ impl Connector for Fake {
     }
 
     /// The fake has no TLS: the same pipe goes on, and the server counts that it was asked.
-    fn secure(&self, plain: Box<dyn Stream>, _host: &str) -> Result<Box<dyn Stream>, NetError> {
+    fn secure(&self, plain: Box<dyn Stream>, to: &Endpoint) -> Result<Box<dyn Stream>, NetError> {
+        self.check(to)?;
         Ok(plain)
     }
 }

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8) · revision 100 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9) · revision 101 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 424, all passing |
+| Tests | 430, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -136,7 +136,8 @@
 84. Done: Attachments opened or saved on a double-click, as Outlook asks: Open, Save As or Cancel, from a double-click, Enter or a right-click on an attachment; a program, a script or a file whose name hides its kind is only saved; an opened file is a read-only copy marked as from the internet, cleared away when the program ends (M4.11, `file.openAttachment`).
 85. Done: IMAP folders taken down into the account's own data file as the server has them, and a copy of what is sent put in the server's Sent folder (M4.8, `accounts::Mark`, `sentOnServer`).
 86. Done: IMAP kept in step both ways: read, flagged, moved and deleted messages, and messages put into the account from elsewhere, go to the server, and what was done there comes here (M4.8, `cmd/imap_sync.rs`, `Place`).
-87. Next: M4.9: a server's own certificate trusted on the owner's word, new mail told of, Send/Receive on a timer, Show Progress.
+87. Done: A server's own certificate trusted on the owner's word: shown whole, trusted for that server only and only while it shows exactly that one (M4.9, `crates/net/src/cert.rs`, `account.trustCertificate`); buttons with room round their words, an outline and rounded corners.
+88. Next: M4.9: new mail told of, Send/Receive on a timer, Show Progress, Delay Delivery and Expires After.
 
 ## Do later (from M2)
 
@@ -227,7 +228,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Attachments opened on a double-click (Open, Save As, Cancel), a program or script only saved | done: M4.11 |
 | An attachment shown in the reading pane on a click (Attachment Preview) without another program | M5, with the item windows |
 | An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
-| A server's own certificate trusted on the owner's word, and kept for that server only | M4.9 |
+| A server's own certificate trusted on the owner's word, and kept for that server only | done: M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
 | The IMAP server's other folders taken down into the account's own data file, as the server has them | done: M4.8 |
@@ -1780,3 +1781,24 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   message was gone from the list after a save, though the message kept it (`crates/pst/src/edit.rs`);
   such a table is given the columns, filled from each message, when its folder next changes.
   8 tests.
+- **2026-10-15** - M4.9 (first part): a server's own certificate trusted on the owner's word.
+  A server whose certificate this system does not trust is refused as before, and the
+  certificate it showed is kept for this run: Account Settings shows it whole after a test or a
+  Send/Receive, with whom it was made for, who signed it (or that the server made it itself),
+  the server names in it, when it holds and its SHA-256 fingerprint to compare with what the
+  server's keeper gives (read from the certificate as RFC 5280 lays it out, `cert::about`, with
+  hostile-input tests). One click trusts it for that server of that account only
+  (`account.trustCertificate`, kept in the settings as the fingerprint), and the account is
+  tested again at once; "Stop trusting" puts the server back under the system's trust.
+  Better than Outlook: Outlook trusts such a certificate for the session or puts it in the
+  system's store, where every program trusts it for every server; here it is pinned to one
+  server of one account and kept across runs, and nothing else trusts it. Only a certificate a
+  server actually showed in this run can be trusted, so no fingerprint is taken on a command's
+  word. A trusted server that shows another certificate is refused with a warning that someone
+  may be between you and the server. A revoked certificate cannot be trusted. The server must
+  still prove it holds the certificate's key; a trusted certificate is dropped when the server's
+  name changes.
+  Buttons in the window's own dialogs (Account Settings, the print window, the compose bar)
+  have room round their words, an outline, rounded corners, an accent line under the pointer
+  and a fill when pressed, so they read as buttons and are easy to hit.
+  6 tests.

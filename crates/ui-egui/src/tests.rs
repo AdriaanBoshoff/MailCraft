@@ -1831,6 +1831,56 @@ fn accounts_are_added_and_tested_in_their_window_and_the_password_is_never_shown
     assert!(ui.account_window.is_none());
 }
 
+/// A server with a certificate of its own: the window shows it whole after a test, trusts it
+/// on a click and tests again, then shows it as trusted with a way to stop.
+#[test]
+fn a_servers_own_certificate_is_shown_and_trusted_in_account_settings() {
+    let own = openmailclient_net::Fingerprint([0x3C; 32]);
+    let fake = openmailclient_net::fake::Fake::default();
+    fake.state().own_certificate = Some(own);
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(fake.clone()));
+    let account = json!({ "email": "pat@example.test", "incoming": { "host": "mail.example.test" }, "password": "not a real password" });
+    ui.execute("account.add", &account).unwrap();
+    ui.execute("ui.accountSettings", &Value::Null).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let settle = |ui: &mut MailUi| {
+        let mut waited = 0;
+        while ui.account_window.as_ref().is_some_and(|w| w.testing.is_some()) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            frame(ui, &ctx, Vec::new(), None);
+            waited += 1;
+            assert!(waited < 1000, "the test never ended");
+        }
+    };
+    let mut window = ui.account_window.take().unwrap();
+    ui.test_account(&mut window);
+    ui.account_window = Some(window);
+    settle(&mut ui);
+    let window = ui.account_window.as_ref().unwrap();
+    assert_eq!(window.form.shown.len(), 1, "{:?}", window.form.shown);
+    assert_eq!(window.form.shown[0]["fingerprint"], own.to_string());
+    assert!(window.said.iter().all(|(_, trouble)| *trouble), "{:?}", window.said);
+    for theme in ["dark", "light"] {
+        ui.execute("ui.theme", &json!({ "theme": theme })).unwrap();
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+    let mut window = ui.account_window.take().unwrap();
+    // A fingerprint the servers did not show is refused.
+    ui.trust_certificate(&mut window, &"11".repeat(32));
+    assert!(window.said[0].1, "{:?}", window.said);
+    ui.trust_certificate(&mut window, &own.to_string());
+    ui.account_window = Some(window);
+    settle(&mut ui);
+    let window = ui.account_window.as_ref().unwrap();
+    assert!(window.form.shown.is_empty(), "{:?}", window.form.shown);
+    assert_eq!(window.form.trusted.len(), 2, "{:?}", window.form.trusted);
+    assert!(window.said.iter().all(|(_, trouble)| !trouble), "{:?}", window.said);
+    assert_eq!(ui.session.accounts[0].incoming.trusted, Some(own));
+    frame(&mut ui, &ctx, Vec::new(), None);
+}
+
 #[test]
 fn a_password_field_shows_dots_and_gives_nothing_away() {
     use egui::{Event, Key, Modifiers};

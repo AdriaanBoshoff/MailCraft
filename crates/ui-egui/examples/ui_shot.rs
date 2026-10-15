@@ -14,6 +14,9 @@
 //! {"shot": "plan/shots/inbox.png"}
 //! {"click": [640, 18]}                       press and let go at a place in the window
 //! {"type": "words"}                          type into what has the keyboard
+//! {"fake": {"ownCertificate": "AB:CD:…"}}    reach the in-process fake server (with a
+//!                                            certificate of its own) instead of none
+//! {"settle": true}                           draw until the jobs under way have ended
 //! ```
 //!
 //! Without a script it opens the sample mailbox and writes `plan/shots/ui_shot.png`.
@@ -77,6 +80,18 @@ fn run() -> Result<(), String> {
             harness.drag_at(at);
             harness.run_steps(1);
             harness.drop_at(at);
+        } else if let Some(fake) = step.get("fake") {
+            let server = openmailclient_net::fake::Fake::default();
+            server.state().own_certificate = fake.get("ownCertificate").and_then(Value::as_str).and_then(openmailclient_net::Fingerprint::parse);
+            harness.state_mut().session.connector = Some(std::sync::Arc::new(server));
+        } else if step.get("settle").and_then(Value::as_bool) == Some(true) {
+            for _ in 0..500 {
+                if harness.state().session.jobs.is_empty() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                harness.run_steps(1);
+            }
         } else if let Some(text) = step.get("type").and_then(Value::as_str) {
             harness.event(egui::Event::Text(text.to_string()));
         } else if let Some(path) = step.get("shot").and_then(Value::as_str) {

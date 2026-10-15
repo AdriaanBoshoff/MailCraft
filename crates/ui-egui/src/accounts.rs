@@ -39,6 +39,12 @@ pub(crate) struct Form {
     pub sent_on_server: bool,
     /// The data file its mail is kept in, where it has one of its own.
     pub data_file: String,
+    /// Each server with a certificate of its own the owner trusted: which, its host and the
+    /// certificate's fingerprint.
+    pub trusted: Vec<(&'static str, String, String)>,
+    /// Certificates its servers showed in this run that were not trusted, as `account.list`
+    /// gives them, each once.
+    pub shown: Vec<Value>,
 }
 
 impl Form {
@@ -62,6 +68,8 @@ impl Form {
             leave: true,
             sent_on_server: true,
             data_file: String::new(),
+            trusted: Vec::new(),
+            shown: Vec::new(),
         }
     }
 
@@ -77,6 +85,18 @@ impl Form {
         let name = text("name");
         let email = text("email");
         let user = text("user");
+        let mut trusted = Vec::new();
+        let mut shown: Vec<Value> = Vec::new();
+        for side in ["incoming", "outgoing"] {
+            if let Some(f) = a.get(side).and_then(|v| v.get("trusted")).and_then(Value::as_str) {
+                trusted.push((side, host(side), one_line(f)));
+            }
+            for c in a.get(side).and_then(|v| v.get("certificates")).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]) {
+                if !shown.iter().any(|s| s["fingerprint"] == c["fingerprint"] && s["host"] == c["host"]) {
+                    shown.push(c.clone());
+                }
+            }
+        }
         Self {
             id: a.get("id").and_then(Value::as_str).map(str::to_string),
             // What follows from the address is shown as following from it: left empty.
@@ -97,6 +117,8 @@ impl Form {
             leave: a.get("leaveOnServer").and_then(Value::as_bool) != Some(false),
             sent_on_server: a.get("sentOnServer").and_then(Value::as_bool) != Some(false),
             data_file: a.get("dataFile").and_then(Value::as_str).map(one_line).unwrap_or_default(),
+            trusted,
+            shown,
         }
     }
 
@@ -176,6 +198,10 @@ enum Ask {
     Test,
     Remove,
     Close,
+    /// Trust the certificate with this fingerprint, for the servers of the account that showed it.
+    Trust(String),
+    /// Check this server ("incoming" or "outgoing") against what the system trusts again.
+    Untrust(&'static str),
 }
 
 impl MailUi {
@@ -281,6 +307,16 @@ impl MailUi {
         }
     }
 
+    /// Trust a certificate the account's servers showed, then test again at once, so the owner
+    /// sees that it signs in now.
+    pub(crate) fn trust_certificate(&mut self, window: &mut AccountsWindow, fingerprint: &str) {
+        let Some(id) = window.form.id.clone() else { return };
+        match self.execute("account.trustCertificate", &json!({ "id": id, "fingerprint": fingerprint })) {
+            Ok(_) => self.test_account(window),
+            Err(e) => window.said = vec![(e, true)],
+        }
+    }
+
     /// The Account Settings window, while it is open.
     pub(crate) fn accounts_window(&mut self, ctx: &egui::Context) {
         let Some(mut window) = self.account_window.take() else { return };
@@ -289,6 +325,10 @@ impl MailUi {
             && !self.session.jobs.iter().any(|j| j.what == job)
         {
             window.testing = None;
+            // What the servers showed is in the account as it is listed now.
+            if let Some(id) = window.form.id.clone() {
+                self.show_account(&mut window, &id);
+            }
             if let Some(result) = self.session.finished.iter().rev().find(|f| f["job"] == job.as_str()).map(|f| f["result"].clone()) {
                 window.said = ["incoming", "outgoing"]
                     .iter()
@@ -309,6 +349,8 @@ impl MailUi {
         let mut ask: Option<Ask> = None;
         let busy = window.testing.is_some();
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18));
+        // A certificate shown scrolls in what room the window leaves, rather than run off it.
+        let room = (ctx.content_rect().height() - 720.0).clamp(130.0, 420.0);
         egui::Window::new("Account Settings").frame(frame).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(
             ctx,
             |ui| {
@@ -520,6 +562,36 @@ impl MailUi {
                         });
                 }
 
+                // A certificate a server showed that this system does not trust: shown whole,
+                // for the owner to trust for that server or not.
+                if !window.form.shown.is_empty() {
+                    ui.add_space(10.0);
+                    egui::ScrollArea::vertical().id_salt("certificates").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
+                        for cert in &window.form.shown {
+                            if let Some(f) = certificate_box(ui, &t, cert, busy) {
+                                ask = Some(Ask::Trust(f));
+                            }
+                            ui.add_space(6.0);
+                        }
+                    });
+                }
+                for (side, host, fingerprint) in &window.form.trusted {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let short: String = fingerprint.chars().take(23).collect();
+                        let which = if *side == "incoming" { "Incoming" } else { "Outgoing" };
+                        ui.label(
+                            egui::RichText::new(format!("{which} server: a certificate of its own is trusted for {host} ({short}…)"))
+                                .font(font(11.5))
+                                .color(t.text_dim),
+                        )
+                        .on_hover_text(format!("SHA-256 {fingerprint}"));
+                        if ui.add_enabled(!busy, egui::Button::new(egui::RichText::new("Stop trusting").font(font(12.5)))).clicked() {
+                            ask = Some(Ask::Untrust(side));
+                        }
+                    });
+                }
+
                 ui.add_space(12.0);
                 ui.separator();
                 ui.add_space(4.0);
@@ -539,7 +611,7 @@ impl MailUi {
                         }
                         let save = egui::Button::new(egui::RichText::new("Save").color(t.on_accent).font(bold(13.0)))
                             .fill(t.accent)
-                            .min_size(vec2(76.0, 0.0));
+                            .min_size(vec2(88.0, 0.0));
                         if ui.add_enabled(!busy, save).clicked() {
                             ask = Some(Ask::Save);
                         }
@@ -570,6 +642,18 @@ impl MailUi {
                 let _ = self.save_account(&mut window);
             }
             Some(Ask::Test) => self.test_account(&mut window),
+            Some(Ask::Trust(fingerprint)) => self.trust_certificate(&mut window, &fingerprint),
+            Some(Ask::Untrust(side)) => {
+                if let Some(id) = window.form.id.clone() {
+                    match self.execute("account.trustCertificate", &json!({ "id": id, "fingerprint": null, "server": side })) {
+                        Ok(_) => {
+                            self.show_account(&mut window, &id);
+                            window.said = vec![(one_line(&self.session.status), false)];
+                        }
+                        Err(e) => window.said = vec![(e, true)],
+                    }
+                }
+            }
             Some(Ask::Remove) if !window.removing => window.removing = true,
             Some(Ask::Remove) => {
                 window.removing = false;
@@ -595,6 +679,77 @@ const LIST_W: f32 = 210.0;
 const FORM_W: f32 = 440.0;
 const LABEL_W: f32 = 120.0;
 const FIELD_W: f32 = 290.0;
+
+/// A certificate a server showed that is not trusted: whom it was made for, who signed it,
+/// when it holds and its fingerprint, which the owner can compare with what the server's keeper
+/// gives. Returns its fingerprint when the owner trusts it.
+fn certificate_box(ui: &mut egui::Ui, t: &Tokens, cert: &Value, busy: bool) -> Option<String> {
+    let text = |key: &str| one_line(cert.get(key).and_then(Value::as_str).unwrap_or(""));
+    let host = text("host");
+    let fingerprint = text("fingerprint");
+    let changed = cert.get("changed").and_then(Value::as_bool) == Some(true);
+    let trustable = cert.get("trustable").and_then(Value::as_bool) != Some(false);
+    let own = cert.get("ownMaking").and_then(Value::as_bool) == Some(true);
+    let mut trusted = None;
+    egui::Frame::new()
+        .fill(t.pane)
+        .stroke(egui::Stroke::new(1.0, if changed { t.danger } else { t.flag }))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new(format!("{host} showed a certificate this computer does not trust")).font(bold(13.0)).color(t.text));
+            ui.add(egui::Label::new(egui::RichText::new(format!("Because {}.", text("reason"))).font(font(12.0)).color(t.text_dim)).wrap());
+            if changed {
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "This is not the certificate you trusted for this server before. Unless the server's keeper changed it,                              someone may be between you and the server: do not trust it until you have asked them.",
+                        )
+                        .font(bold(12.0))
+                        .color(t.danger),
+                    )
+                    .wrap(),
+                );
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if trustable {
+                    let button = egui::Button::new(egui::RichText::new(format!("Trust it for {host} only")).font(bold(13.0)));
+                    if ui.add_enabled(!busy, button).on_hover_text("Taken for this server only, and only while it shows exactly this certificate").clicked() {
+                        trusted = Some(fingerprint.clone());
+                    }
+                    ui.label(egui::RichText::new("Nothing else trusts it, on this computer or in other programs.").font(font(11.0)).color(t.text_faint));
+                } else {
+                    ui.label(egui::RichText::new("It cannot be trusted.").font(font(11.5)).color(t.danger));
+                }
+            });
+            ui.add_space(6.0);
+            let row = |ui: &mut egui::Ui, label: &str, value: &str| {
+                ui.horizontal(|ui| {
+                    ui.add_sized([96.0, 16.0], egui::Label::new(egui::RichText::new(label).font(font(11.5)).color(t.text_faint)));
+                    ui.add(egui::Label::new(egui::RichText::new(value).font(font(11.5)).color(t.text)).wrap());
+                });
+            };
+            let unknown = |v: String| if v.is_empty() { "not said".to_string() } else { v };
+            row(ui, "Made for", &unknown(text("subject")));
+            let issuer = if own { "itself: the server made it on its own".to_string() } else { unknown(text("issuer")) };
+            row(ui, "Signed by", &issuer);
+            let names: Vec<String> = cert.get("names").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_str).map(one_line).collect();
+            // The names it covers, where they say more than whom it was made for.
+            if !names.is_empty() && names != [text("subject")] {
+                row(ui, "Server names", &names.join(", "));
+            }
+            row(ui, "Holds", &format!("from {} until {}", unknown(text("notBefore")), unknown(text("notAfter"))));
+            ui.horizontal(|ui| {
+                ui.add_sized([96.0, 16.0], egui::Label::new(egui::RichText::new("SHA-256").font(font(11.5)).color(t.text_faint)));
+                // Selectable, to be compared with what the keeper of the server gives.
+                ui.add(egui::Label::new(egui::RichText::new(fingerprint.as_str()).font(egui::FontId::monospace(9.0)).color(t.text)).wrap().selectable(true));
+            });
+        });
+    trusted
+}
 
 /// One account in the list: a round mark with its first letter, its name, and what it is.
 fn account_card(ui: &mut egui::Ui, t: &Tokens, name: &str, detail: &str, on: bool) -> egui::Response {

@@ -6,7 +6,7 @@
 //! outside is: a value that makes no sense is refused, never kept.
 
 use crate::EngineError;
-use openmailclient_net::{Endpoint, Protocol, Security};
+use openmailclient_net::{Endpoint, Fingerprint, Protocol, Security, Seen};
 use serde_json::{Map, Value, json};
 
 /// Accounts kept at most.
@@ -51,6 +51,10 @@ pub struct Server {
     pub host: String,
     pub port: u16,
     pub security: Security,
+    /// A certificate of the server's own that the owner trusted, though this system does not:
+    /// taken for this server only, and only while it shows exactly that one. Set only by
+    /// `account.trustCertificate` and the settings file, and dropped when the host changes.
+    pub trusted: Option<Fingerprint>,
 }
 
 /// What was taken down from an account so far, so nothing is taken down twice.
@@ -295,7 +299,9 @@ fn server(p: &Value, key: &str, protocol: Protocol, was: Option<&Server>) -> Res
             _ => protocol.port(security),
         },
     };
-    Ok(Server { host, port, security })
+    // A certificate trusted for one server says nothing of another.
+    let trusted = was.filter(|w| w.host == host).and_then(|w| w.trusted);
+    Ok(Server { host, port, security, trusted })
 }
 
 fn flag(p: &Value, key: &str) -> Result<Option<bool>, EngineError> {
@@ -332,7 +338,7 @@ impl Account {
         let was_in = was.filter(|w| w.kind == kind).map(|w| &w.incoming);
         let incoming = server(p, "incoming", kind.protocol(), was_in)?;
         // The outgoing server is the incoming one's host when not given.
-        let fallback = Server { host: incoming.host.clone(), port: Protocol::Smtp.port(Security::Tls), security: Security::Tls };
+        let fallback = Server { host: incoming.host.clone(), port: Protocol::Smtp.port(Security::Tls), security: Security::Tls, trusted: None };
         let outgoing = server(p, "outgoing", Protocol::Smtp, Some(was.map_or(&fallback, |w| &w.outgoing)))?;
         let pick = |key: &str, max: usize, before: Option<&str>, or: &str| -> Result<String, EngineError> {
             Ok(match text(p, key, max)? {
@@ -364,7 +370,7 @@ impl Account {
 
     /// The account as the settings file keeps it and commands give it: no password.
     pub fn to_json(&self) -> Value {
-        let server = |s: &Server| json!({ "host": s.host, "port": s.port, "security": security_name(s.security) });
+        let server = |s: &Server| json!({ "host": s.host, "port": s.port, "security": security_name(s.security), "trusted": s.trusted.map(|f| f.to_string()) });
         json!({
             "id": self.id,
             "name": self.name,
@@ -389,11 +395,23 @@ impl Account {
     }
 
     pub fn incoming_endpoint(&self) -> Endpoint {
-        Endpoint { protocol: self.kind.protocol(), host: self.incoming.host.clone(), port: self.incoming.port, security: self.incoming.security }
+        Endpoint {
+            protocol: self.kind.protocol(),
+            host: self.incoming.host.clone(),
+            port: self.incoming.port,
+            security: self.incoming.security,
+            trusted: self.incoming.trusted,
+        }
     }
 
     pub fn outgoing_endpoint(&self) -> Endpoint {
-        Endpoint { protocol: Protocol::Smtp, host: self.outgoing.host.clone(), port: self.outgoing.port, security: self.outgoing.security }
+        Endpoint {
+            protocol: Protocol::Smtp,
+            host: self.outgoing.host.clone(),
+            port: self.outgoing.port,
+            security: self.outgoing.security,
+            trusted: self.outgoing.trusted,
+        }
     }
 }
 
@@ -420,6 +438,9 @@ pub fn from_settings(v: &Value) -> (Vec<Account>, u32) {
             Some(Ok(mut account)) => {
                 account.received = Received::from_json(a.get("received"));
                 account.data_file = a.get("dataFile").and_then(Value::as_str).and_then(data_file_of);
+                let trusted = |key: &str| a.get(key).and_then(|s| s.get("trusted")).and_then(Value::as_str).and_then(Fingerprint::parse);
+                account.incoming.trusted = trusted("incoming");
+                account.outgoing.trusted = trusted("outgoing");
                 out.push(account);
             }
             _ => ignored += 1,
@@ -442,15 +463,98 @@ pub fn data_file_name(account: &Account) -> String {
     if plain.is_empty() { format!("{}.pst", account.id) } else { format!("{plain}.pst") }
 }
 
-/// What a test of one server came to, in words fit to show.
+/// What a test of one server came to, in words fit to show; with the certificate it showed,
+/// when that was not trusted.
 pub(crate) fn outcome(r: Result<String, openmailclient_net::NetError>) -> Value {
     match r {
         Ok(said) => json!({ "ok": true, "said": said }),
+        Err(openmailclient_net::NetError::Untrusted(seen)) => {
+            json!({ "ok": false, "said": format!("the certificate of {} is not trusted: {}", seen.host, seen.reason), "certificate": shown(&seen) })
+        }
         Err(e) => json!({ "ok": false, "said": e.to_string() }),
     }
 }
 
-/// Fields of an account given to `account.edit`, less those it does not take.
+/// A certificate a server showed, as commands give it.
+pub fn shown(seen: &Seen) -> Value {
+    json!({
+        "host": seen.host,
+        "fingerprint": seen.fingerprint.to_string(),
+        "reason": seen.reason,
+        "trustable": seen.trustable,
+        "changed": seen.changed,
+        "subject": seen.about.subject,
+        "issuer": seen.about.issuer,
+        "ownMaking": seen.about.own(),
+        "names": seen.about.names,
+        "notBefore": seen.about.not_before,
+        "notAfter": seen.about.not_after,
+    })
+}
+
+/// Certificates kept of those servers showed in this run that were not trusted.
+pub const MAX_SHOWN: usize = 16;
+
+/// The certificates servers showed that were not trusted, the newest last: only these may be
+/// trusted, so what the owner trusts is what a server really showed. Shared with the jobs that
+/// reach servers, which note them as they are refused.
+#[derive(Clone, Default)]
+pub struct Shown(std::sync::Arc<std::sync::Mutex<Vec<Seen>>>);
+
+impl Shown {
+    pub fn note(&self, seen: &Seen) {
+        let Ok(mut all) = self.0.lock() else { return };
+        all.retain(|s| !(s.host == seen.host && s.fingerprint == seen.fingerprint));
+        all.push(seen.clone());
+        if all.len() > MAX_SHOWN {
+            let over = all.len() - MAX_SHOWN;
+            all.drain(..over);
+        }
+    }
+
+    /// Those shown by a server.
+    pub fn of(&self, host: &str) -> Vec<Seen> {
+        self.0.lock().map(|all| all.iter().filter(|s| s.host.eq_ignore_ascii_case(host)).cloned().collect()).unwrap_or_default()
+    }
+
+    pub fn forget(&self, host: &str, fingerprint: Fingerprint) {
+        if let Ok(mut all) = self.0.lock() {
+            all.retain(|s| !(s.host.eq_ignore_ascii_case(host) && s.fingerprint == fingerprint));
+        }
+    }
+}
+
+/// A connector that notes each certificate refused, then gives the refusal on.
+pub(crate) struct Noting {
+    pub inner: std::sync::Arc<dyn openmailclient_net::Connector>,
+    pub shown: Shown,
+}
+
+impl Noting {
+    fn noted<T>(&self, r: Result<T, openmailclient_net::NetError>) -> Result<T, openmailclient_net::NetError> {
+        if let Err(openmailclient_net::NetError::Untrusted(seen)) = &r {
+            self.shown.note(seen);
+        }
+        r
+    }
+}
+
+impl openmailclient_net::Connector for Noting {
+    fn connect(&self, to: &Endpoint) -> Result<Box<dyn openmailclient_net::Stream>, openmailclient_net::NetError> {
+        self.noted(self.inner.connect(to))
+    }
+
+    fn secure(
+        &self,
+        plain: Box<dyn openmailclient_net::Stream>,
+        to: &Endpoint,
+    ) -> Result<Box<dyn openmailclient_net::Stream>, openmailclient_net::NetError> {
+        self.noted(self.inner.secure(plain, to))
+    }
+}
+
+/// Fields of an account given to `account.edit`, less those it does not take. A server's
+/// trusted certificate is never taken from them: `account.trustCertificate` alone sets it.
 pub(crate) fn changes(p: &Value) -> Value {
     let mut m = Map::new();
     if let Some(all) = p.as_object() {

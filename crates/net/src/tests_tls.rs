@@ -78,7 +78,7 @@ fn serve(cert: CertificateDer<'static>, key: PrivateKeyDer<'static>, starttls: b
 }
 
 fn local(port: u16, security: Security) -> Endpoint {
-    Endpoint { protocol: Protocol::Smtp, host: "localhost".into(), port, security }
+    Endpoint { protocol: Protocol::Smtp, host: "localhost".into(), port, security, trusted: None }
 }
 
 fn login() -> Login {
@@ -120,14 +120,59 @@ fn a_certificate_not_trusted_or_for_another_name_is_refused_before_anything_is_s
     let (other, _) = cert("localhost");
     let (port, heard) = serve(c, k, false);
     let got = Smtp::open(&trusting(&other), &local(port, Security::Tls), Some(&login()));
-    assert!(matches!(got, Err(NetError::Certificate(_))), "{:?}", got.err());
+    assert!(matches!(got, Err(NetError::Untrusted(_))), "{:?}", got.err());
     assert!(heard.join().unwrap().is_empty());
     // Trusted, but made for another server.
     let (c, k) = cert("mail.example.test");
     let (port, heard) = serve(c.clone(), k, true);
     let got = Smtp::open(&trusting(&c), &local(port, Security::StartTls), Some(&login()));
-    assert!(matches!(got, Err(NetError::Certificate(_))), "{:?}", got.err());
+    let Err(NetError::Untrusted(seen)) = got else { panic!("{:?}", got.err()) };
+    assert!(seen.reason.contains("another server name"), "{}", seen.reason);
     assert!(heard.join().unwrap().iter().all(|(tls, l)| !tls && !l.starts_with("AUTH")));
+}
+
+/// A server's own certificate, refused and shown, then trusted on the owner's word: for that
+/// server only, and only that certificate.
+#[test]
+fn a_certificate_the_owner_trusted_is_taken_for_its_server_only() {
+    let (c, k) = cert("localhost");
+    let nobody = trusting(&cert("someone.else.test").0);
+    let (port, heard) = serve(c.clone(), k.clone_key(), false);
+    let got = Smtp::open(&nobody, &local(port, Security::Tls), Some(&login()));
+    let Err(NetError::Untrusted(seen)) = got else { panic!("{:?}", got.err()) };
+    assert!(heard.join().unwrap().is_empty());
+    assert_eq!(seen.fingerprint, crate::tcp::fingerprint(c.as_ref()));
+    assert_eq!(seen.host, "localhost");
+    assert!(seen.trustable && !seen.changed);
+    // rcgen names every issuer alike, so the stranger trusted here is taken for its signer.
+    assert!(seen.reason.contains("not signed by anyone") || seen.reason.contains("signature"), "{}", seen.reason);
+    assert_eq!(seen.about.names, ["localhost"]);
+    assert!(seen.about.own(), "{:?}", seen.about);
+    assert!(seen.about.not_after.len() == 10 && seen.about.not_before.len() == 10, "{:?}", seen.about);
+    // Trusted: it signs in, from the first byte and after STARTTLS.
+    for starttls in [false, true] {
+        let (port, heard) = serve(c.clone(), k.clone_key(), starttls);
+        let security = if starttls { Security::StartTls } else { Security::Tls };
+        let to = Endpoint { trusted: Some(seen.fingerprint), ..local(port, security) };
+        let s = Smtp::open(&nobody, &to, Some(&login())).unwrap();
+        s.quit().unwrap();
+        assert!(heard.join().unwrap().iter().any(|(tls, l)| *tls && l.starts_with("AUTH")));
+    }
+    // Another certificate for the same server is not the one trusted, and is said to have changed.
+    let (other, other_key) = cert("localhost");
+    let (port, heard) = serve(other.clone(), other_key, false);
+    let to = Endpoint { trusted: Some(seen.fingerprint), ..local(port, Security::Tls) };
+    let got = Smtp::open(&nobody, &to, Some(&login()));
+    let Err(NetError::Untrusted(again)) = got else { panic!("{:?}", got.err()) };
+    assert!(again.changed);
+    assert_eq!(again.fingerprint, crate::tcp::fingerprint(other.as_ref()));
+    assert!(heard.join().unwrap().is_empty());
+    // Trusted though made for another name: the owner trusted this certificate for this server.
+    let (named, named_key) = cert("mail.example.test");
+    let (port, heard) = serve(named.clone(), named_key, false);
+    let to = Endpoint { trusted: Some(crate::tcp::fingerprint(named.as_ref())), ..local(port, Security::Tls) };
+    Smtp::open(&nobody, &to, Some(&login())).unwrap().quit().unwrap();
+    assert!(!heard.join().unwrap().is_empty());
 }
 
 #[test]
@@ -135,7 +180,7 @@ fn servers_that_are_not_there_are_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
-    let c = TcpConnector::trusting(&[]).unwrap().waiting(Duration::from_secs(2));
+    let c = TcpConnector::trusting(&[cert("someone.else.test").0]).unwrap().waiting(Duration::from_secs(2));
     assert!(Smtp::open(&c, &Endpoint { host: "127.0.0.1".into(), ..local(port, Security::Tls) }, None).is_err());
     for host in ["", "bad\r\nname", "no such host.invalid"] {
         assert!(Smtp::open(&c, &Endpoint { host: host.into(), ..local(25, Security::Tls) }, None).is_err(), "{host:?}");
