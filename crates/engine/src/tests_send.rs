@@ -174,3 +174,98 @@ fn without_an_account_a_message_waits_in_the_outbox() {
     assert!(!s.is_enabled("mail.sendAll"));
     assert!(s.run("mail.sendAll", &Value::Null).is_err());
 }
+
+#[test]
+fn a_delayed_message_waits_in_the_outbox_and_goes_at_its_minute_and_an_expired_one_stays() {
+    const MINUTE: i64 = 600_000_000;
+    let fake = Fake::default();
+    let mut s = session(&fake);
+    // The session's clock is set ahead of the machine's, so the test moves time itself.
+    s.now = crate::cmd::clock(&s).saturating_add(24 * 60 * MINUTE);
+    s.run("mail.sendReceiveEvery", &json!({ "minutes": 0 })).unwrap();
+    let sent_before = count(&s, "Sent Items");
+    write(&mut s, &[("to", "june@example.test"), ("subject", "Monday plan"), ("body", "See you then.")]);
+
+    // Times that are not times, or that make no sense together, are said so and change nothing.
+    for bad in [json!({ "at": "2026-02-30 09:00" }), json!({ "at": "tomorrow" }), json!({ "at": "2026-10-17 25:00" }), json!({}), json!({ "at": 5 })]
+    {
+        assert!(s.run("compose.delayDelivery", &bad).is_err(), "{bad}");
+    }
+    assert!(s.run("compose.delayDelivery", &json!({ "at": "2001-01-01 09:00" })).unwrap_err().to_string().contains("gone by"));
+    let until = s.run("compose.delayDelivery", &json!({ "inMinutes": 60 })).unwrap();
+    assert!(until["until"].as_str().unwrap().contains(':'), "{until}");
+    assert!(s.run("compose.expires", &json!({ "inMinutes": 30 })).unwrap_err().to_string().contains("expire before it went"));
+    s.run("compose.expires", &json!({ "inMinutes": 600 })).unwrap();
+    assert!(s.run("compose.delayDelivery", &json!({ "inMinutes": 700 })).is_err(), "not after it expires");
+
+    // Send leaves it in the Outbox, waiting.
+    let done = s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    assert_eq!((done["sent"].as_u64(), done["waiting"].as_array().map(Vec::len)), (Some(0), Some(1)), "{done}");
+    assert!(s.status.starts_with("It waits in the Outbox until"), "{}", s.status);
+    assert_eq!(count(&s, "Outbox"), 1);
+    assert!(fake.state().submitted.is_empty());
+
+    // The host is told to ask again within a minute, and nothing goes before its time.
+    let wait = s.send_receive_due(1_000).unwrap();
+    assert!((50..=60_000).contains(&wait), "{wait}");
+    s.now = s.now.saturating_add(59 * MINUTE);
+    s.send_receive_due(61_000);
+    s.finish_saves();
+    assert!(fake.state().submitted.is_empty());
+    assert!(s.send_receive_due(62_000).unwrap() <= 60_000);
+
+    // At its minute it goes on its own, with the Send/Receive timer off.
+    s.now = s.now.saturating_add(2 * MINUTE);
+    s.send_receive_due(63_000);
+    s.finish_saves();
+    let state = fake.state();
+    let went = state.submitted.first().expect("it went at its time");
+    let text = String::from_utf8_lossy(&went.data).to_string();
+    let head = text.split("\r\n\r\n").next().unwrap().to_string();
+    drop(state);
+    assert!(head.contains("\r\nExpires: "), "recipients are told when it expires: {head}");
+    let back = openmailclient_mime::parse(went_data(&fake).as_slice()).unwrap();
+    assert!(back.expires() > 0 && back.deliver_after() == 0, "when it was held is not told to anyone");
+    assert_eq!((count(&s, "Outbox"), count(&s, "Sent Items")), (0, sent_before + 1));
+    // Nothing is held now: the host has nothing more to wait for.
+    assert_eq!(s.send_receive_due(200_000), None);
+
+    // One that expired while it waited is not sent, and stays to be seen to.
+    write(&mut s, &[("to", "june@example.test"), ("subject", "Lunch today")]);
+    s.run("compose.expires", &json!({ "inMinutes": 10 })).unwrap();
+    s.now = s.now.saturating_add(20 * MINUTE);
+    let done = s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    assert_eq!(done["sent"], 0, "{done}");
+    assert!(done["failed"][0]["said"].as_str().unwrap().contains("expired"), "{done}");
+    assert_eq!(count(&s, "Outbox"), 1);
+    assert_eq!(fake.state().submitted.len(), 1);
+}
+
+fn went_data(fake: &Fake) -> Vec<u8> {
+    fake.state().submitted.first().map(|m| m.data.clone()).unwrap_or_default()
+}
+
+#[test]
+fn delivery_times_are_read_as_given_on_this_machines_clock() {
+    use crate::cmd::compose::parse_local;
+    use openmailclient_model::time;
+    assert_eq!(parse_local("2026-10-17 09:00", 0), Some(time::from_civil(2026, 10, 17, 9, 0, 0, 0)));
+    assert_eq!(parse_local(" 2026-10-17T09:00:30 ", 120), Some(time::from_civil(2026, 10, 17, 9, 0, 30, 120)));
+    assert_eq!(parse_local("2028-02-29 00:00", 0), Some(time::from_civil(2028, 2, 29, 0, 0, 0, 0)));
+    for bad in [
+        "",
+        "2026-10-17",
+        "09:00",
+        "2026-13-01 09:00",
+        "2027-02-29 09:00",
+        "2026-04-31 09:00",
+        "2026-10-17 9:60",
+        "1600-01-01 00:00",
+        "2026-10-17 09:00:00:00",
+        "-1-1-1 1:1",
+        "2026-10-17 ９:00",
+        "99999999999999999999-01-01 00:00",
+    ] {
+        assert_eq!(parse_local(bad, 0), None, "{bad:?}");
+    }
+}

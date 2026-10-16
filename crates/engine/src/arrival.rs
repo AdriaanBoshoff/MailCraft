@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 pub const MAX_ARRIVED: usize = 50;
 /// What of a message's text is kept for the alert, in characters.
 const PREVIEW_CHARS: usize = 160;
+/// How often the Outbox is looked through for messages held by Delay Delivery, in milliseconds.
+const HELD_LOOK_MS: u64 = 60_000;
 /// How long after the host starts its first Send/Receive is made, so the window comes first.
 const FIRST_AFTER_MS: u64 = 5_000;
 /// Send/Receive is made no more often than every minute, and no less than once a day.
@@ -123,6 +125,10 @@ pub(crate) struct Timer {
     every: u32,
     /// The host's clock when it last asked.
     asked: u64,
+    /// When the first message held in the Outbox (Delay Delivery) may go, store time.
+    held: Option<i64>,
+    /// The host's clock when the Outbox was last looked through for held messages.
+    held_seen: Option<u64>,
 }
 
 /// The messages that came in this run and were not told of or opened yet, the newest last.
@@ -184,6 +190,59 @@ impl Session {
     /// Returns in how many milliseconds to ask again, `None` while there is nothing to wait for.
     pub fn send_receive_due(&mut self, now_ms: u64) -> Option<u64> {
         self.timer.asked = now_ms;
+        let held = self.held_due(now_ms);
+        let timer = self.timer_due(now_ms);
+        match (held, timer) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// What a send found still waiting for its time.
+    pub(crate) fn held_changed(&mut self, until: Option<i64>) {
+        self.timer.held = until;
+    }
+
+    /// When a message held in the Outbox (Delay Delivery) may go, the Outbox is sent then, to
+    /// the minute, whether or not Send/Receive comes on its own. The Outbox is looked through
+    /// again once a minute, for what was put there or taken out meanwhile; the first look takes
+    /// in what came due while the window was closed.
+    fn held_due(&mut self, now_ms: u64) -> Option<u64> {
+        if self.accounts.is_empty() || self.connector.is_none() {
+            return None;
+        }
+        let now = crate::cmd::clock(self);
+        if let Some(at) = self.timer.held
+            && at <= now
+        {
+            let busy = self.jobs.iter().any(|j| j.what.starts_with(crate::cmd::SENDING));
+            if busy || !self.saves.is_empty() || !self.exports.is_empty() {
+                return Some(1_000);
+            }
+            self.timer.held = None;
+            let quiet = self.auto.runs == self.auto.seen;
+            let status = self.status.clone();
+            let begun = self.run("mail.sendAll", &json!({ "wait": false }));
+            if quiet {
+                self.auto.seen = self.auto.runs;
+            }
+            if let Err(e) = begun {
+                self.status = if status.is_empty() { format!("A message held in the Outbox did not go: {e}") } else { status };
+            }
+            return Some(1_000);
+        }
+        if self.timer.held_seen.is_none_or(|seen| now_ms.saturating_sub(seen) >= HELD_LOOK_MS) {
+            let after = self.timer.held_seen.map(|_| now);
+            self.timer.held_seen = Some(now_ms);
+            self.timer.held = crate::cmd::held_in_outbox(self, after);
+        }
+        let at = self.timer.held?;
+        // Ticks of 100 ns to milliseconds; asked again at least once a minute, so a clock
+        // that was put forward or back is followed.
+        Some(u64::try_from(at.saturating_sub(now) / 10_000).unwrap_or(0).clamp(50, HELD_LOOK_MS))
+    }
+
+    fn timer_due(&mut self, now_ms: u64) -> Option<u64> {
         let busy = self.jobs.iter().any(|j| j.what.starts_with(crate::cmd::RECEIVING) || j.what.starts_with(crate::cmd::SENDING));
         if self.send_receive_min == 0 || self.accounts.is_empty() || self.connector.is_none() {
             self.timer.next = None;

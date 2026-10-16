@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 93 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 94 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -86,6 +86,7 @@
 
 ## Revision history
 
+- 94 · 2026-10-15 — M4.9: Delay Delivery and Expires After.
 - 93 · 2026-10-15 — M4.9: Show Progress.
 - 92 · 2026-10-15 — M4.9: new mail told of; Send/Receive on a timer.
 - 91 · 2026-10-15 — M4.9: a server's own certificate trusted on the owner's word; larger buttons.

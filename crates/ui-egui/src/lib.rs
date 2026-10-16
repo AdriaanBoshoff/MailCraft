@@ -271,6 +271,9 @@ pub struct MailUi {
     chimes: u32,
     /// The Send/Receive Progress window is open (`ui.showProgress`).
     pub(crate) progress_open: bool,
+    /// What is typed in the compose window's Delivery menu: a time to go, and to expire.
+    pub(crate) go_at_text: String,
+    pub(crate) expire_at_text: String,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -474,6 +477,8 @@ impl MailUi {
             alert: None,
             chimes: 0,
             progress_open: false,
+            go_at_text: String::new(),
+            expire_at_text: String::new(),
         }
     }
 

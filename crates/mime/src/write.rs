@@ -27,6 +27,11 @@ pub fn write(item: &Item) -> Vec<u8> {
             header(&mut out, name, v);
         }
     }
+    // When it stops being of use ([RFC 4021] 2.1, Expires). When a held message may go is ours
+    // alone and is not told to anyone.
+    if item.expires() > 0 {
+        header(&mut out, "Expires", &format_date(item.expires()));
+    }
     match item.importance() {
         2 => header(&mut out, "Importance", "high"),
         0 => header(&mut out, "Importance", "low"),

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9) · revision 103 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9) · revision 104 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 438, all passing |
+| Tests | 441, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -139,7 +139,8 @@
 87. Done: A server's own certificate trusted on the owner's word: shown whole, trusted for that server only and only while it shows exactly that one (M4.9, `crates/net/src/cert.rs`, `account.trustCertificate`); buttons with room round their words, an outline and rounded corners.
 88. Done: New mail told of at the corner of the screen, with a sound of our own and the taskbar button, and Send/Receive on a timer (M4.9, `crates/engine/src/arrival.rs`, `crates/ui-egui/src/alert.rs`, `apps/openmailclient/src/chime.rs`).
 89. Done: Send/Receive's progress shown in a window of its own, with a way to stop one task or all (M4.9, `crates/engine/src/cmd/progress.rs`, `crates/ui-egui/src/progress.rs`).
-90. Next: M4.9: Delay Delivery and Expires After.
+90. Done: Delay Delivery and Expires After on a message being sent: a held message waits in the Outbox and goes at its minute, an expired one is struck through (M4.9, `compose.delayDelivery`, `compose.expires`, `Session::send_receive_due`).
+91. Next: M4.12: only what changed fetched from an IMAP server (CONDSTORE, QRESYNC) and new mail told of as it comes (IDLE).
 
 ## Do later (from M2)
 
@@ -240,7 +241,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | M4.12 |
 | New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | done: M4.9 |
 | Send/Receive's progress shown in a window of its own (Show Progress) | done: M4.9 |
-| Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.9, with the window's message options |
+| Delay Delivery and Expires After on a message being sent, and a send held until a time | done: M4.9 |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
 
@@ -1840,3 +1841,21 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   one says it stopped and that what was done is kept; the window stands beside the mailbox,
   which stays in use while it is open.
   2 tests.
+- **2026-10-15** - M4.9: Delay Delivery and Expires After.
+  The compose window's Delivery menu sets when a message may go (In 1 hour, Tomorrow at
+  8:00 AM, Monday at 8:00 AM, or a time typed in) and when it expires (Today at 5:00 PM, In 1
+  day, In 1 week, or a time typed in); what is set stands under the toolbar with a way to undo
+  it. Send leaves a held message in the Outbox, where the list says when it goes, and it goes
+  on its own at that minute. The times are kept on the message as Outlook keeps them
+  (PidTagDeferredDeliveryTime, PidTagExpiryTime), in the data file and in the list's table, so
+  a held message waits through a restart. When it expires is told to recipients in an
+  "Expires:" header, and read from mail that comes with one or with "Expiry-Date:"; an expired
+  message is struck through in the list. When a held message goes is told to no one.
+  The window's clock now moves on while it stays open: a window open past midnight says
+  "Today" of the new day.
+  Better than Outlook: a held message goes at its minute, not at the next Send/Receive after
+  it, and with Send/Receive on a timer off; one held past its time while the window was closed
+  goes when it opens; one that expired while it waited is not sent but stays in the Outbox
+  with the reason; a time that has gone by, a day the month does not have, or an expiry before
+  the message would go is refused when it is set, not found out later.
+  3 tests.

@@ -71,6 +71,10 @@ fn message_headers(h: &Headers, item: &mut Item) {
         item.props.set(pid::CLIENT_SUBMIT_TIME, PropValue::Time(t));
         item.props.set(pid::MESSAGE_DELIVERY_TIME, PropValue::Time(t));
     }
+    // "Expires", or the X.400 "Expiry-Date" ([RFC 4021] 2.1).
+    if let Some(t) = h.text("expires").or_else(|| h.text("expiry-date")).and_then(|d| parse_date(&d)).filter(|&t| t > 0) {
+        item.props.set(pid::EXPIRY_TIME, PropValue::Time(t));
+    }
     for (name, id) in [("message-id", pid::INTERNET_MESSAGE_ID), ("in-reply-to", pid::IN_REPLY_TO_ID), ("references", pid::INTERNET_REFERENCES)] {
         if let Some(v) = h.text(name) {
             item.props.set_str(id, v.trim());

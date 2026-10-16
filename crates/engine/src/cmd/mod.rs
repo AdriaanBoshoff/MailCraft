@@ -3,7 +3,7 @@
 
 mod account;
 mod arrival;
-mod compose;
+pub(crate) mod compose;
 mod file;
 mod folder;
 pub(crate) mod imap_sync;
@@ -18,7 +18,7 @@ mod view;
 
 use crate::{CmdResult, EngineError, Session};
 pub(crate) use receive::RECEIVING;
-pub(crate) use send::SENDING;
+pub(crate) use send::{SENDING, clock, held_in_outbox};
 use serde_json::Value;
 use std::sync::OnceLock;
 

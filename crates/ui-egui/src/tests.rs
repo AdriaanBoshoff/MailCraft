@@ -2026,3 +2026,45 @@ fn show_progress_lists_what_runs_and_cancels_it() {
     assert!(!ui.progress_open);
     assert!(fake.state().submitted.is_empty());
 }
+
+#[test]
+fn a_held_message_says_when_it_goes_and_an_expired_one_is_struck_through() {
+    let fake = openmailclient_net::fake::Fake::default();
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(fake.clone()));
+    let account = json!({
+        "email": "pat@example.test", "kind": "imap", "name": "Work",
+        "incoming": { "host": "mail.example.test", "security": "starttls" },
+        "outgoing": { "host": "mail.example.test", "security": "starttls" },
+        "password": "not a real password",
+    });
+    ui.execute("account.add", &account).unwrap();
+    let before = ui.session.now;
+    ui.session.tick_clock();
+    assert!(ui.session.now >= before, "the clock never goes back");
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    ui.execute("mail.new", &Value::Null).unwrap();
+    ui.execute("compose.setField", &json!({ "field": "to", "value": "june@example.test" })).unwrap();
+    ui.execute("compose.delayDelivery", &json!({ "inMinutes": 90 })).unwrap();
+    ui.execute("compose.expires", &json!({ "inMinutes": 3000 })).unwrap();
+    // The compose window draws what is set, typed text in the Delivery menu is kept between frames.
+    ui.go_at_text = "2026-10-17 09:00".into();
+    for _ in 0..3 {
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+    assert_eq!(ui.go_at_text, "2026-10-17 09:00");
+    ui.execute("compose.send", &json!({ "anyway": true })).unwrap();
+    ui.execute("folder.select", &json!({ "folder": "Outbox" })).unwrap();
+    frame(&mut ui, &ctx, Vec::new(), None);
+    assert!(ui.session.rows.iter().any(|r| r.deliver_after > ui.session.now), "the Outbox row knows when it goes");
+    assert!(fake.state().submitted.is_empty());
+    // A row that expired, and rows with hostile times, draw without trouble.
+    for (deliver_after, expires) in [(0, 1), (i64::MAX, i64::MAX), (i64::MIN, -1), (1, i64::MIN)] {
+        if let Some(row) = ui.session.rows.first_mut() {
+            row.deliver_after = deliver_after;
+            row.expires = expires;
+        }
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+}

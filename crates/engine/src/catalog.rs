@@ -123,7 +123,8 @@ pub const FEATURES: &[Feature] = &[
     f("Message", "Insert", "", "Pictures, Tables, Links", ""),
     f("Message", "Options", "Show Fields", "Bcc", "compose.showBcc"),
     f("Message", "Options", "Tracking", "Request a Delivery or Read Receipt", ""),
-    f("Message", "Options", "More Options", "Delay Delivery", ""),
+    f("Message", "Options", "More Options", "Delay Delivery", "compose.delayDelivery"),
+    f("Message", "Options", "More Options", "Expires After", "compose.expires"),
     f("Message", "Format Text", "Format", "HTML, Plain Text, Rich Text", ""),
     f("Message", "Review", "Proofing", "Spelling & Grammar", ""),
     // Calendar

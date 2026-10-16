@@ -374,7 +374,8 @@ impl MailUi {
 
         // Lay the rows out once, each group under its heading, however the list is arranged.
         let groups = s.groups();
-        let now_day = time::civil(s.now, s.tz_offset_min).day_number;
+        let now = s.now;
+        let now_day = time::civil(now, s.tz_offset_min).day_number;
         let mut entries: Vec<(f32, Entry)> = Vec::with_capacity(s.rows.len() + groups.len());
         let mut y = 0.0;
         let mut next = 0;
@@ -444,7 +445,7 @@ impl MailUi {
                             } else if resp.hovered() {
                                 p.rect_filled(r, 0.0, t.hover);
                             }
-                            draw_row(&p, r, row, now_day, tz, &t);
+                            draw_row(&p, r, row, (now, now_day), tz, &t);
                             if resp.clicked() {
                                 clicked = Some(row.id);
                             }
@@ -775,6 +776,12 @@ impl MailUi {
         let mut body = draft.body.clone();
         let attachments: Vec<(String, usize)> = draft.attachments.iter().map(|a| (a.name(), a.size())).collect();
         let show_bcc = draft.show_bcc;
+        let (go_at, expire_at) = (draft.deliver_after, draft.expires);
+        let go_shown = (go_at > 0).then(|| self.session.time_shown(go_at));
+        let expire_shown = (expire_at > 0).then(|| self.session.time_shown(expire_at));
+        let (now, tz) = (self.session.now, self.session.tz_offset_min);
+        let mut go_text = std::mem::take(&mut self.go_at_text);
+        let mut expire_text = std::mem::take(&mut self.expire_at_text);
         // What the writer should know is on show while the message can still be changed.
         let cautions: Vec<String> = openmailclient_engine::outgoing::cautions(draft).iter().map(|c| c.words()).collect();
         let mut acts: Vec<(&str, Value)> = Vec::new();
@@ -806,7 +813,24 @@ impl MailUi {
                         acts.push((cmd, params));
                     }
                 }
+                ui.menu_button(egui::RichText::new("Delivery…").font(font(12.5)), |ui| {
+                    delivery_menu(ui, &t, now, tz, (&mut go_text, &mut expire_text), (go_at > 0, expire_at > 0), &mut acts);
+                });
             });
+            // What is set for when it goes and when it expires, each with a way to undo it.
+            for (shown, words, cmd) in
+                [(&go_shown, "Waits in the Outbox until", "compose.delayDelivery"), (&expire_shown, "Expires", "compose.expires")]
+            {
+                let Some(shown) = shown else { continue };
+                ui.horizontal(|ui| {
+                    let (mark, _) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::hover());
+                    icons::paint(ui.painter(), Rect::from_center_size(mark.center(), vec2(14.0, 14.0)), Icon::Send, t.text_dim);
+                    ui.label(egui::RichText::new(format!("{words} {shown}")).font(font(12.0)).color(t.text));
+                    if ui.small_button("×").on_hover_text("Undo this").clicked() {
+                        acts.push((cmd, json!({ "off": true })));
+                    }
+                });
+            }
             for caution in &cautions {
                 ui.horizontal(|ui| {
                     let (mark, _) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::hover());
@@ -850,10 +874,92 @@ impl MailUi {
                 }
             });
         });
+        self.go_at_text = go_text;
+        self.expire_at_text = expire_text;
         for (id, params) in acts {
             self.act(id, params);
         }
     }
+}
+
+/// The compose window's Delivery menu: when it may go (Delay Delivery) and when it expires,
+/// each from a few choices that are usually wanted or typed in.
+fn delivery_menu(
+    ui: &mut Ui,
+    t: &theme::Tokens,
+    now: i64,
+    tz: i32,
+    (go_text, expire_text): (&mut String, &mut String),
+    (going_later, expiring): (bool, bool),
+    acts: &mut Vec<(&'static str, Value)>,
+) {
+    const DAY: i64 = 864_000_000_000;
+    // "2026-10-17 08:00": `days` from today, at `hour`, on this machine's clock.
+    let day_at = |days: i64, hour: u32| {
+        let c = time::civil(now.saturating_add(days.saturating_mul(DAY)), tz);
+        format!("{}-{:02}-{:02} {hour:02}:00", c.year, c.month, c.day)
+    };
+    let today = time::civil(now, tz);
+    // Monday next, never today.
+    let to_monday = match (8 - i64::from(today.weekday.min(6))) % 7 {
+        0 => 7,
+        n => n,
+    };
+    ui.set_min_width(250.0);
+    let heading = |ui: &mut Ui, words: &str| {
+        ui.label(egui::RichText::new(words).font(bold(12.0)).color(t.text_dim));
+    };
+    heading(ui, "Do not deliver before");
+    let mut picks: Vec<(&str, Value)> = vec![
+        ("In 1 hour", json!({ "inMinutes": 60 })),
+        ("Tomorrow at 8:00 AM", json!({ "at": day_at(1, 8) })),
+        ("Monday at 8:00 AM", json!({ "at": day_at(to_monday, 8) })),
+    ];
+    if going_later {
+        picks.push(("Send at once", json!({ "off": true })));
+    }
+    for (label, params) in picks {
+        if ui.button(label).clicked() {
+            acts.push(("compose.delayDelivery", params));
+            ui.close();
+        }
+    }
+    typed_time(ui, t, go_text, egui::Id::new("deliver-at"), "compose.delayDelivery", acts);
+    ui.separator();
+    heading(ui, "Expires after");
+    let mut picks: Vec<(&str, Value)> = Vec::new();
+    if today.hour < 17 {
+        picks.push(("Today at 5:00 PM", json!({ "at": day_at(0, 17) })));
+    }
+    picks.extend([("In 1 day", json!({ "inMinutes": 24 * 60 })), ("In 1 week", json!({ "inMinutes": 7 * 24 * 60 }))]);
+    if expiring {
+        picks.push(("Never", json!({ "off": true })));
+    }
+    for (label, params) in picks {
+        if ui.button(label).clicked() {
+            acts.push(("compose.expires", params));
+            ui.close();
+        }
+    }
+    typed_time(ui, t, expire_text, egui::Id::new("expire-at"), "compose.expires", acts);
+}
+
+/// A date and time typed in, set with Enter or Set.
+fn typed_time(ui: &mut Ui, t: &theme::Tokens, text: &mut String, id: egui::Id, cmd: &'static str, acts: &mut Vec<(&'static str, Value)>) {
+    ui.horizontal(|ui| {
+        let edit = crate::line_edit::LineEdit::new(text, id)
+            .font(font(12.5))
+            .hint("2026-10-17 09:00", Some(t.text_faint))
+            .char_limit(32)
+            .desired_width(150.0);
+        let resp = ui.add(edit);
+        let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.add_enabled(!text.trim().is_empty(), egui::Button::new("Set")).clicked() || entered) && !text.trim().is_empty() {
+            acts.push((cmd, json!({ "at": text.trim() })));
+            text.clear();
+            ui.close();
+        }
+    });
 }
 
 /// Children of `parent` in pane order: special folders first, then by name.
@@ -863,7 +969,11 @@ fn children(folders: &[FolderInfo], parent: Option<FolderId>) -> Vec<&FolderInfo
     out
 }
 
-fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, now_day: i64, tz: i32, t: &theme::Tokens) {
+fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, (now, now_day): (i64, i64), tz: i32, t: &theme::Tokens) {
+    // Of no use any more: struck through, as recipients' mail programs show it too.
+    let expired = row.expires > 0 && row.expires <= now;
+    // Waiting in the Outbox for its time (Delay Delivery): when it goes stands where the date is.
+    let held = row.deliver_after > now;
     p.hline(r.x_range(), r.bottom() - 0.5, (1.0, t.line.gamma_multiply(0.6)));
     if !row.read {
         p.rect_filled(Rect::from_min_size(r.min + vec2(0.0, 1.0), vec2(3.0, r.height() - 2.0)), 0.0, t.accent);
@@ -894,12 +1004,27 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, now_day: i64, tz: i32, t:
         right -= 5.0;
     }
     let who = if row.from.is_empty() { &row.to } else { &row.from };
-    clip_text(p, pos2(left, r.top() + 6.0), right - left, who, if row.read { font(13.5) } else { bold(13.5) }, t.text);
+    let who_w = clip_text(p, pos2(left, r.top() + 6.0), right - left, who, if row.read { font(13.5) } else { bold(13.5) }, t.text);
+    let strike = |y: f32, w: f32| {
+        if expired && w > 0.0 {
+            p.hline(left..=left + w, r.top() + y, (1.0, t.text_dim));
+        }
+    };
+    strike(15.0, who_w);
 
     // Line 2: subject and when.
-    let c = time::civil(row.time, tz);
-    let when = if row.time <= 0 {
+    let shown_time = if held { row.deliver_after } else { row.time };
+    let c = time::civil(shown_time, tz);
+    let when = if shown_time <= 0 {
         String::new()
+    } else if held {
+        let day = match c.day_number.saturating_sub(now_day) {
+            i64::MIN..=0 => String::new(),
+            1 => "tomorrow ".to_string(),
+            2..=6 => format!("{} ", c.weekday_name().get(..3).unwrap_or("")),
+            _ => format!("{}/{}/{} ", c.month, c.day, c.year),
+        };
+        format!("Goes {day}{}", c.time_short())
     } else {
         match now_day.saturating_sub(c.day_number) {
             i64::MIN..=0 => c.time_short(),
@@ -910,7 +1035,7 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, now_day: i64, tz: i32, t:
     let when_w = crate::text_width(p, &when, font(11.5));
     p.text(pos2(r.right() - 10.0, r.top() + 34.0), Align2::RIGHT_CENTER, &when, font(11.5), if row.read { t.text_faint } else { t.accent });
     let subject = if row.subject.trim().is_empty() { "(no subject)" } else { &row.subject };
-    clip_text(
+    let subject_w = clip_text(
         p,
         pos2(left, r.top() + 25.0),
         r.right() - 22.0 - when_w - left,
@@ -918,6 +1043,7 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, now_day: i64, tz: i32, t:
         if row.read { font(12.5) } else { bold(12.5) },
         if row.read { t.text } else { t.accent },
     );
+    strike(34.0, subject_w);
 
     // Line 3: preview, with category squares on the right.
     let mut cat_x = r.right() - 10.0;

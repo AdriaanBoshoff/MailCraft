@@ -130,8 +130,10 @@ pub(crate) const CONTENTS: &[(u16, u16)] = &[
     (0x65C6, I),
 ];
 /// Columns our own contents tables add, so a message list shows who a message is from and
-/// its follow-up flag without each message being opened.
-pub(crate) const CONTENTS_MORE: &[(u16, u16)] = &[(pid::SENDER_NAME, S), (pid::FLAG_STATUS, I)];
+/// its follow-up flag, when a held message goes and when one expires, without each message
+/// being opened.
+pub(crate) const CONTENTS_MORE: &[(u16, u16)] =
+    &[(pid::SENDER_NAME, S), (pid::FLAG_STATUS, I), (pid::DEFERRED_DELIVERY_TIME, T), (pid::EXPIRY_TIME, T)];
 /// The columns every table of folder-associated items has ([MS-PST] 2.4.4.6.1).
 pub(crate) const ASSOC: &[(u16, u16)] = &[
     (0x001A, S),

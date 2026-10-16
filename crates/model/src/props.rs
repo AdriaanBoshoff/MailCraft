@@ -4,6 +4,10 @@ use std::collections::BTreeMap;
 
 /// Property ids ([MS-OXPROPS]). Only the ones the code names; every other id is still carried.
 pub mod pid {
+    /// When a message held in the Outbox may go (Delay Delivery) ([MS-OXPROPS] PidTagDeferredDeliveryTime).
+    pub const DEFERRED_DELIVERY_TIME: u16 = 0x000F;
+    /// When a message stops being of use ([MS-OXPROPS] PidTagExpiryTime).
+    pub const EXPIRY_TIME: u16 = 0x0015;
     pub const IMPORTANCE: u16 = 0x0017;
     pub const MESSAGE_CLASS: u16 = 0x001A;
     pub const SUBJECT: u16 = 0x0037;

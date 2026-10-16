@@ -114,6 +114,26 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: send,
         },
         CommandSpec {
+            id: "compose.delayDelivery",
+            label: "Delay Delivery",
+            tab: "Options",
+            group: "More Options",
+            shortcut: "",
+            params: r#"{"at": "2026-10-17 09:00" on this machine's clock, or "inMinutes": n, or "off": true}; Send leaves it in the Outbox until then, and it goes on its own at that minute; returns {"until": the time or null}"#,
+            enabled: composing,
+            run: delay_delivery,
+        },
+        CommandSpec {
+            id: "compose.expires",
+            label: "Expires After",
+            tab: "Options",
+            group: "More Options",
+            shortcut: "",
+            params: r#"{"at": "2026-10-24 17:00" on this machine's clock, or "inMinutes": n, or "off": true}; after then the message is of no use: it is shown struck through, recipients' mail programs are told so, and it is not sent if it is still in the Outbox; returns {"until": the time or null}"#,
+            enabled: composing,
+            run: expires,
+        },
+        CommandSpec {
             id: "compose.saveDraft",
             label: "Save",
             tab: "Message",
@@ -373,6 +393,109 @@ fn remove_attachment(s: &mut Session, p: &Value) -> CmdResult {
     ok()
 }
 
+/// A time as it is given: `"at"`, a date and time on this machine's clock, or `"inMinutes"`
+/// from now; `None` for `"off"`.
+fn when_given(s: &Session, p: &Value) -> Result<Option<i64>, EngineError> {
+    const TICKS_PER_MINUTE: i64 = 600_000_000;
+    /// Five years, in minutes: further off than that is a slip.
+    const MAX_MINUTES: u64 = 5 * 366 * 24 * 60;
+    if p_bool(p, "off") == Some(true) {
+        return Ok(None);
+    }
+    if let Some(m) = p_u64(p, "inMinutes") {
+        let m = i64::try_from(m.clamp(1, MAX_MINUTES)).unwrap_or(1);
+        return Ok(Some(super::clock(s).saturating_add(m.saturating_mul(TICKS_PER_MINUTE))));
+    }
+    let text =
+        need_str(p, "at").map_err(|_| EngineError::BadParams("give \"at\": \"2026-10-17 09:00\", \"inMinutes\": n, or \"off\": true".into()))?;
+    parse_local(text, s.tz_offset_min)
+        .map(Some)
+        .ok_or_else(|| EngineError::BadParams(format!("\"{}\" is not a date and time such as 2026-10-17 09:00", clamp(text, 64))))
+}
+
+/// "2026-10-17 09:00", "2026-10-17T09:00:30": a date and time `offset` minutes ahead of UTC.
+pub(crate) fn parse_local(text: &str, offset: i32) -> Option<i64> {
+    let (date, at) = text.trim().split_once(['T', ' '])?;
+    let mut d = date.split('-');
+    let (year, month, day) = (d.next()?.parse::<i64>().ok()?, d.next()?.parse::<u32>().ok()?, d.next()?.parse::<u32>().ok()?);
+    let mut c = at.trim().split(':');
+    let (hour, minute) = (c.next()?.parse::<u32>().ok()?, c.next()?.parse::<u32>().ok()?);
+    let second = c.next().map_or(Some(0), |v| v.parse::<u32>().ok())?;
+    if d.next().is_some() || c.next().is_some() || !(1601..=9999).contains(&year) || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let t = time::from_civil(year, month, day, hour, minute, second, offset);
+    // A day the month does not have (31 April) comes back as another day: not a date.
+    let back = time::civil(t, offset);
+    (back.month == month && back.day == day).then_some(t)
+}
+
+/// A time as the reading pane says it: "Fri 10/17/2026 9:00 AM", on this machine's clock.
+pub(crate) fn when_shown(s: &Session, t: i64) -> String {
+    time::civil(t, s.tz_offset_min).long_stamp()
+}
+
+impl Session {
+    /// A time as the reading pane says it, on this machine's clock.
+    pub fn time_shown(&self, t: i64) -> String {
+        when_shown(self, t)
+    }
+
+    /// Bring the session's clock up to the machine's; it never goes back. A window that stays
+    /// open past midnight says "Today" of the new day, and sees a message expire when it does.
+    pub fn tick_clock(&mut self) {
+        self.now = super::clock(self);
+    }
+}
+
+fn delay_delivery(s: &mut Session, p: &Value) -> CmdResult {
+    let at = when_given(s, p)?;
+    let now = super::clock(s);
+    let draft = s.compose.as_ref().ok_or_else(|| EngineError::Disabled("Delay Delivery".into()))?;
+    if let Some(at) = at {
+        if at <= now {
+            return Err(EngineError::BadParams(format!("{} has gone by already", when_shown(s, at))));
+        }
+        if draft.expires > 0 && at >= draft.expires {
+            return Err(EngineError::BadParams(format!("it would expire ({}) before it went", when_shown(s, draft.expires))));
+        }
+    }
+    let shown = at.map(|t| when_shown(s, t));
+    if let Some(d) = s.compose.as_mut() {
+        d.deliver_after = at.unwrap_or(0);
+        d.touched = true;
+    }
+    s.status = match &shown {
+        Some(t) => format!("Send leaves it in the Outbox until {t}, and it goes on its own then"),
+        None => "It goes as soon as it is sent".to_string(),
+    };
+    Ok(json!({ "until": shown }))
+}
+
+fn expires(s: &mut Session, p: &Value) -> CmdResult {
+    let at = when_given(s, p)?;
+    let now = super::clock(s);
+    let draft = s.compose.as_ref().ok_or_else(|| EngineError::Disabled("Expires After".into()))?;
+    if let Some(at) = at {
+        if at <= now {
+            return Err(EngineError::BadParams(format!("{} has gone by already", when_shown(s, at))));
+        }
+        if draft.deliver_after > 0 && at <= draft.deliver_after {
+            return Err(EngineError::BadParams(format!("it would expire before it went ({})", when_shown(s, draft.deliver_after))));
+        }
+    }
+    let shown = at.map(|t| when_shown(s, t));
+    if let Some(d) = s.compose.as_mut() {
+        d.expires = at.unwrap_or(0);
+        d.touched = true;
+    }
+    s.status = match &shown {
+        Some(t) => format!("It expires {t}"),
+        None => "It does not expire".to_string(),
+    };
+    Ok(json!({ "until": shown }))
+}
+
 /// Turn the draft into an item. `sent` stamps the submit time and clears the unsent flag.
 fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     let mut item = Item::new_mail();
@@ -394,6 +517,11 @@ fn build(s: &Session, draft: &Draft, sent: bool) -> Item {
     }
     item.refresh_display_recipients();
     item.attachments = draft.attachments.clone();
+    for (id, t) in [(pid::DEFERRED_DELIVERY_TIME, draft.deliver_after), (pid::EXPIRY_TIME, draft.expires)] {
+        if t > 0 {
+            item.props.set(id, PropValue::Time(t));
+        }
+    }
     item.props.set(pid::CREATION_TIME, PropValue::Time(s.now));
     item.props.set(pid::LAST_MODIFICATION_TIME, PropValue::Time(s.now));
     if sent {

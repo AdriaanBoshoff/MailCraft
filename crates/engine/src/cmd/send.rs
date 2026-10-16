@@ -104,7 +104,7 @@ fn put_in_sent(reach: &Reach, copies: &[Vec<u8>]) -> Result<usize, NetError> {
 type Outcome = Result<openmailclient_net::smtp::Sent, NetError>;
 
 /// The time now, as the store keeps times; the session's own clock where there is none.
-fn clock(s: &Session) -> i64 {
+pub(crate) fn clock(s: &Session) -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -151,6 +151,27 @@ fn prepare(item: &Item, account: &Account, now: i64, n: usize) -> (Vec<String>, 
     (to, openmailclient_mime::write(&wire), kept)
 }
 
+/// When the first message held in the Outbox by Delay Delivery may go, of those whose time is
+/// after `after` (any time when `None`). Once its time has come and a send was tried, a message
+/// is one like any other in the Outbox, sent by the next Send/Receive and not tried again and
+/// again on its own.
+pub(crate) fn held_in_outbox(s: &mut Session, after: Option<i64>) -> Option<i64> {
+    let (store, folder) = outbox(s)?;
+    let st = s.stores.get_mut(store)?;
+    let rows = st.list(folder).ok()?;
+    let mut first: Option<i64> = None;
+    for r in rows.iter().take(MAX_AT_ONCE).filter(|r| r.deliver_after > after.unwrap_or(0)) {
+        // Read to be sure: one that went already, or would have expired first, is not waited for.
+        let Ok(item) = st.load(folder, ItemId(r.id)) else { continue };
+        let at = item.deliver_after();
+        let gone = item.props.time(pid::MESSAGE_DELIVERY_TIME).is_some_and(|t| t > 0);
+        if at > after.unwrap_or(0) && !gone && !(item.expires() > 0 && item.expires() <= at) {
+            first = Some(first.map_or(at, |f| f.min(at)));
+        }
+    }
+    first
+}
+
 /// The store and Outbox messages are sent from: the one new mail is kept in.
 fn outbox(s: &Session) -> Option<(usize, FolderId)> {
     let store = s.writable_store()?;
@@ -160,6 +181,15 @@ fn outbox(s: &Session) -> Option<(usize, FolderId)> {
 /// Send what is in the Outbox: on a thread of its own unless `wait`. When a send is already
 /// under way, the Outbox is sent again once it ends.
 pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
+    let sent = send_now(s, wait);
+    // What still waits for its time (Delay Delivery) goes on its own when that comes.
+    let now = clock(s);
+    let held = held_in_outbox(s, Some(now));
+    s.held_changed(held);
+    sent
+}
+
+fn send_now(s: &mut Session, wait: bool) -> CmdResult {
     if s.accounts.is_empty() {
         return Err(EngineError::Format("there is no account to send from; add one with account.add".into()));
     }
@@ -173,6 +203,7 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
     let summaries = s.stores.get_mut(store).ok_or(openmailclient_model::StoreError::NoFolder)?.list(folder)?;
     let mut batches: Vec<Batch> = Vec::new();
     let mut skipped: Vec<Value> = Vec::new();
+    let mut waiting: Vec<Value> = Vec::new();
     for (n, summary) in summaries.iter().take(MAX_AT_ONCE).enumerate() {
         let Some(st) = s.stores.get_mut(store) else { break };
         let item = match st.load(folder, ItemId(summary.id)) {
@@ -185,6 +216,16 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
         // What went before and could not be kept in Sent Items is not sent again.
         if item.props.time(pid::MESSAGE_DELIVERY_TIME).is_some_and(|t| t > 0) {
             skipped.push(json!({ "subject": summary.subject, "said": "it was sent already" }));
+            continue;
+        }
+        // Delay Delivery: it waits for its time, and goes on its own then.
+        if item.deliver_after() > now {
+            waiting.push(json!({ "subject": summary.subject, "until": super::compose::when_shown(s, item.deliver_after()) }));
+            continue;
+        }
+        // Of no use any more by the time it would go: it is not sent, and stays to be seen to.
+        if item.expires() > 0 && item.expires() <= now {
+            skipped.push(json!({ "subject": summary.subject, "said": "it expired before it went; change when it expires, or delete it" }));
             continue;
         }
         // Something that is not a message (a meeting answer not yet written, say) waits.
@@ -217,9 +258,13 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
     }
     let count: usize = batches.iter().map(|b| b.going.len()).sum();
     if count == 0 {
-        s.status =
-            if skipped.is_empty() { "There is nothing in the Outbox to send".to_string() } else { "Nothing in the Outbox could be sent".to_string() };
-        return Ok(json!({ "sent": 0, "failed": skipped, "refused": [] }));
+        s.status = match (skipped.is_empty(), waiting.as_slice()) {
+            (true, []) => "There is nothing in the Outbox to send".to_string(),
+            (true, [one]) => format!("It waits in the Outbox until {} and goes then", one["until"].as_str().unwrap_or_default()),
+            (true, many) => format!("{} messages wait in the Outbox for their time and go then", many.len()),
+            (false, _) => format!("Nothing in the Outbox could be sent: {}", skipped.first().and_then(|f| f["said"].as_str()).unwrap_or_default()),
+        };
+        return Ok(json!({ "sent": 0, "failed": skipped, "refused": [], "waiting": waiting }));
     }
     // Known before the copies are on the server, so a receive running meanwhile already
     // passes over them.
@@ -266,7 +311,7 @@ pub(crate) fn send_outbox(s: &mut Session, wait: bool) -> CmdResult {
                 copies.push(Copies { account: batch.reach.account.name.clone(), put: put_in_sent(&batch.reach, &went) });
             }
         }
-        let step: Ended = Box::new(move |s: &mut Session| ended(s, store, done, skipped, copies));
+        let step: Ended = Box::new(move |s: &mut Session| ended(s, store, done, skipped, copies, waiting));
         step
     })
 }
@@ -276,7 +321,14 @@ pub(crate) const SENDING: &str = "Sending";
 
 /// Take back what a send came to: what went is kept in Sent Items and leaves the Outbox; what
 /// did not stays, with the reason said.
-fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed: Vec<Value>, copies: Vec<Copies>) -> (String, Value) {
+fn ended(
+    s: &mut Session,
+    store: usize,
+    done: Vec<(Going, Outcome)>,
+    mut failed: Vec<Value>,
+    copies: Vec<Copies>,
+    waiting: Vec<Value>,
+) -> (String, Value) {
     let sent_folder = s.find_folder(store, FolderKind::Sent);
     // Each account's Sent Items: in its own data file where it has one, as Outlook keeps it.
     let mut kept_in: Vec<(String, Option<(usize, FolderId)>)> = Vec::new();
@@ -363,6 +415,11 @@ fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed:
     if unkept > 0 {
         status.push_str("; what went could not be kept in Sent Items and stays in the Outbox, marked as sent");
     }
+    match waiting.as_slice() {
+        [] => {}
+        [one] => status.push_str(&format!("; one waits in the Outbox until {}", one["until"].as_str().unwrap_or_default())),
+        many => status.push_str(&format!("; {} wait in the Outbox for their time", many.len())),
+    }
     if std::mem::take(&mut s.send_again) && send_outbox(s, false).is_ok_and(|started| started["started"] == true) {
         status.push_str("; sending what came into the Outbox meanwhile");
     }
@@ -374,5 +431,5 @@ fn ended(s: &mut Session, store: usize, done: Vec<(Going, Outcome)>, mut failed:
             Err(e) => status.push_str(&format!("; {}: a copy could not be put in the server's Sent folder ({e})", c.account)),
         }
     }
-    (status, json!({ "sent": sent, "failed": failed, "refused": refused, "onServer": on_server }))
+    (status, json!({ "sent": sent, "failed": failed, "refused": refused, "onServer": on_server, "waiting": waiting }))
 }

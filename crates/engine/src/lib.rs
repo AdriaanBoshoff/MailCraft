@@ -164,6 +164,10 @@ pub struct Draft {
     /// What it answers, as the headers that keep a conversation together ([RFC 5322] 3.6.4).
     pub in_reply_to: String,
     pub references: String,
+    /// Delay Delivery: it waits in the Outbox until then (store time); 0 when it goes at once.
+    pub deliver_after: i64,
+    /// Expires After: when it stops being of use (store time); 0 when it does not.
+    pub expires: i64,
 }
 
 /// A save of a data file that is being done on a thread of its own.

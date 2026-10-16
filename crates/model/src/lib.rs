@@ -200,6 +200,10 @@ pub struct Summary {
     pub message_class: String,
     pub preview: String,
     pub categories: Vec<String>,
+    /// When a message held in the Outbox may go; 0 when it is not held.
+    pub deliver_after: i64,
+    /// When it stops being of use; 0 when it does not.
+    pub expires: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -356,6 +360,16 @@ impl Item {
         self.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(if read { f | MSGFLAG_READ } else { f & !MSGFLAG_READ }));
     }
 
+    /// When a message held in the Outbox may go (Delay Delivery); 0 when it is not held.
+    pub fn deliver_after(&self) -> i64 {
+        self.props.time(pid::DEFERRED_DELIVERY_TIME).filter(|&t| t > 0).unwrap_or(0)
+    }
+
+    /// When it stops being of use (Expires After); 0 when it does not.
+    pub fn expires(&self) -> i64 {
+        self.props.time(pid::EXPIRY_TIME).filter(|&t| t > 0).unwrap_or(0)
+    }
+
     pub fn is_unsent(&self) -> bool {
         self.flags() & MSGFLAG_UNSENT != 0
     }
@@ -494,6 +508,8 @@ impl Item {
             message_class: self.message_class().to_string(),
             preview,
             categories: self.categories.clone(),
+            deliver_after: self.deliver_after(),
+            expires: self.expires(),
         }
     }
 

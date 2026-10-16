@@ -242,6 +242,7 @@ impl eframe::App for App {
         if self.ui.session.autosave(ms) {
             ctx.request_repaint();
         }
+        self.ui.session.tick_clock();
         // Mail is sent and received on its own every so often, counted from the last time.
         if let Some(left) = self.ui.session.send_receive_due(ms) {
             ctx.request_repaint_after(std::time::Duration::from_millis(left.clamp(50, 60_000)));
