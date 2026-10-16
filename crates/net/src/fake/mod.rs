@@ -20,6 +20,8 @@ pub struct Message {
     pub uid: u32,
     pub flags: Vec<String>,
     pub data: Vec<u8>,
+    /// When it last changed, as CONDSTORE counts ([RFC 7162] 3.1).
+    pub modseq: u64,
 }
 
 /// A folder of the fake server.
@@ -31,6 +33,10 @@ pub struct Mailbox {
     pub uid_validity: u32,
     pub uid_next: u32,
     pub messages: Vec<Message>,
+    /// The folder's highest mod-sequence, raised by every change ([RFC 7162] 3.1.1).
+    pub modseq: u64,
+    /// Messages taken away, and the mod-sequence they went at, for QRESYNC.
+    pub vanished: Vec<(u32, u64)>,
 }
 
 impl Mailbox {
@@ -41,14 +47,36 @@ impl Mailbox {
             uid_validity: 1,
             uid_next: 1,
             messages: Vec::new(),
+            modseq: 1,
+            vanished: Vec::new(),
         }
     }
 
     pub fn add(&mut self, data: &[u8], flags: &[&str]) -> u32 {
         let uid = self.uid_next;
         self.uid_next += 1;
-        self.messages.push(Message { uid, flags: flags.iter().map(|f| f.to_string()).collect(), data: data.to_vec() });
+        self.modseq += 1;
+        self.messages.push(Message { uid, flags: flags.iter().map(|f| f.to_string()).collect(), data: data.to_vec(), modseq: self.modseq });
         uid
+    }
+
+    /// A message's flags changed, as a client elsewhere changes them.
+    pub fn set_flags(&mut self, uid: u32, flags: &[&str]) {
+        self.modseq += 1;
+        let at = self.modseq;
+        if let Some(m) = self.messages.iter_mut().find(|m| m.uid == uid) {
+            m.flags = flags.iter().map(|f| f.to_string()).collect();
+            m.modseq = at;
+        }
+    }
+
+    /// A message taken away, as a client elsewhere expunges it; where it stood, from 1.
+    pub fn remove(&mut self, uid: u32) -> Option<usize> {
+        let at = self.messages.iter().position(|m| m.uid == uid)?;
+        self.messages.remove(at);
+        self.modseq += 1;
+        self.vanished.push((uid, self.modseq));
+        Some(at + 1)
     }
 }
 

@@ -365,6 +365,66 @@ pub struct Selected {
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
     pub read_only: bool,
+    /// The folder's highest mod-sequence, where the server keeps them ([RFC 7162] 3.1.2.1);
+    /// none where it does not, or says `NOMODSEQ`.
+    pub highest_modseq: Option<u64>,
+    /// Selected with what was known of it (QRESYNC, [RFC 7162] 3.2.5): the messages the server
+    /// says went since, as it says them, and those whose flags changed.
+    pub since: Option<Since>,
+}
+
+/// What a folder selected with QRESYNC says changed since the mod-sequence given.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Since {
+    /// The ids the server says went. It may name ids that never were; that a message named is
+    /// gone is to be made sure of before anything goes here ([`Imap::still_there`]).
+    pub vanished: UidSet,
+    /// Messages whose flags changed, with their flags now.
+    pub changed: Vec<Summary>,
+    /// More was said than is kept: what went is not known from this.
+    pub too_much: bool,
+}
+
+/// A set of message ids as a server writes it, `3,5:9,20:*`, kept as its runs: a run of four
+/// thousand million ids takes no more room than one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UidSet {
+    runs: Vec<(u32, u32)>,
+}
+
+/// Runs of one set kept at most.
+const MAX_RUNS: usize = 100_000;
+
+impl UidSet {
+    /// As a server writes it; none when it is not one, or has more runs than are kept.
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut runs = Vec::new();
+        for part in text.split(',') {
+            let n = |t: &str| if t == "*" { Some(u32::MAX) } else { t.parse::<u32>().ok().filter(|n| *n > 0) };
+            let (lo, hi) = match part.split_once(':') {
+                Some((a, b)) => (n(a)?, n(b)?),
+                None => (n(part)?, n(part)?),
+            };
+            runs.push((lo.min(hi), lo.max(hi)));
+            if runs.len() > MAX_RUNS {
+                return None;
+            }
+        }
+        Some(Self { runs })
+    }
+
+    pub fn contains(&self, uid: u32) -> bool {
+        self.runs.iter().any(|(lo, hi)| (*lo..=*hi).contains(&uid))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    fn add(&mut self, other: Self) -> bool {
+        self.runs.extend(other.runs);
+        self.runs.len() <= MAX_RUNS
+    }
 }
 
 /// A message as listed: its id, flags and size.
@@ -379,11 +439,13 @@ pub struct Imap {
     c: Conn,
     tag: u32,
     caps: Vec<String>,
+    /// QRESYNC turned on ([RFC 7162] 3.2.3).
+    qresync: bool,
 }
 
 impl Imap {
     pub fn open(with: &dyn Connector, to: &Endpoint, login: &Login) -> Result<Self, NetError> {
-        let mut i = Self { c: Conn::new(with.connect(to)?), tag: 0, caps: Vec::new() };
+        let mut i = Self { c: Conn::new(with.connect(to)?), tag: 0, caps: Vec::new(), qresync: false };
         let preauth = match read(&mut i.c)? {
             Resp::Status { tag: None, kind: Kind::Ok, code, .. } => {
                 i.caps_from(code.as_deref());
@@ -408,7 +470,7 @@ impl Imap {
             }
             i.run(vec![Part::Text("STARTTLS".into())])?;
             let Self { c, tag, .. } = i;
-            i = Self { c: c.secure(with, to)?, tag, caps: Vec::new() };
+            i = Self { c: c.secure(with, to)?, tag, caps: Vec::new(), qresync: false };
             secure = true;
         }
         if !secure {
@@ -418,7 +480,34 @@ impl Imap {
             i.sign_in(login)?;
         }
         i.capability()?;
+        if i.has("QRESYNC") {
+            i.enable_qresync()?;
+        }
         Ok(i)
+    }
+
+    /// QRESYNC is turned on where the server has it; one that refuses leaves it off.
+    fn enable_qresync(&mut self) -> Result<(), NetError> {
+        let data = match self.run(vec![Part::Text("ENABLE QRESYNC".into())]) {
+            Ok((data, _)) => data,
+            Err(NetError::Refused(_)) => return Ok(()),
+            Err(NetError::Protocol(_)) if !self.has("ENABLE") => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        self.qresync = data.iter().any(|d| {
+            matches!(d, Resp::Data { name, rest, .. } if name == "ENABLED" && rest.iter().any(|t| t.atom().is_some_and(|a| a.eq_ignore_ascii_case("QRESYNC"))))
+        });
+        Ok(())
+    }
+
+    /// The server keeps a mod-sequence for every change ([RFC 7162] CONDSTORE).
+    pub fn has_modseqs(&self) -> bool {
+        self.qresync || self.has("CONDSTORE")
+    }
+
+    /// QRESYNC is on: a folder selected with what was known of it says what went since.
+    pub fn qresync(&self) -> bool {
+        self.qresync
     }
 
     fn caps_from(&mut self, code: Option<&str>) {
@@ -579,24 +668,81 @@ impl Imap {
     }
 
     pub fn select(&mut self, raw: &str) -> Result<Selected, NetError> {
-        let (data, code) = self.run(vec![Part::Text("SELECT ".into()), astring(raw.as_bytes())])?;
+        self.select_since(raw, None)
+    }
+
+    /// Select a folder; with its UIDVALIDITY and mod-sequence as last seen, where QRESYNC is on,
+    /// the server says too what went and what changed since ([RFC 7162] 3.2.5).
+    pub fn select_since(&mut self, raw: &str, known: Option<(u32, u64)>) -> Result<Selected, NetError> {
+        let mut parts = vec![Part::Text("SELECT ".into()), astring(raw.as_bytes())];
+        let resync = known.filter(|(v, m)| self.qresync && *v > 0 && *m > 0);
+        match resync {
+            Some((v, m)) => parts.push(Part::Text(format!(" (QRESYNC ({v} {m}))"))),
+            None if self.has("CONDSTORE") && !self.qresync => parts.push(Part::Text(" (CONDSTORE)".into())),
+            None => {}
+        }
+        let (data, code) = self.run(parts)?;
         let mut s = Selected { read_only: code.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("READ-ONLY")), ..Selected::default() };
+        let mut since = Since::default();
         for d in data {
             match d {
                 Resp::Data { number: Some(n), name, .. } if name == "EXISTS" => s.exists = n,
+                Resp::Data { name, rest, .. } if name == "VANISHED" => {
+                    let set = rest.iter().filter_map(Tok::atom).find(|a| !a.eq_ignore_ascii_case("(EARLIER)")).and_then(UidSet::parse);
+                    if !set.is_some_and(|set| since.vanished.add(set)) {
+                        since.too_much = true;
+                    }
+                }
                 Resp::Status { tag: None, kind: Kind::Ok, code: Some(code), .. } => {
                     let mut words = code.split_whitespace();
-                    let (key, value) = (words.next().unwrap_or_default().to_ascii_uppercase(), words.next().and_then(|v| v.parse::<u32>().ok()));
+                    let key = words.next().unwrap_or_default().to_ascii_uppercase();
+                    let value = words.next().and_then(|v| v.parse::<u64>().ok());
                     match key.as_str() {
-                        "UIDVALIDITY" => s.uid_validity = value,
-                        "UIDNEXT" => s.uid_next = value,
+                        "UIDVALIDITY" => s.uid_validity = value.and_then(|v| u32::try_from(v).ok()),
+                        "UIDNEXT" => s.uid_next = value.and_then(|v| u32::try_from(v).ok()),
+                        // A mod-sequence is at most 2^63 - 1 ([RFC 7162] 7).
+                        "HIGHESTMODSEQ" => s.highest_modseq = value.filter(|v| *v > 0 && *v < 1 << 63),
+                        "NOMODSEQ" => s.highest_modseq = None,
                         _ => {}
                     }
                 }
-                _ => {}
+                other => {
+                    if let Some(m) = summary_of(&other) {
+                        since.changed.push(m);
+                    }
+                }
             }
         }
+        if resync.is_some() {
+            since.changed.sort_by_key(|m| m.uid);
+            since.changed.dedup_by_key(|m| m.uid);
+            s.since = Some(since);
+        }
         Ok(s)
+    }
+
+    /// The messages of the selected folder whose flags changed after a mod-sequence, with their
+    /// flags now ([RFC 7162] 3.1.4.1).
+    pub fn changed_since(&mut self, modseq: u64) -> Result<Vec<Summary>, NetError> {
+        let (data, _) = self.run(vec![Part::Text(format!("UID FETCH 1:* (UID FLAGS) (CHANGEDSINCE {modseq})"))])?;
+        let mut out: Vec<Summary> = data.iter().filter_map(summary_of).collect();
+        out.sort_by_key(|m| m.uid);
+        out.dedup_by_key(|m| m.uid);
+        Ok(out)
+    }
+
+    /// Which of these ids the selected folder still has: what the server says went is made sure
+    /// of before a message goes here for it.
+    pub fn still_there(&mut self, uids: &[u32]) -> Result<std::collections::HashSet<u32>, NetError> {
+        let mut out = std::collections::HashSet::new();
+        for chunk in uids.chunks(500) {
+            let set: Vec<String> = chunk.iter().map(u32::to_string).collect();
+            let (data, _) = self.run(vec![Part::Text(format!("UID FETCH {} (UID)", set.join(",")))])?;
+            out.extend(
+                data.iter().filter_map(fetched).filter_map(|items| item(items, "UID").and_then(Tok::number)).filter_map(|u| u32::try_from(u).ok()),
+            );
+        }
+        Ok(out)
     }
 
     /// The messages of the selected folder from `from` on: id, flags and size.
@@ -795,6 +941,18 @@ fn keep(data: &mut Vec<Resp>, r: Resp) -> Result<(), NetError> {
     }
     data.push(r);
     Ok(())
+}
+
+/// A FETCH response as a message's id and flags, its size when it says it.
+fn summary_of(r: &Resp) -> Option<Summary> {
+    let items = fetched(r)?;
+    let uid = item(items, "UID").and_then(Tok::number).and_then(|u| u32::try_from(u).ok())?;
+    let flags = match item(items, "FLAGS") {
+        Some(Tok::List(f)) => f.iter().filter_map(|t| t.atom()).map(str::to_string).collect(),
+        _ => return None,
+    };
+    let size = item(items, "RFC822.SIZE").and_then(Tok::number).unwrap_or(0);
+    Some(Summary { uid, flags, size })
 }
 
 /// The items of a FETCH response.

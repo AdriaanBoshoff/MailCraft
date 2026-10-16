@@ -21,6 +21,38 @@ fn caps(state: &Mutex<State>, secure: bool, signed_in: bool) -> String {
     caps.join(" ")
 }
 
+/// A set of ids as a client sends it (`1,4:7,9:*`), `*` as the highest there is.
+fn set_of(text: &str) -> Vec<(u32, u32)> {
+    let n = |t: &str| if t == "*" { u32::MAX } else { t.parse().unwrap_or(0) };
+    text.split(',')
+        .map(|part| match part.split_once(':') {
+            Some((a, b)) => (n(a).min(n(b)), n(a).max(n(b))),
+            None => (n(part), n(part)),
+        })
+        .collect()
+}
+
+fn in_set(set: &[(u32, u32)], uid: u32) -> bool {
+    set.iter().any(|(lo, hi)| (*lo..=*hi).contains(&uid))
+}
+
+/// Ids as a server sends them, runs joined: `3,5:9`.
+fn runs(mut uids: Vec<u32>) -> String {
+    uids.sort_unstable();
+    let mut out: Vec<String> = Vec::new();
+    let mut at = 0;
+    while let Some(&lo) = uids.get(at) {
+        let mut hi = lo;
+        while uids.get(at + 1) == Some(&(hi + 1)) {
+            hi += 1;
+            at += 1;
+        }
+        out.push(if lo == hi { lo.to_string() } else { format!("{lo}:{hi}") });
+        at += 1;
+    }
+    out.join(",")
+}
+
 fn quoted(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -30,6 +62,8 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
     let mut secure = tls;
     let mut signed_in = false;
     let mut selected: Option<String> = None;
+    // QRESYNC turned on by ENABLE ([RFC 7162] 3.2.3): expunges are told as VANISHED.
+    let mut qresync = false;
     c.send(format!("* OK [CAPABILITY {}] fake IMAP\r\n", caps(state, secure, false)).as_bytes())?;
     loop {
         let raw = read_raw(&mut c, Some(b"+ go on\r\n"))?;
@@ -94,6 +128,16 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                 return Ok(());
             }
             _ if !signed_in => Err("NO sign in first".into()),
+            "ENABLE" => {
+                let has_qresync = lock(state).imap_caps.iter().any(|c| c == "QRESYNC");
+                if has_qresync && args.iter().any(|a| a.atom().is_some_and(|a| a.eq_ignore_ascii_case("QRESYNC"))) {
+                    qresync = true;
+                    out.push_str("* ENABLED QRESYNC\r\n");
+                } else {
+                    out.push_str("* ENABLED\r\n");
+                }
+                Ok("enabled".into())
+            }
             "LIST" => {
                 let s = lock(state);
                 for m in &s.mailboxes {
@@ -103,7 +147,16 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
             }
             "SELECT" | "EXAMINE" => {
                 let name = args.first().and_then(Tok::text).unwrap_or_default();
+                // `(QRESYNC (validity modseq))` after the name: what changed since, told now.
+                let since = match args.get(1) {
+                    Some(Tok::List(p)) if p.first().and_then(Tok::atom).is_some_and(|a| a.eq_ignore_ascii_case("QRESYNC")) => match p.get(1) {
+                        Some(Tok::List(q)) => q.first().and_then(Tok::number).zip(q.get(1).and_then(Tok::number)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
                 let mut s = lock(state);
+                let modseqs = s.imap_caps.iter().any(|c| c == "CONDSTORE" || c == "QRESYNC");
                 match s.mailbox(&name) {
                     Some(m) => {
                         out.push_str(&format!(
@@ -112,6 +165,24 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                             m.uid_validity,
                             m.uid_next
                         ));
+                        if modseqs {
+                            out.push_str(&format!("* OK [HIGHESTMODSEQ {}] changes\r\n", m.modseq));
+                        }
+                        if let Some((_, modseq)) = since.filter(|(v, _)| qresync && *v == u64::from(m.uid_validity)) {
+                            let gone: Vec<u32> = m.vanished.iter().filter(|(_, at)| *at > modseq).map(|(uid, _)| *uid).collect();
+                            if !gone.is_empty() {
+                                out.push_str(&format!("* VANISHED (EARLIER) {}\r\n", runs(gone)));
+                            }
+                            for (i, msg) in m.messages.iter().enumerate().filter(|(_, msg)| msg.modseq > modseq) {
+                                out.push_str(&format!(
+                                    "* {} FETCH (UID {} FLAGS ({}) MODSEQ ({}))\r\n",
+                                    i + 1,
+                                    msg.uid,
+                                    msg.flags.join(" "),
+                                    msg.modseq
+                                ));
+                            }
+                        }
                         selected = Some(m.name.clone());
                         Ok(if verb == "EXAMINE" { "[READ-ONLY] selected".into() } else { "[READ-WRITE] selected".into() })
                     }
@@ -124,17 +195,23 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                 let want_id = args.get(1).is_some_and(
                     |t| matches!(t, Tok::List(items) if items.iter().any(|i| i.atom().is_some_and(|a| a.starts_with("BODY.PEEK[HEADER.FIELDS")))),
                 );
+                // `(CHANGEDSINCE n)` after the items ([RFC 7162] 3.1.4).
+                let changed_since = match args.get(2) {
+                    Some(Tok::List(p)) if p.first().and_then(Tok::atom).is_some_and(|a| a.eq_ignore_ascii_case("CHANGEDSINCE")) => {
+                        p.get(1).and_then(Tok::number)
+                    }
+                    _ => None,
+                };
                 let mut s = lock(state);
                 let messages = selected.clone().and_then(|n| s.mailbox(&n).map(|m| m.messages.clone())).unwrap_or_default();
-                let (lo, hi) = match range.split_once(':') {
-                    Some((lo, "*")) => (lo.parse().unwrap_or(1), u32::MAX),
-                    Some((lo, hi)) => (lo.parse().unwrap_or(1), hi.parse().unwrap_or(0)),
-                    None => (range.parse().unwrap_or(0), range.parse().unwrap_or(0)),
-                };
-                let mut chosen: Vec<(usize, &super::Message)> = messages.iter().enumerate().filter(|(_, m)| m.uid >= lo && m.uid <= hi).collect();
+                let set = set_of(&range);
+                let mut chosen: Vec<(usize, &super::Message)> =
+                    messages.iter().enumerate().filter(|(_, m)| in_set(&set, m.uid) && changed_since.is_none_or(|n| m.modseq > n)).collect();
                 // `n:*` takes in the last message even when its id is below n.
                 if chosen.is_empty()
-                    && hi == u32::MAX
+                    && changed_since.is_none()
+                    && set.len() == 1
+                    && set.first().is_some_and(|(_, hi)| *hi == u32::MAX)
                     && let Some(last) = messages.len().checked_sub(1).and_then(|i| messages.get(i).map(|m| (i, m)))
                 {
                     chosen.push(last);
@@ -158,6 +235,10 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                         bytes.extend_from_slice(format!("* {} FETCH (UID {} BODY[] {{{}}}\r\n", i + 1, m.uid, m.data.len()).as_bytes());
                         bytes.extend_from_slice(&m.data);
                         bytes.extend_from_slice(b")\r\n");
+                    } else if changed_since.is_some() {
+                        bytes.extend_from_slice(
+                            format!("* {} FETCH (UID {} FLAGS ({}) MODSEQ ({}))\r\n", i + 1, m.uid, m.flags.join(" "), m.modseq).as_bytes(),
+                        );
                     } else {
                         bytes.extend_from_slice(
                             format!("* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {})\r\n", i + 1, m.uid, m.flags.join(" "), m.data.len()).as_bytes(),
@@ -176,16 +257,21 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                     _ => Vec::new(),
                 };
                 let mut s = lock(state);
-                if let Some(m) = selected.clone().and_then(|n| s.mailbox(&n)).and_then(|m| m.messages.iter_mut().find(|m| m.uid == id)) {
+                if let Some(mailbox) = selected.clone().and_then(|n| s.mailbox(&n))
+                    && let Some(m) = mailbox.messages.iter().find(|m| m.uid == id)
+                {
+                    let mut now = m.flags.clone();
                     if how.starts_with('+') {
                         for f in flags {
-                            if !m.flags.contains(&f) {
-                                m.flags.push(f);
+                            if !now.contains(&f) {
+                                now.push(f);
                             }
                         }
                     } else if how.starts_with('-') {
-                        m.flags.retain(|f| !flags.contains(f));
+                        now.retain(|f| !flags.contains(f));
                     }
+                    let now: Vec<&str> = now.iter().map(String::as_str).collect();
+                    mailbox.set_flags(id, &now);
                 }
                 Ok("stored".into())
             }
@@ -204,11 +290,8 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                         };
                         let code = format!("[COPYUID {validity} {id} {new}]");
                         if verb == "MOVE" {
-                            if let Some(m) = s.mailbox(&from) {
-                                if let Some(at) = m.messages.iter().position(|m| m.uid == id) {
-                                    out.push_str(&format!("* {} EXPUNGE\r\n", at + 1));
-                                }
-                                m.messages.retain(|m| m.uid != id);
+                            if let Some(at) = s.mailbox(&from).and_then(|m| m.remove(id)) {
+                                out.push_str(&if qresync { format!("* VANISHED {id}\r\n") } else { format!("* {at} EXPUNGE\r\n") });
                             }
                             out.insert_str(0, &format!("* OK {code} moved\r\n"));
                             Ok("moved".into())
@@ -225,19 +308,17 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                     uid.then(|| args.first().and_then(Tok::atom).unwrap_or_default().split(',').filter_map(|n| n.parse().ok()).collect());
                 let mut s = lock(state);
                 if let Some(m) = selected.clone().and_then(|n| s.mailbox(&n)) {
-                    let mut at = 0;
-                    let mut gone = Vec::new();
-                    m.messages.retain(|msg| {
-                        at += 1;
-                        let go = msg.flags.iter().any(|f| f == "\\Deleted") && only.as_ref().is_none_or(|o| o.contains(&msg.uid));
-                        if go {
-                            gone.push(at);
-                        }
-                        !go
-                    });
+                    let going: Vec<u32> = m
+                        .messages
+                        .iter()
+                        .filter(|msg| msg.flags.iter().any(|f| f == "\\Deleted") && only.as_ref().is_none_or(|o| o.contains(&msg.uid)))
+                        .map(|msg| msg.uid)
+                        .collect();
                     // Each number as it stands once those before it are gone.
-                    for (n, at) in gone.iter().enumerate() {
-                        out.push_str(&format!("* {} EXPUNGE\r\n", at - n));
+                    for uid in going {
+                        if let Some(at) = m.remove(uid) {
+                            out.push_str(&if qresync { format!("* VANISHED {uid}\r\n") } else { format!("* {at} EXPUNGE\r\n") });
+                        }
                     }
                 }
                 Ok("expunged".into())

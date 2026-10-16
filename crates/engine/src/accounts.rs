@@ -82,6 +82,22 @@ pub struct Received {
     /// been found there again by their Message-ID; until then nothing taken down earlier is put
     /// on the server as if it were new.
     pub matched: bool,
+    /// IMAP: each folder as it was when it was last kept in step, so that only what changed
+    /// since is asked for where the server keeps mod-sequences ([RFC 7162]).
+    pub steps: Vec<Step>,
+}
+
+/// An IMAP folder as it was when it was last kept in step with what is here.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Step {
+    /// The folder's name as the server knows it.
+    pub raw: String,
+    pub uid_validity: u32,
+    /// Its highest mod-sequence then: every change after it has a higher one.
+    pub modseq: u64,
+    /// How many messages it held, and the id the next would have.
+    pub exists: u64,
+    pub uid_next: u32,
 }
 
 /// A message of an IMAP folder that is to be deleted from the server.
@@ -115,16 +131,24 @@ fn kept_text(v: &Value, max: usize) -> Option<&str> {
 }
 
 impl Received {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         let folders: Vec<Value> =
             self.folders.iter().map(|m| json!({ "raw": m.raw, "uidValidity": m.uid_validity, "lastUid": m.last_uid })).collect();
         let gone: Vec<Value> = self.gone.iter().map(|g| json!({ "raw": g.raw, "uidValidity": g.uid_validity, "uid": g.uid })).collect();
+        // A mod-sequence may be past what a JSON number holds exactly: kept as text.
+        let steps: Vec<Value> = self
+            .steps
+            .iter()
+            .map(
+                |t| json!({ "raw": t.raw, "uidValidity": t.uid_validity, "modseq": t.modseq.to_string(), "exists": t.exists, "uidNext": t.uid_next }),
+            )
+            .collect();
         json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen, "into": self.into,
-                "folders": folders, "sentHere": self.sent_here, "gone": gone, "matched": self.matched })
+                "folders": folders, "sentHere": self.sent_here, "gone": gone, "matched": self.matched, "steps": steps })
     }
 
     /// As a settings file gives it: what makes no sense is left as nothing taken down yet.
-    fn from_json(v: Option<&Value>) -> Self {
+    pub(crate) fn from_json(v: Option<&Value>) -> Self {
         let Some(v) = v else { return Self::default() };
         let number = |v: &Value, key: &str| v.get(key).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
         let n = |key: &str| number(v, key);
@@ -160,14 +184,38 @@ impl Received {
                 gone.push(one);
             }
         }
+        let mut steps: Vec<Step> = Vec::new();
+        for t in v.get("steps").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_FOLDERS) {
+            let Some(raw) = t.get("raw").and_then(|r| kept_text(r, 1000)) else { continue };
+            let modseq = t.get("modseq").and_then(Value::as_str).and_then(|m| m.parse::<u64>().ok()).filter(|m| *m > 0 && *m < 1 << 63);
+            let (Some(modseq), uid_validity) = (modseq, number(t, "uidValidity")) else { continue };
+            if uid_validity > 0 && !steps.iter().any(|x| x.raw == raw) {
+                let exists = t.get("exists").and_then(Value::as_u64).unwrap_or(0);
+                steps.push(Step { raw: raw.to_string(), uid_validity, modseq, exists, uid_next: number(t, "uidNext") });
+            }
+        }
         let matched = v.get("matched").and_then(Value::as_bool).unwrap_or(false);
         let into = v.get("into").and_then(Value::as_str).filter(|p| p.len() <= 1024 && !p.chars().any(char::is_control)).unwrap_or_default();
-        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string(), folders, sent_here, gone, matched }
+        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string(), folders, sent_here, gone, matched, steps }
     }
 
     /// What was taken down into the data file `into`: nothing, when it went into another.
     pub fn kept_in(&self, into: &str) -> Self {
         if self.into == into { self.clone() } else { Self { into: into.to_string(), sent_here: self.sent_here.clone(), ..Self::default() } }
+    }
+
+    /// Where a folder was left when it was last kept in step.
+    pub fn step(&self, raw: &str) -> Option<&Step> {
+        self.steps.iter().find(|t| t.raw == raw)
+    }
+
+    /// Remember where a folder was left, in place of what was remembered of it.
+    pub fn stepped(&mut self, step: Step) {
+        if let Some(t) = self.steps.iter_mut().find(|t| t.raw == step.raw) {
+            *t = step;
+        } else if self.steps.len() < MAX_FOLDERS {
+            self.steps.push(step);
+        }
     }
 
     /// Remember that a message of the server is to be deleted there.

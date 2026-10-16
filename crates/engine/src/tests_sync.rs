@@ -352,3 +352,144 @@ fn a_flag_set_in_a_folder_written_empty_shows_in_the_list_after_a_save() {
     assert_eq!(flags(&mut s), [openmailclient_model::Flag::Flagged]);
     done(s, dir);
 }
+
+/// The commands a receive sent the server, from `from` on.
+fn heard_since(fake: &Fake, from: usize) -> Vec<String> {
+    fake.state().heard[from..].to_vec()
+}
+
+fn whole_lists(heard: &[String]) -> usize {
+    heard.iter().filter(|c| c.contains("UID FETCH 1:* (UID FLAGS RFC822.SIZE)")).count()
+}
+
+#[test]
+fn with_mod_sequences_only_what_changed_is_asked_for() {
+    for caps in [&["CONDSTORE"][..], &["CONDSTORE", "QRESYNC", "ENABLE"][..]] {
+        let qresync = caps.contains(&"QRESYNC");
+        let fake = Fake::default();
+        {
+            let mut state = fake.state();
+            state.imap_caps.extend(caps.iter().map(|c| c.to_string()));
+            for n in ["one", "two", "three", "four"] {
+                state.mailbox("INBOX").unwrap().add(&message(n), &[]);
+            }
+            state.mailbox("Sent").unwrap().add(&message("went"), &["\\Seen"]);
+        }
+        let (mut s, dir) = account(&fake, if qresync { "qresync" } else { "condstore" });
+        receive(&mut s);
+        assert_eq!(count(&s, "Inbox"), 4);
+        let steps = &s.accounts[0].received.steps;
+        assert!(steps.iter().any(|t| t.raw == "INBOX" && t.modseq > 0 && t.exists == 4), "{steps:?}");
+
+        // Nothing changed: each folder costs its SELECT, and no list is read.
+        let from = fake.state().heard.len();
+        let got = receive(&mut s);
+        let heard = heard_since(&fake, from);
+        assert_eq!(whole_lists(&heard), 0, "{heard:?}");
+        assert!(!heard.iter().any(|c| c.contains("CHANGEDSINCE")), "{heard:?}");
+        assert!(got["accounts"][0]["inStep"]["unchanged"].as_u64().unwrap() >= 2, "{got}");
+
+        // Flagged and read there, and one taken away there: only that is asked for, and comes.
+        {
+            let mut state = fake.state();
+            let inbox = state.mailbox("INBOX").unwrap();
+            inbox.set_flags(2, &["\\Flagged"]);
+            inbox.set_flags(3, &["\\Seen"]);
+            inbox.remove(4);
+        }
+        let from = fake.state().heard.len();
+        let got = receive(&mut s);
+        let heard = heard_since(&fake, from);
+        // Without QRESYNC nothing says what went; the count does not add up, so the whole list
+        // of the Inbox is read, and nothing is asked for first that it would tell again.
+        assert_eq!(whole_lists(&heard), usize::from(!qresync), "{heard:?}");
+        assert!(!heard.iter().any(|c| c.contains("CHANGEDSINCE")), "{heard:?}");
+        assert_eq!(heard.iter().any(|c| c.contains("(QRESYNC (")), qresync, "{heard:?}");
+        assert_eq!(got["accounts"][0]["inStep"]["changed"], 2, "{got}");
+        if qresync {
+            // What the server said went was made sure of before it went here.
+            assert!(heard.iter().any(|c| c.contains("UID FETCH 4 (UID)")), "{heard:?}");
+            assert_eq!(got["accounts"][0]["inStep"]["removed"], 1, "{got}");
+            assert_eq!(count(&s, "Inbox"), 3);
+        } else {
+            assert_eq!(count(&s, "Inbox"), 3, "{got}");
+        }
+        pick(&mut s, "Inbox", "two");
+        assert_eq!(s.open.as_ref().unwrap().flag(), openmailclient_model::Flag::Flagged);
+        s.select_folder(1, folder(&s, "Inbox")).unwrap();
+        assert!(s.rows.iter().find(|r| r.subject == "three").unwrap().read);
+
+        // New mail with a flag changed: the new one is taken down, the change comes, and no
+        // list of the whole folder is read, as the count adds up.
+        {
+            let mut state = fake.state();
+            let inbox = state.mailbox("INBOX").unwrap();
+            inbox.add(&message("five"), &[]);
+            inbox.set_flags(1, &["\\Seen"]);
+        }
+        let from = fake.state().heard.len();
+        let got = receive(&mut s);
+        let heard = heard_since(&fake, from);
+        assert_eq!(whole_lists(&heard), 0, "{heard:?}");
+        assert_eq!(heard.iter().any(|c| c.contains("CHANGEDSINCE")), !qresync, "{heard:?}");
+        assert_eq!((got["received"].as_u64(), got["accounts"][0]["inStep"]["changed"].as_u64()), (Some(1), Some(1)), "{got}");
+        assert_eq!(count(&s, "Inbox"), 4);
+
+        // A change made here goes there, and is not taken back as the server's next time.
+        pick(&mut s, "Inbox", "five");
+        s.run("mail.markRead", &Value::Null).unwrap();
+        receive(&mut s);
+        assert_eq!(flags(&fake, "INBOX", "five"), ["\\Seen"]);
+        let got = receive(&mut s);
+        assert_eq!(got["accounts"][0]["inStep"]["changed"], 0, "{got}");
+        done(s, dir);
+    }
+}
+
+#[test]
+fn a_server_that_says_a_message_went_that_is_still_there_is_not_believed() {
+    let fake = Fake::default();
+    {
+        let mut state = fake.state();
+        state.imap_caps.extend(["CONDSTORE", "QRESYNC", "ENABLE"].map(String::from));
+        for n in ["kept", "also kept"] {
+            state.mailbox("INBOX").unwrap().add(&message(n), &[]);
+        }
+    }
+    let (mut s, dir) = account(&fake, "vanished-wrongly");
+    receive(&mut s);
+    // The server names both as gone, and every id there might be, though it has them still.
+    {
+        let mut state = fake.state();
+        let inbox = state.mailbox("INBOX").unwrap();
+        inbox.modseq += 1;
+        let at = inbox.modseq;
+        inbox.vanished.extend([(1, at), (2, at), (3, at)]);
+    }
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["removed"], 0, "{got}");
+    assert_eq!(count(&s, "Inbox"), 2);
+    done(s, dir);
+}
+
+#[test]
+fn where_each_folder_was_left_is_kept_in_the_settings_and_nonsense_is_dropped() {
+    use crate::accounts::{Received, Step};
+    let mut r = Received::default();
+    r.stepped(Step { raw: "INBOX".into(), uid_validity: 7, modseq: 9_007_199_254_740_993, exists: 3, uid_next: 4 });
+    r.stepped(Step { raw: "INBOX".into(), uid_validity: 7, modseq: 9_007_199_254_740_995, exists: 3, uid_next: 4 });
+    let json = r.to_json();
+    assert_eq!(json["steps"][0]["modseq"], "9007199254740995", "a mod-sequence past what a JSON number holds is kept whole");
+    let back = Received::from_json(Some(&json));
+    assert_eq!(back.steps, r.steps);
+    for bad in [
+        json!({"raw": "INBOX", "uidValidity": 7, "modseq": "0"}),
+        json!({"raw": "INBOX", "uidValidity": 0, "modseq": "5"}),
+        json!({"raw": "", "uidValidity": 7, "modseq": "5"}),
+        json!({"raw": "INBOX", "uidValidity": 7, "modseq": "9223372036854775808"}),
+        json!({"raw": "INBOX", "uidValidity": 7, "modseq": 5}),
+    ] {
+        let r = Received::from_json(Some(&json!({ "steps": [bad] })));
+        assert!(r.steps.is_empty(), "{bad} was taken: {:?}", r.steps);
+    }
+}

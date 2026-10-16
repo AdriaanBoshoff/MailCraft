@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9) · revision 104 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12) · revision 105 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 441, all passing |
+| Tests | 447, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -140,7 +140,8 @@
 88. Done: New mail told of at the corner of the screen, with a sound of our own and the taskbar button, and Send/Receive on a timer (M4.9, `crates/engine/src/arrival.rs`, `crates/ui-egui/src/alert.rs`, `apps/openmailclient/src/chime.rs`).
 89. Done: Send/Receive's progress shown in a window of its own, with a way to stop one task or all (M4.9, `crates/engine/src/cmd/progress.rs`, `crates/ui-egui/src/progress.rs`).
 90. Done: Delay Delivery and Expires After on a message being sent: a held message waits in the Outbox and goes at its minute, an expired one is struck through (M4.9, `compose.delayDelivery`, `compose.expires`, `Session::send_receive_due`).
-91. Next: M4.12: only what changed fetched from an IMAP server (CONDSTORE, QRESYNC) and new mail told of as it comes (IDLE).
+91. Done: Only what changed is asked of an IMAP server that keeps mod-sequences: CONDSTORE's CHANGEDSINCE and QRESYNC's SELECT, what it says went made sure of before anything goes here (M4.12, `Imap::select_since`, `imap_sync::since`, `accounts::Step`).
+92. Next: M4.12: new mail told of as it comes (IDLE, RFC 2177).
 
 ## Do later (from M2)
 
@@ -236,7 +237,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
 | The IMAP server's other folders taken down into the account's own data file, as the server has them | done: M4.8 |
 | IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | done: M4.8 |
-| Only what changed fetched from an IMAP server (CONDSTORE and QRESYNC, RFC 7162), and new mail told of as it comes (IDLE, RFC 2177) | M4.12 |
+| Only what changed fetched from an IMAP server (CONDSTORE and QRESYNC, RFC 7162) | done: M4.12 |
+| New mail told of as it comes (IDLE, RFC 2177) | M4.12 |
 | IMAP folders renamed, moved and deleted here or on the server, each side following the other; Drafts kept on the server as they are written | M4.12 |
 | The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | M4.12 |
 | New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | done: M4.9 |
@@ -1859,3 +1861,20 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   with the reason; a time that has gone by, a day the month does not have, or an expiry before
   the message would go is refused when it is set, not found out later.
   3 tests.
+- **2026-10-15** - M4.12: only what changed fetched from an IMAP server (CONDSTORE, QRESYNC).
+  Each folder kept in step remembers where it was left: its UIDVALIDITY, its highest
+  mod-sequence, how many messages it held and the id the next would have. On a server with
+  CONDSTORE (RFC 7162) a Send/Receive selects each folder and, when nothing changed, asks
+  nothing more; when flags changed it asks only for the messages changed since
+  (UID FETCH ... (CHANGEDSINCE n)). With QRESYNC turned on (ENABLE QRESYNC), the SELECT itself
+  says which messages went and which changed, in one round trip. A server without either, or
+  one that says NOMODSEQ, is read in full as before. What is remembered is kept in the
+  settings, the mod-sequence as text since it may be past what a JSON number holds.
+  Better than the RFC asks: a message the server says went is asked for once more before
+  anything here is removed for it, so a server that names a message by mistake loses nothing;
+  without QRESYNC, nothing is taken as gone unless the count and the next id add up, and when
+  they do not the whole list is read before CHANGEDSINCE is asked for, not after; a folder is
+  remembered only after a pass that read all of it and changed nothing it could not, so a
+  stopped pass is never taken for one that ended; hostile sets of ids (`0`, `1:*` repeated a
+  hundred thousand times) and mod-sequences past 2^63 are refused, not trusted.
+  6 tests.

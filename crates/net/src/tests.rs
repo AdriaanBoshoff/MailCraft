@@ -342,6 +342,9 @@ fn hostile_servers_are_errors_never_panics() {
                     if let Ok(mut i) = Imap::open(&fake, to, &login()) {
                         let _ = i.folders();
                         let _ = i.select("INBOX");
+                        let _ = i.select_since("INBOX", Some((7, 3)));
+                        let _ = i.changed_since(1);
+                        let _ = i.still_there(&[1, 2]);
                         let _ = i.list(1);
                         let _ = i.fetch(1);
                     }
@@ -370,5 +373,75 @@ fn hostile_servers_are_errors_never_panics() {
     }
     for seed in 0..300 {
         let _ = imap::parse(&noise(seed, 200));
+    }
+}
+
+#[test]
+fn sets_of_ids_are_read_as_servers_write_them_and_nonsense_is_none() {
+    let set = imap::UidSet::parse("3,5:9,20:*").unwrap();
+    assert!([3, 5, 7, 9, 20, 4_000_000_000].iter().all(|u| set.contains(*u)));
+    assert!(![1, 4, 10, 19].iter().any(|u| set.contains(*u)));
+    // Written high to low is the same run.
+    assert!(imap::UidSet::parse("9:5").unwrap().contains(6));
+    for bad in ["", ",", "0", "1:0", "a", "1,,2", "-1", "1:2:3", "4294967296", "1 2", "*:x"] {
+        assert_eq!(imap::UidSet::parse(bad), None, "{bad:?}");
+    }
+    // A run of every id there is costs no more than one; more runs than are kept is none.
+    assert!(imap::UidSet::parse("1:4294967295").unwrap().contains(u32::MAX));
+    let many = vec!["1"; 100_001].join(",");
+    assert_eq!(imap::UidSet::parse(&many), None);
+}
+
+#[test]
+fn mod_sequences_are_read_and_qresync_says_what_went_and_changed() {
+    let mut state = State::default();
+    state.imap_caps.extend(["CONDSTORE", "QRESYNC", "ENABLE"].map(String::from));
+    if let Some(inbox) = state.mailbox("INBOX") {
+        for _ in 0..4 {
+            inbox.add(MESSAGE, &[]);
+        }
+    }
+    let fake = Fake::new(state);
+    let mut i = Imap::open(&fake, &Fake::endpoint(Protocol::Imap), &login()).unwrap();
+    assert!(i.qresync() && i.has_modseqs());
+    let first = i.select_since("INBOX", None).unwrap();
+    let at = first.highest_modseq.unwrap();
+    assert_eq!(first.since, None);
+    {
+        let mut state = fake.state();
+        let inbox = state.mailbox("INBOX").unwrap();
+        inbox.set_flags(2, &["\\Seen"]);
+        inbox.remove(3);
+    }
+    let again = i.select_since("INBOX", Some((first.uid_validity.unwrap(), at))).unwrap();
+    assert!(again.highest_modseq.unwrap() > at);
+    let since = again.since.unwrap();
+    assert!(since.vanished.contains(3) && !since.vanished.contains(2));
+    assert_eq!(since.changed.iter().map(|m| (m.uid, m.flags.clone())).collect::<Vec<_>>(), [(2, vec!["\\Seen".to_string()])]);
+    assert_eq!(i.still_there(&[1, 3, 4]).unwrap(), [1, 4].into_iter().collect());
+    assert!(i.changed_since(again.highest_modseq.unwrap()).unwrap().is_empty());
+    i.logout().unwrap();
+
+    // Where QRESYNC is not offered it is not turned on, and CONDSTORE is asked for by SELECT.
+    let mut state = State::default();
+    state.imap_caps.push("CONDSTORE".into());
+    let fake = Fake::new(state);
+    let mut i = Imap::open(&fake, &Fake::endpoint(Protocol::Imap), &login()).unwrap();
+    assert!(!i.qresync() && i.has_modseqs());
+    let s = i.select_since("INBOX", Some((7, 3))).unwrap();
+    assert!(s.highest_modseq.is_some() && s.since.is_none());
+    assert!(fake.state().heard.iter().any(|c| c.ends_with("SELECT \"INBOX\" (CONDSTORE)")));
+}
+
+#[test]
+fn mod_sequences_that_cannot_be_are_none() {
+    for (said, kept) in [("5", Some(5)), ("0", None), ("9223372036854775808", None), ("99999999999999999999999", None), ("-1", None), ("x", None)] {
+        let script = format!(
+            "* OK hi\r\nA0001 OK in\r\n* CAPABILITY IMAP4rev1 CONDSTORE\r\nA0002 OK caps\r\n* 3 EXISTS\r\n* OK [HIGHESTMODSEQ {said}] x\r\n* VANISHED (EARLIER) 0:{said}\r\nA0003 OK [READ-WRITE] in\r\n"
+        );
+        let fake = Fake::script(script.as_bytes());
+        let mut i = Imap::open(&fake, &tls(Protocol::Imap), &login()).unwrap();
+        let s = i.select_since("INBOX", Some((7, 3))).unwrap();
+        assert_eq!((s.exists, s.highest_modseq), (3, kept), "{said}");
     }
 }

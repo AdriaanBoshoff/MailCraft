@@ -16,7 +16,7 @@
 use super::account::Reach;
 use super::imap_sync::{self, Local, Map, Place, Synced};
 use super::{CommandSpec, p_bool};
-use crate::accounts::{Kind, MAX_FOLDERS, MAX_SEEN, Mark, Received};
+use crate::accounts::{Kind, MAX_FOLDERS, MAX_SEEN, Mark, Received, Step};
 use crate::jobs::Ended;
 use crate::{CmdResult, EngineError, Session};
 use openmailclient_model::{Attachment, Flag, FolderId, FolderKind, Item, MSGFLAG_READ, PropValue, pid};
@@ -55,7 +55,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "",
             group: "",
             shortcut: "",
-            params: r#"{"id": one account (every account when not given), "wait": false to receive on a thread of its own}; takes new mail down into the Inbox; returns {"received", "accounts": [{"id", "received", "waiting": what is left on the server for next time, "said": why it stopped, if it did}]}"#,
+            params: r#"{"id": one account (every account when not given), "wait": false to receive on a thread of its own}; takes new mail down into the Inbox; returns {"received", "accounts": [{"id", "received", "waiting": what is left on the server for next time, "said": why it stopped, if it did, "inStep": IMAP folders kept in step, with "unchanged" and "changesOnly": folders where the server's mod-sequences (CONDSTORE, QRESYNC) let only what changed be asked for}]}"#,
             enabled: has_accounts,
             run: receive,
         },
@@ -346,11 +346,12 @@ fn imap_into(t: &Taking, progress: &openmailclient_model::Progress, out: &mut To
         folders = Some(if out.synced.created.is_empty() { listed } else { imap.folders()? });
         map = Some(m);
     }
-    let inbox = imap.select("INBOX")?;
+    let sync = t.local.as_ref().zip(map.as_ref());
+    let step = sync.and(t.received.step("INBOX"));
+    let inbox = imap.select_since("INBOX", step.map(|s| (s.uid_validity, s.modseq)))?;
     out.uid_validity = inbox.uid_validity;
     let mut budget = Budget { messages: MAX_PER_RUN, bytes: 0 };
-    let sync = t.local.as_ref().zip(map.as_ref());
-    let whole = in_step(&mut imap, sync, "INBOX", &inbox, &mut out.synced)?;
+    let whole = in_step(&mut imap, sync, "INBOX", &inbox, step, &mut out.synced)?;
     let (got, waiting, passed) = take(
         &mut imap,
         &inbox,
@@ -377,22 +378,55 @@ fn imap_into(t: &Taking, progress: &openmailclient_model::Progress, out: &mut To
     imap.logout()
 }
 
-/// The selected folder's whole list, when keeping in step with the server wants it, with what
-/// the server did to the messages here taken from it.
+/// What the server did to the messages here taken from the selected folder. Where the server
+/// keeps mod-sequences and the folder was kept in step before (`was`), only what changed since
+/// is asked for; otherwise the folder's whole list is read, and given back for what is new.
 fn in_step(
     imap: &mut Imap,
     sync: Option<(&Local, &Map)>,
     raw: &str,
     selected: &Selected,
+    was: Option<&Step>,
     done: &mut Synced,
 ) -> Result<Option<Vec<Summary>>, NetError> {
     let Some((local, map)) = sync else { return Ok(None) };
+    // Where the folder is left now, where the server keeps mod-sequences.
+    let now = selected.highest_modseq.zip(selected.uid_validity).map(|(modseq, uid_validity)| Step {
+        raw: raw.to_string(),
+        uid_validity,
+        modseq,
+        exists: selected.exists,
+        uid_next: selected.uid_next.unwrap_or(0),
+    });
     if !imap_sync::wants_list(local, raw) {
+        // Nothing here is kept in step with it: what it is now is all there is to remember.
+        done.steps.extend(now);
+        return Ok(None);
+    }
+    let here = map.here(raw);
+    if let (Some(was), Some(now), Some(here)) = (was, &now, here)
+        && local.matched
+        && was.uid_validity == now.uid_validity
+        && was.modseq <= now.modseq
+        && let Some(delta) = imap_sync::since(imap, selected, was, now, local)?
+    {
+        if delta.changed.is_empty() && delta.gone.is_empty() && was.modseq == now.modseq {
+            done.unchanged += 1;
+        } else {
+            done.changes_only += 1;
+        }
+        imap_sync::pull_since(raw, here, now.uid_validity, &delta, local, done);
+        done.steps.push(now.clone());
         return Ok(None);
     }
     let listed = if selected.exists == 0 { Vec::new() } else { imap.list(1)? };
-    if let Some(here) = map.here(raw) {
-        imap_sync::pull(imap, raw, here, selected, &listed, local, done)?;
+    let whole = match here {
+        Some(here) => imap_sync::pull(imap, raw, here, selected, &listed, local, done)?,
+        None => false,
+    };
+    // Only a whole list leaves nothing that went unseen before the mod-sequence kept.
+    if whole {
+        done.steps.extend(now);
     }
     Ok(Some(listed))
 }
@@ -484,7 +518,8 @@ fn others_into(
             continue;
         }
         // A folder the server will not open now is passed over, and tried again next time.
-        let selected = match imap.select(&f.raw) {
+        let step = sync.and(t.received.step(&f.raw));
+        let selected = match imap.select_since(&f.raw, step.map(|s| (s.uid_validity, s.modseq))) {
             Ok(s) => s,
             Err(NetError::Refused(_)) => {
                 out.partial = true;
@@ -492,7 +527,7 @@ fn others_into(
             }
             Err(e) => return Err(e),
         };
-        let whole = in_step(imap, sync, &f.raw, &selected, &mut out.synced)?;
+        let whole = in_step(imap, sync, &f.raw, &selected, step, &mut out.synced)?;
         let mark = t.received.folders.iter().find(|m| m.raw == f.raw).cloned().unwrap_or_default();
         let (got, waiting, passed) =
             take(imap, &selected, mark.uid_validity, mark.last_uid, budget, progress, whole.as_deref(), sync.map(|(l, _)| l), &f.raw, &out.synced)?;
@@ -726,6 +761,7 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 sent_here: received.sent_here,
                 gone: received.gone,
                 matched: received.matched,
+                steps: received.steps,
                 ..Received::default()
             };
         }
@@ -825,6 +861,10 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 "changed": applied.changed,
                 "removed": applied.removed,
                 "created": t.synced.created,
+                // Folders that cost one SELECT, unchanged, and those of which only what changed
+                // was read, where the server keeps mod-sequences.
+                "unchanged": t.synced.unchanged,
+                "changesOnly": t.synced.changes_only,
             })),
             "said": trouble
         }));

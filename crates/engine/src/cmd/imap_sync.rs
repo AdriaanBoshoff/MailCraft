@@ -15,10 +15,17 @@
 //! goes from here only when the server's whole list of a folder, as many as it says the folder
 //! holds, lacks it. The first time, the messages taken down before they could know their place
 //! are found on the server by their Message-ID; none of them is put there anew.
+//!
+//! Where the server keeps a mod-sequence for every change (CONDSTORE and QRESYNC, [RFC 7162]),
+//! each folder remembers the one it was last kept in step at (`Step`): a folder that has not
+//! changed since costs its SELECT and nothing more, and one that has is asked only for what
+//! changed after it. That a message went is still made sure of before it goes here: a
+//! VANISHED the server sends is checked against the folder, and where the server says nothing
+//! of what went, the folder's count must add up or its whole list is read as before.
 
 use super::receive::{is_view, kind_of, path_of};
 use crate::Session;
-use crate::accounts::{Gone, Kind, Received};
+use crate::accounts::{Gone, Kind, Received, Step};
 use openmailclient_model::{Flag, FolderId, FolderKind, Item, ItemId, NameId, NamedKey, PropValue};
 use openmailclient_net::NetError;
 use openmailclient_net::imap::{Folder, Imap, Selected, Summary};
@@ -336,6 +343,11 @@ pub(super) struct Synced {
     pub pushed: usize,
     /// Folders made on the server.
     pub created: Vec<String>,
+    /// Where each folder kept in step was left, to start from next time.
+    pub steps: Vec<Step>,
+    /// Folders found unchanged since last time, and those of which only what changed was read.
+    pub unchanged: usize,
+    pub changes_only: usize,
 }
 
 /// A change the server has for an item here.
@@ -548,7 +560,8 @@ pub(super) fn wants_list(local: &Local, raw: &str) -> bool {
 }
 
 /// What was done on the server to a folder comes here: flags, and messages it no longer has.
-/// `listed` is the folder's whole list as the server gave it.
+/// `listed` is the folder's whole list as the server gave it. True when it was the whole list,
+/// so that nothing it lacks is still there.
 pub(super) fn pull(
     imap: &mut Imap,
     raw: &str,
@@ -557,11 +570,92 @@ pub(super) fn pull(
     listed: &[Summary],
     local: &Local,
     done: &mut Synced,
-) -> Result<(), NetError> {
-    let Some(v) = selected.uid_validity else { return Ok(()) };
+) -> Result<bool, NetError> {
+    let Some(v) = selected.uid_validity else { return Ok(false) };
     let on: HashMap<u32, &Summary> = listed.iter().map(|m| (m.uid, m)).collect();
     // The list is the folder's whole list only when it holds as many as the folder does.
     let whole = u64::try_from(listed.len()).is_ok_and(|n| n == selected.exists);
+    compare(raw, here, v, &on, |_| whole, local, done);
+    if !local.matched {
+        let upto = listed.iter().map(|m| m.uid).max().unwrap_or(0);
+        for (uid, message_id) in imap.message_ids(upto)? {
+            let Some(m) = on.get(&uid) else { continue };
+            done.found.push(Found {
+                raw: raw.to_string(),
+                here,
+                uid_validity: v,
+                uid,
+                message_id,
+                seen: has(m, "\\Seen"),
+                flagged: has(m, "\\Flagged"),
+            });
+        }
+    }
+    Ok(whole)
+}
+
+/// What changed in a folder since it was last kept in step, where the server keeps
+/// mod-sequences: the messages whose flags changed, and those that went, made sure of. None
+/// when what went is not known from what the server says, and the whole list is to be read.
+pub(super) fn since(imap: &mut Imap, selected: &Selected, was: &Step, now: &Step, local: &Local) -> Result<Option<Delta>, NetError> {
+    let counted = now.uid_next > 0 && was.uid_next > 0;
+    // Nothing changed: no flag, as the mod-sequence says, and nothing came or went, as the
+    // count and the next id say.
+    if counted && now.modseq == was.modseq && now.exists == was.exists && now.uid_next == was.uid_next {
+        return Ok(Some(Delta::default()));
+    }
+    let known: Vec<u32> = local
+        .items
+        .iter()
+        .filter_map(|i| match &i.place {
+            Some(Place::On { raw, uid_validity, uid, .. }) if *raw == now.raw && *uid_validity == now.uid_validity => Some(*uid),
+            _ => None,
+        })
+        .collect();
+    let gone = match selected.since.as_ref().filter(|s| !s.too_much) {
+        // The server said what went: what it named that is here is made sure of, as it may
+        // name ids that are still there by mistake.
+        Some(s) => {
+            let named: Vec<u32> = known.iter().copied().filter(|u| s.vanished.contains(*u)).collect();
+            if named.is_empty() {
+                HashSet::new()
+            } else {
+                let there = imap.still_there(&named)?;
+                named.into_iter().filter(|u| !there.contains(u)).collect()
+            }
+        }
+        // As many more as ids were given out since: none went. Otherwise it is not known.
+        None if counted && now.uid_next >= was.uid_next && now.exists == was.exists.saturating_add(u64::from(now.uid_next - was.uid_next)) => {
+            HashSet::new()
+        }
+        None => return Ok(None),
+    };
+    // Asked for only once it is known the whole list need not be read.
+    let changed = match &selected.since {
+        Some(s) => s.changed.clone(),
+        None if now.modseq == was.modseq => Vec::new(),
+        None => imap.changed_since(was.modseq)?,
+    };
+    Ok(Some(Delta { changed, gone }))
+}
+
+/// What changed in a folder since it was last kept in step.
+#[derive(Default)]
+pub(super) struct Delta {
+    pub changed: Vec<Summary>,
+    pub gone: HashSet<u32>,
+}
+
+/// What a folder's changes since it was last kept in step come to here.
+pub(super) fn pull_since(raw: &str, here: FolderId, uid_validity: u32, delta: &Delta, local: &Local, done: &mut Synced) {
+    let on: HashMap<u32, &Summary> = delta.changed.iter().map(|m| (m.uid, m)).collect();
+    compare(raw, here, uid_validity, &on, |uid| delta.gone.contains(&uid), local, done);
+}
+
+/// Each message here placed in a folder of the server, against that folder's messages `on`
+/// it: flags the server changed come here, and a message it lacks goes when `absent` says it
+/// is gone.
+fn compare(raw: &str, here: FolderId, v: u32, on: &HashMap<u32, &Summary>, absent: impl Fn(u32) -> bool, local: &Local, done: &mut Synced) {
     let touched: HashSet<ItemId> = done.placed.iter().map(|(_, id, _)| *id).collect();
     for i in &local.items {
         let Some(Place::On { raw: r, uid_validity, uid, seen, flagged }) = &i.place else { continue };
@@ -584,26 +678,10 @@ pub(super) fn pull(
                     place: Place::On { raw: raw.to_string(), uid_validity: v, uid: *uid, seen: s_seen, flagged: s_flagged },
                 });
             }
-            None if whole => done.removed.push((i.folder, i.id, *uid)),
+            None if absent(*uid) => done.removed.push((i.folder, i.id, *uid)),
             None => {}
         }
     }
-    if !local.matched {
-        let upto = listed.iter().map(|m| m.uid).max().unwrap_or(0);
-        for (uid, message_id) in imap.message_ids(upto)? {
-            let Some(m) = on.get(&uid) else { continue };
-            done.found.push(Found {
-                raw: raw.to_string(),
-                here,
-                uid_validity: v,
-                uid,
-                message_id,
-                seen: has(m, "\\Seen"),
-                flagged: has(m, "\\Flagged"),
-            });
-        }
-    }
-    Ok(())
 }
 
 /// What the session took in from keeping in step.
@@ -720,6 +798,13 @@ pub(super) fn apply(s: &mut Session, store: usize, local: &Local, done: &Synced,
         s.places.forget(&path, *folder, *id);
     }
     received.gone.retain(|g| !done.deleted.contains(g));
+    // Where each folder was left is kept only when all it came to was taken in: what was not
+    // is asked for again next time.
+    if out.why.is_none() {
+        for step in &done.steps {
+            received.stepped(step.clone());
+        }
+    }
     out
 }
 
