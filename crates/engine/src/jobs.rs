@@ -17,6 +17,8 @@ pub type Ended = Box<dyn FnOnce(&mut Session) -> (String, Value) + Send>;
 const MAX_FINISHED: usize = 20;
 
 pub struct Job {
+    /// Counted up from 1 over the run, so one can be named while others come and go.
+    pub id: u64,
     /// What it is doing, in words.
     pub what: String,
     pub progress: Arc<Progress>,
@@ -59,8 +61,17 @@ impl Session {
             })
             .map_err(|_| EngineError::Format("no thread could be had for this; ask again with \"wait\": true".into()))?;
         self.status = format!("{what}…");
-        self.jobs.push(Job { what: what.clone(), progress, done });
+        self.job_seq = self.job_seq.saturating_add(1);
+        self.jobs.push(Job { id: self.job_seq, what: what.clone(), progress, done });
         Ok(json!({ "started": true, "job": what }))
+    }
+
+    /// Keep what came of a piece of work that ended, the newest last.
+    pub(crate) fn ended(&mut self, what: Value) {
+        self.finished.push(what);
+        if self.finished.len() > MAX_FINISHED {
+            self.finished.remove(0);
+        }
     }
 
     /// Take what the jobs that are done found; with `wait`, wait for every one first. True
@@ -89,12 +100,47 @@ impl Session {
             let job = self.jobs.remove(at);
             ended = true;
             let (status, value) = step(self);
-            self.status = status;
-            self.finished.push(json!({ "job": job.what, "result": value }));
-            if self.finished.len() > MAX_FINISHED {
-                self.finished.remove(0);
-            }
+            let ok = value.get("ok").and_then(Value::as_bool) != Some(false) && !job.progress.stopped();
+            self.status = status.clone();
+            self.ended(json!({ "job": job.what, "result": value, "said": status, "ok": ok, "stopped": job.progress.stopped() }));
         }
         ended
+    }
+}
+
+/// Work that runs, as Show Progress lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Running {
+    /// "job-N", "save-N" (the data file's place) or "export-N" (its place in the list).
+    pub id: String,
+    pub what: String,
+    /// From 0 to 1; 0 while it is not known how much there is.
+    pub done: f32,
+    /// Asked to stop, and stopping at the next step it comes to.
+    pub stopping: bool,
+}
+
+impl Session {
+    /// Everything that runs on a thread of its own, the oldest first.
+    pub fn running(&self) -> Vec<Running> {
+        let saves = self.saves.iter().map(|s| Running {
+            id: format!("save-{}", s.store),
+            what: format!("Saving {}", s.name),
+            done: s.progress.fraction().clamp(0.0, 1.0),
+            stopping: s.progress.stopped(),
+        });
+        let exports = self.exports.iter().enumerate().map(|(i, e)| Running {
+            id: format!("export-{i}"),
+            what: format!("Exporting to {}", e.to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+            done: e.progress.fraction().clamp(0.0, 1.0),
+            stopping: e.progress.stopped(),
+        });
+        let jobs = self.jobs.iter().map(|j| Running {
+            id: format!("job-{}", j.id),
+            what: j.what.clone(),
+            done: j.progress.fraction().clamp(0.0, 1.0),
+            stopping: j.progress.stopped(),
+        });
+        saves.chain(exports).chain(jobs).collect()
     }
 }

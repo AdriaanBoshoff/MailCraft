@@ -51,7 +51,7 @@ pub const FEATURES: &[Feature] = &[
     f("Mail", "Send / Receive", "Send & Receive", "Send/Receive Groups", "mail.sendReceiveEvery"),
     f("Mail", "Send / Receive", "Send & Receive", "Update Folder", ""),
     f("Mail", "Send / Receive", "Send & Receive", "Send All", "mail.sendAll"),
-    f("Mail", "Send / Receive", "Download", "Show Progress", ""),
+    f("Mail", "Send / Receive", "Download", "Show Progress", "mail.showProgress"),
     f("Mail", "Send / Receive", "Preferences", "Work Offline", ""),
     // Mail: Folder
     f("Mail", "Folder", "New", "New Folder", "folder.new"),

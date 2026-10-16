@@ -15,6 +15,7 @@ mod line_edit;
 mod panes;
 mod pictures;
 mod preview;
+mod progress;
 mod ribbon;
 pub mod theme;
 
@@ -118,6 +119,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         id: "ui.accountSettings",
         label: "Account Settings…",
         params: r#"{"id": the account to show (the first when not given), "new": true for a new one}; the window adds, changes, tests and removes accounts through the account.* commands"#,
+    },
+    UiCommand {
+        id: "ui.showProgress",
+        label: "Show Progress",
+        params: r#"{"open": true or false (default: the other way)}; a window lists what runs, how far each is, Cancel Task and Cancel All (mail.cancelTask), when Send/Receive comes next and what came of what ended (mail.showProgress)"#,
     },
     UiCommand { id: "ui.prompt", label: "Ask for a Name", params: r#"{"command": "folder.new" | "folder.rename"}"# },
     UiCommand {
@@ -263,6 +269,8 @@ pub struct MailUi {
     pub(crate) alert: Option<alert::Shown>,
     /// Times the host is to play the new-mail sound (`take_chimes`).
     chimes: u32,
+    /// The Send/Receive Progress window is open (`ui.showProgress`).
+    pub(crate) progress_open: bool,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -465,6 +473,7 @@ impl MailUi {
             told_seq: 0,
             alert: None,
             chimes: 0,
+            progress_open: false,
         }
     }
 
@@ -709,6 +718,13 @@ impl MailUi {
                     self.collapsed.insert(key);
                 }
             }
+            "ui.showProgress" => {
+                self.progress_open = match params.get("open") {
+                    None | Some(Value::Null) => !self.progress_open,
+                    Some(Value::Bool(open)) => *open,
+                    Some(_) => return Err("\"open\" is true or false".to_string()),
+                };
+            }
             "ui.accountSettings" => {
                 let new = params.get("new").and_then(Value::as_bool) == Some(true);
                 self.open_accounts(text("id"), new)?;
@@ -898,6 +914,7 @@ impl MailUi {
         self.link_window(&ctx);
         self.attachment_window(&ctx);
         self.preview_window(&ctx);
+        self.progress_window(&ctx);
         self.alert_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
@@ -1114,9 +1131,14 @@ impl MailUi {
         };
         let right_w = text_width(&p, right, font(11.5));
         p.text(pos2(rect.right() - 10.0, rect.center().y), Align2::RIGHT_CENTER, right, font(11.5), t.bar_text);
+        let mut show_progress = false;
         if let Some((what, done)) = s.working() {
-            // A save or an export that runs: what it is, a bar that fills, and how far it is.
-            x += clip_text(&p, pos2(x, y), 220.0, &what, font(11.5), t.bar_text) + 8.0;
+            // A save or an export that runs: what it is, a bar that fills, and how far it is;
+            // a click on its words shows everything that runs.
+            let w = clip_text(&p, pos2(x, y), 220.0, &what, font(11.5), t.bar_text);
+            let words = Rect::from_min_size(pos2(x - 4.0, rect.top()), vec2(w + 8.0, rect.height()));
+            show_progress = ui.interact(words, egui::Id::new("status-progress"), Sense::click()).on_hover_text("Show Progress").clicked();
+            x += w + 8.0;
             let track = Rect::from_min_size(pos2(x, rect.center().y - 3.0), vec2(120.0, 6.0));
             p.rect_filled(track, 3.0, t.bar_text.gamma_multiply(0.25));
             p.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * done, track.height())), 3.0, t.bar_text);
@@ -1136,6 +1158,9 @@ impl MailUi {
         clip_text(&p, pos2(x, y), rect.right() - right_w - 30.0 - x, &s.status, font(11.5), t.bar_text);
         if stop {
             let _ = self.session.run("file.stopSave", &Value::Null);
+        }
+        if show_progress {
+            self.progress_open = true;
         }
         if open_new {
             self.alert = None;

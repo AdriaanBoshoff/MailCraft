@@ -10,6 +10,7 @@ pub(crate) mod imap_sync;
 mod link;
 mod mail;
 mod picture;
+mod progress;
 mod receive;
 mod send;
 pub(crate) mod settings;
@@ -51,6 +52,7 @@ pub fn registry() -> &'static [CommandSpec] {
         v.extend(send::commands());
         v.extend(receive::commands());
         v.extend(arrival::commands());
+        v.extend(progress::commands());
         v
     })
 }

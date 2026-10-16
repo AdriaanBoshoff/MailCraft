@@ -52,16 +52,19 @@ const HOME: &[Group] = &[
     ("Find", &[small(Icon::Filter, "Filter Unread", "view.filterUnread"), small(Icon::People, "Address Book", "")]),
 ];
 
-const SEND_RECEIVE: &[Group] = &[(
-    "Send & Receive",
-    &[
-        with(big(Icon::Sync, "Send/Receive\nAll Folders", "mail.sendReceive"), r#"{"wait":false}"#),
-        small(Icon::Sync, "Update Folder", ""),
-        small(Icon::Sort, "Send/Receive Groups", "menu:groups"),
-        with(small(Icon::Send, "Send All", "mail.sendAll"), r#"{"wait":false}"#),
-        small(Icon::People, "Account Settings", "ui.accountSettings"),
-    ],
-)];
+const SEND_RECEIVE: &[Group] = &[
+    (
+        "Send & Receive",
+        &[
+            with(big(Icon::Sync, "Send/Receive\nAll Folders", "mail.sendReceive"), r#"{"wait":false}"#),
+            small(Icon::Sync, "Update Folder", ""),
+            small(Icon::Sort, "Send/Receive Groups", "menu:groups"),
+            with(small(Icon::Send, "Send All", "mail.sendAll"), r#"{"wait":false}"#),
+            small(Icon::People, "Account Settings", "ui.accountSettings"),
+        ],
+    ),
+    ("Download", &[small(Icon::Sync, "Show Progress", "ui.showProgress")]),
+];
 
 const FOLDER: &[Group] = &[
     ("New", &[with(big(Icon::NewFolder, "New\nFolder", "ui.prompt"), r#"{"command":"folder.new"}"#)]),

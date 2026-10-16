@@ -261,6 +261,8 @@ pub struct Session {
     pub certificates: accounts::Shown,
     /// Work done on a thread of its own, such as talking to a server (`jobs`).
     pub jobs: Vec<jobs::Job>,
+    /// The last `Job::id` given.
+    pub(crate) job_seq: u64,
     /// What the jobs that ended last came to, the newest last.
     pub finished: Vec<Value>,
     /// The Outbox is to be sent again once the send under way ends: more was put in it.
@@ -352,6 +354,7 @@ impl Session {
             vault: std::sync::Arc::new(openmailclient_net::MemoryVault::default()),
             connector: None,
             jobs: Vec::new(),
+            job_seq: 0,
             finished: Vec::new(),
             send_again: false,
             saves: Vec::new(),
@@ -800,11 +803,15 @@ impl Session {
                 // The work tried both ways of writing the mailbox: what it says is how it is.
                 Err(e) => Err(e),
             };
+            let ok = done.is_ok();
             self.status = match done {
                 Ok(saved) => saved.says(&to),
                 Err(_) if export.progress.stopped() => format!("The export to {} was stopped; nothing was written there", to.display()),
                 Err(e) => format!("Nothing was exported to {}: {e}", to.display()),
             };
+            let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let said = self.status.clone();
+            self.ended(json!({ "job": format!("Exporting to {name}"), "said": said, "ok": ok, "stopped": export.progress.stopped() }));
         }
         ended
     }
@@ -844,8 +851,10 @@ impl Session {
             ended = true;
             let Some(store) = self.stores.get_mut(saving.store) else { continue };
             let alone = if saving.auto { " on its own" } else { "" };
+            let mut ok = false;
             self.status = match store.save_end(done) {
                 Ok(()) => {
+                    ok = true;
                     if let Some(path) = store.path() {
                         self.auto.saved_here.insert(path.to_path_buf());
                     }
@@ -855,6 +864,8 @@ impl Session {
                 Err(_) if saving.progress.stopped() => format!("Saving {} was stopped; its changes are still unsaved", saving.name),
                 Err(e) => format!("{} was not saved{alone}: {e}", saving.name),
             };
+            let said = self.status.clone();
+            self.ended(json!({ "job": format!("Saving {}", saving.name), "said": said, "ok": ok, "stopped": saving.progress.stopped() }));
             self.refresh_folders(saving.store);
         }
         ended

@@ -148,3 +148,35 @@ fn send_receive_comes_on_its_own_counted_from_the_end_of_the_last() {
     let mut none = Session::new();
     assert_eq!(none.send_receive_due(0), None);
 }
+
+#[test]
+fn show_progress_lists_what_runs_stops_one_and_keeps_what_came_of_it() {
+    let fake = Fake::default();
+    let mut s = with(&fake, "imap");
+    let shown = s.run("mail.showProgress", &Value::Null).unwrap();
+    assert_eq!(shown["running"], json!([]));
+    assert!(s.run("mail.cancelTask", &Value::Null).is_err(), "nothing to cancel");
+
+    s.run("mail.sendReceive", &json!({ "wait": false })).unwrap();
+    let shown = s.run("mail.showProgress", &Value::Null).unwrap();
+    let running = shown["running"].as_array().unwrap();
+    assert_eq!(running.len(), 1, "{shown}");
+    let id = running[0]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("job-") && running[0]["what"].as_str().unwrap().contains("Receiving"), "{shown}");
+    assert!(s.run("mail.cancelTask", &json!({ "id": "job-999" })).is_err());
+    assert!(s.run("mail.cancelTask", &json!({ "id": 3 })).is_err());
+    assert_eq!(s.run("mail.cancelTask", &json!({ "id": id })).unwrap()["stopping"], 1);
+    assert!(s.running()[0].stopping);
+    s.finish_saves();
+
+    let shown = s.run("mail.showProgress", &Value::Null).unwrap();
+    assert_eq!(shown["running"], json!([]));
+    let last = shown["finished"].as_array().unwrap().last().unwrap().clone();
+    assert!(last["job"].as_str().unwrap().contains("Receiving") && last["said"].is_string(), "{last}");
+    assert_eq!(last["stopped"], true);
+
+    // When Send/Receive comes next, once the host has asked.
+    assert_eq!(s.run("mail.showProgress", &Value::Null).unwrap()["nextSendReceiveInSeconds"], Value::Null);
+    s.send_receive_due(10_000);
+    assert_eq!(s.run("mail.showProgress", &Value::Null).unwrap()["nextSendReceiveInSeconds"], 5);
+}

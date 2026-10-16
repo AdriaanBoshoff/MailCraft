@@ -121,6 +121,8 @@ pub(crate) struct Timer {
     next: Option<u64>,
     /// The minutes it was counting for, so a change starts it again.
     every: u32,
+    /// The host's clock when it last asked.
+    asked: u64,
 }
 
 /// The messages that came in this run and were not told of or opened yet, the newest last.
@@ -166,12 +168,22 @@ impl Arrivals {
 }
 
 impl Session {
+    /// How long until the next Send/Receive on its own, in milliseconds, as of the host's last
+    /// asking; `None` when none is waited for.
+    pub fn send_receive_next_in(&self) -> Option<u64> {
+        if self.send_receive_min == 0 || self.accounts.is_empty() || self.connector.is_none() {
+            return None;
+        }
+        self.timer.next.map(|next| next.saturating_sub(self.timer.asked))
+    }
+
     /// Make a Send/Receive when `send_receive_min` minutes have gone by since the end of the
     /// last one; the first comes a few seconds after the host first asks. Nothing is begun while
     /// one is under way, while a data file is being saved, or where there is no account or
     /// nothing to reach servers with. `now_ms` is the host's clock, which only goes forward.
     /// Returns in how many milliseconds to ask again, `None` while there is nothing to wait for.
     pub fn send_receive_due(&mut self, now_ms: u64) -> Option<u64> {
+        self.timer.asked = now_ms;
         let busy = self.jobs.iter().any(|j| j.what.starts_with(crate::cmd::RECEIVING) || j.what.starts_with(crate::cmd::SENDING));
         if self.send_receive_min == 0 || self.accounts.is_empty() || self.connector.is_none() {
             self.timer.next = None;

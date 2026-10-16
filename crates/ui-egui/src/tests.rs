@@ -1992,3 +1992,37 @@ fn new_mail_is_told_of_at_the_corner_and_a_click_opens_it() {
     frame(&mut ui, &ctx, Vec::new(), None);
     assert!(fake.state().submitted.is_empty(), "nothing was sent");
 }
+
+#[test]
+fn show_progress_lists_what_runs_and_cancels_it() {
+    let fake = openmailclient_net::fake::Fake::default();
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(fake.clone()));
+    let account = json!({
+        "email": "pat@example.test", "kind": "imap", "name": "Work",
+        "incoming": { "host": "mail.example.test", "security": "starttls" },
+        "password": "not a real password",
+    });
+    ui.execute("account.add", &account).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    assert!(ui.execute("ui.showProgress", &json!({ "open": "yes" })).is_err());
+    ui.execute("ui.showProgress", &Value::Null).unwrap();
+    for _ in 0..3 {
+        frame(&mut ui, &ctx, Vec::new(), None);
+    }
+    assert!(ui.progress_open);
+    // Nothing runs: the window says so, and what ended is listed once something has.
+    ui.execute("mail.sendReceive", &json!({ "wait": false })).unwrap();
+    assert_eq!(ui.session.running().len(), 1);
+    frame(&mut ui, &ctx, Vec::new(), None);
+    ui.session.finish_saves();
+    frame(&mut ui, &ctx, Vec::new(), None);
+    assert!(ui.session.running().is_empty());
+    assert!(ui.session.finished.last().is_some_and(|f| f["said"].is_string()));
+    // Closed by command; the mailbox is as it was.
+    ui.execute("ui.showProgress", &json!({ "open": false })).unwrap();
+    frame(&mut ui, &ctx, Vec::new(), None);
+    assert!(!ui.progress_open);
+    assert!(fake.state().submitted.is_empty());
+}

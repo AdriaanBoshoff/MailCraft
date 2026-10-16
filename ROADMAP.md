@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9) · revision 102 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9) · revision 103 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 436, all passing |
+| Tests | 438, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -138,7 +138,8 @@
 86. Done: IMAP kept in step both ways: read, flagged, moved and deleted messages, and messages put into the account from elsewhere, go to the server, and what was done there comes here (M4.8, `cmd/imap_sync.rs`, `Place`).
 87. Done: A server's own certificate trusted on the owner's word: shown whole, trusted for that server only and only while it shows exactly that one (M4.9, `crates/net/src/cert.rs`, `account.trustCertificate`); buttons with room round their words, an outline and rounded corners.
 88. Done: New mail told of at the corner of the screen, with a sound of our own and the taskbar button, and Send/Receive on a timer (M4.9, `crates/engine/src/arrival.rs`, `crates/ui-egui/src/alert.rs`, `apps/openmailclient/src/chime.rs`).
-89. Next: M4.9: Show Progress, Delay Delivery and Expires After.
+89. Done: Send/Receive's progress shown in a window of its own, with a way to stop one task or all (M4.9, `crates/engine/src/cmd/progress.rs`, `crates/ui-egui/src/progress.rs`).
+90. Next: M4.9: Delay Delivery and Expires After.
 
 ## Do later (from M2)
 
@@ -238,7 +239,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | IMAP folders renamed, moved and deleted here or on the server, each side following the other; Drafts kept on the server as they are written | M4.12 |
 | The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | M4.12 |
 | New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | done: M4.9 |
-| Send/Receive's progress shown in a window of its own (Show Progress) | M4.9, after the live check |
+| Send/Receive's progress shown in a window of its own (Show Progress) | done: M4.9 |
 | Delay Delivery and Expires After on a message being sent, and a send held until a time | M4.9, with the window's message options |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
@@ -1824,3 +1825,18 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   line that shortens while it stands. What the alert and the commands show of a message is a
   stranger's text: it is marked as such and never acted on.
   6 tests.
+- **2026-10-15** - M4.9: Show Progress.
+  Everything that runs on a thread of its own (sending, receiving, testing an account, saving,
+  exporting) is listed in the Send/Receive Progress window (Send / Receive, Download, Show
+  Progress, or a click on the status bar's working words), each with its name and a bar of how
+  far it is, a moving piece while that is not yet known, and Cancel Task; Cancel All stops them
+  all. Stopping comes at the next step: what was done by then is kept, a data file being saved
+  stays as it was with its changes unsaved, and a file being exported to is not written. The
+  window says when Send/Receive comes on its own next, and lists what came of the last pieces
+  of work, the newest first: done, failed, or stopped. The same is there for agents and the
+  CLI as `mail.showProgress` and `mail.cancelTask`.
+  Better than Outlook: saving and exporting are listed and stopped there too, not only
+  Send/Receive; what ended stays listed with what came of it instead of vanishing, and a stopped
+  one says it stopped and that what was done is kept; the window stands beside the mailbox,
+  which stays in use while it is open.
+  2 tests.
