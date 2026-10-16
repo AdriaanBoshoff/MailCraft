@@ -157,8 +157,34 @@ pub struct Login {
 }
 
 /// Bytes both ways to a server.
-pub trait Stream: Read + Write + Send {}
-impl<T: Read + Write + Send> Stream for T {}
+pub trait Stream: Read + Write + Send {
+    /// How long a read waits before it times out, from now on; what it waited before, where
+    /// the stream can say. A folder watched with IDLE is read a second at a time, so that
+    /// watching can be stopped, and then read as before.
+    fn set_wait(&mut self, _wait: std::time::Duration) -> std::io::Result<Option<std::time::Duration>> {
+        Ok(None)
+    }
+}
+
+impl Stream for std::net::TcpStream {
+    fn set_wait(&mut self, wait: std::time::Duration) -> std::io::Result<Option<std::time::Duration>> {
+        let was = self.read_timeout()?;
+        self.set_read_timeout(Some(wait))?;
+        Ok(was)
+    }
+}
+
+impl Stream for End {
+    fn set_wait(&mut self, wait: std::time::Duration) -> std::io::Result<Option<std::time::Duration>> {
+        Ok(Some(End::set_wait(self, wait)))
+    }
+}
+
+impl Stream for Box<dyn Stream> {
+    fn set_wait(&mut self, wait: std::time::Duration) -> std::io::Result<Option<std::time::Duration>> {
+        (**self).set_wait(wait)
+    }
+}
 
 /// Opens connections, and makes a plain one secure.
 pub trait Connector: Send + Sync {

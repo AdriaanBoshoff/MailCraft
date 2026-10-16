@@ -17,6 +17,7 @@ pub(crate) mod settings;
 mod view;
 
 use crate::{CmdResult, EngineError, Session};
+pub(crate) use account::Reach;
 pub(crate) use receive::RECEIVING;
 pub(crate) use send::{SENDING, clock, held_in_outbox};
 use serde_json::Value;

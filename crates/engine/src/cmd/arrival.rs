@@ -22,6 +22,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: every,
         },
         CommandSpec {
+            id: "mail.newMailAsItComes",
+            label: "New Mail as It Arrives",
+            tab: "Send / Receive",
+            group: "Send & Receive",
+            shortcut: "",
+            params: r#"{"on": true or false}; default: off when on and on when off. On, as it is at first, the Inbox of each IMAP account whose server offers IDLE is watched on a connection of its own, without changing anything on the server, and mail is received from it the moment the server says it came; a lost connection is made again. Kept with the settings; returns {"on", "watching": [{"account", "said"}]}"#,
+            enabled: always,
+            run: as_it_comes,
+        },
+        CommandSpec {
             id: "mail.newMailAlerts",
             label: "New Mail Alerts",
             tab: "",
@@ -69,6 +79,23 @@ fn every(s: &mut Session, p: &Value) -> CmdResult {
         m => format!("Mail is sent and received every {m} minutes"),
     };
     Ok(json!({ "minutes": s.send_receive_min }))
+}
+
+fn as_it_comes(s: &mut Session, p: &Value) -> CmdResult {
+    s.new_mail_as_it_comes = match p.get("on") {
+        None | Some(Value::Null) => !s.new_mail_as_it_comes,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(EngineError::BadParams("\"on\" is true or false".into())),
+    };
+    // Watches begin or end now, not at the host's next asking.
+    let _ = s.watch_due();
+    s.status = if s.new_mail_as_it_comes {
+        "New mail comes as it arrives, where the server tells of it".to_string()
+    } else {
+        "New mail comes only at Send/Receive".to_string()
+    };
+    let watching: Vec<Value> = s.watching().into_iter().map(|(account, said)| json!({ "account": account, "said": said })).collect();
+    Ok(json!({ "on": s.new_mail_as_it_comes, "watching": watching }))
 }
 
 fn alerts(s: &mut Session, p: &Value) -> CmdResult {

@@ -385,6 +385,32 @@ pub struct Since {
     pub too_much: bool,
 }
 
+/// What a folder watched with IDLE said ([RFC 2177]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Woke {
+    /// How many messages it holds now, when it said so.
+    pub exists: Option<u64>,
+    /// A message came, went or had its flags changed.
+    pub changed: bool,
+}
+
+impl Woke {
+    fn hear(&mut self, r: &Resp) {
+        match r {
+            Resp::Data { number: Some(n), name, .. } if name == "EXISTS" => {
+                self.exists = Some(*n);
+                self.changed = true;
+            }
+            Resp::Data { name, .. } if matches!(name.as_str(), "EXPUNGE" | "FETCH" | "VANISHED") => self.changed = true,
+            _ => {}
+        }
+    }
+}
+
+/// Responses heard while watching that change nothing, before the server is taken to be
+/// saying nonsense.
+const MAX_IDLE_CHATTER: usize = 10_000;
+
 /// A set of message ids as a server writes it, `3,5:9,20:*`, kept as its runs: a run of four
 /// thousand million ids takes no more room than one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -674,7 +700,17 @@ impl Imap {
     /// Select a folder; with its UIDVALIDITY and mod-sequence as last seen, where QRESYNC is on,
     /// the server says too what went and what changed since ([RFC 7162] 3.2.5).
     pub fn select_since(&mut self, raw: &str, known: Option<(u32, u64)>) -> Result<Selected, NetError> {
-        let mut parts = vec![Part::Text("SELECT ".into()), astring(raw.as_bytes())];
+        self.open_folder("SELECT ", raw, known)
+    }
+
+    /// Open a folder only to look at it: nothing in it changes for being looked at, not even
+    /// which messages are new ([RFC 9051] 6.3.3).
+    pub fn examine(&mut self, raw: &str) -> Result<Selected, NetError> {
+        self.open_folder("EXAMINE ", raw, None)
+    }
+
+    fn open_folder(&mut self, verb: &str, raw: &str, known: Option<(u32, u64)>) -> Result<Selected, NetError> {
+        let mut parts = vec![Part::Text(verb.into()), astring(raw.as_bytes())];
         let resync = known.filter(|(v, m)| self.qresync && *v > 0 && *m > 0);
         match resync {
             Some((v, m)) => parts.push(Part::Text(format!(" (QRESYNC ({v} {m}))"))),
@@ -879,6 +915,87 @@ impl Imap {
     /// `[TRYCREATE]` asks for.
     pub fn create(&mut self, raw: &str) -> Result<(), NetError> {
         self.run(vec![Part::Text("CREATE ".into()), astring(raw.as_bytes())]).map(|_| ())
+    }
+
+    /// Wait on the folder selected until the server says something in it changed ([RFC 2177]):
+    /// IDLE, then DONE once it said so or `keep_on` says to wait no longer. The server is
+    /// listened to `poll` at a time, and `keep_on` asked after each quiet one, so watching can
+    /// be stopped within about that long; it says too when IDLE is to be begun again, as a
+    /// server may end one that lasts more than 29 minutes.
+    pub fn idle(&mut self, poll: std::time::Duration, keep_on: &mut dyn FnMut() -> bool) -> Result<Woke, NetError> {
+        if !self.has("IDLE") {
+            return Err(NetError::Unsupported("the server does not tell of changes as they come (IDLE)".into()));
+        }
+        let tag = self.next_tag();
+        self.c.send(format!("{tag} IDLE\r\n").as_bytes())?;
+        let mut woke = Woke::default();
+        let mut chatter = 0usize;
+        loop {
+            match read(&mut self.c)? {
+                Resp::Go(_) => break,
+                Resp::Status { tag: Some(t), kind, text, .. } if t == tag => return Err(status_error(kind, text)),
+                Resp::Status { tag: Some(t), .. } => return Err(NetError::protocol(format!("an answer to a command not sent: {t}"))),
+                Resp::Status { tag: None, kind: Kind::Bye, text, .. } => return Err(NetError::Refused(said(&text))),
+                other => {
+                    woke.hear(&other);
+                    chatter += 1;
+                    if chatter > MAX_IDLE_CHATTER {
+                        return Err(NetError::TooLarge("what the server said before it waited"));
+                    }
+                }
+            }
+        }
+        let was = self.c.set_wait(poll)?;
+        let heard = self.listen(&tag, &mut woke, keep_on);
+        if let Some(was) = was {
+            self.c.set_wait(was)?;
+        }
+        // The server ended the wait itself: nothing is left to say DONE to.
+        if heard? {
+            return Ok(woke);
+        }
+        self.c.send(b"DONE\r\n")?;
+        let (data, _) = self.finish(&tag, Vec::new())?;
+        data.iter().for_each(|d| woke.hear(d));
+        Ok(woke)
+    }
+
+    /// What the server says while it is waited on, until something changed or `keep_on` says
+    /// no more; true when the server answered the IDLE itself.
+    fn listen(&mut self, tag: &str, woke: &mut Woke, keep_on: &mut dyn FnMut() -> bool) -> Result<bool, NetError> {
+        let mut chatter = 0usize;
+        while !woke.changed {
+            match read(&mut self.c) {
+                Ok(Resp::Status { tag: Some(t), kind, text, .. }) if t == tag => {
+                    return match kind {
+                        Kind::Ok => Ok(true),
+                        kind => Err(status_error(kind, text)),
+                    };
+                }
+                Ok(Resp::Status { tag: Some(t), .. }) => return Err(NetError::protocol(format!("an answer to a command not sent: {t}"))),
+                Ok(Resp::Status { tag: None, kind: Kind::Bye, text, .. }) => return Err(NetError::Refused(said(&text))),
+                Ok(Resp::Go(_)) => return Err(NetError::protocol("asked to go on when nothing waits")),
+                Ok(other) => {
+                    woke.hear(&other);
+                    chatter += 1;
+                    // A server that says something all the time is still asked after now and
+                    // then, and one that says only nonsense is left.
+                    if chatter > MAX_IDLE_CHATTER {
+                        return Err(NetError::TooLarge("what the server said while it was watched"));
+                    }
+                    if chatter.is_multiple_of(100) && !keep_on() {
+                        return Ok(false);
+                    }
+                }
+                Err(NetError::TimedOut) => {
+                    if !keep_on() {
+                        return Ok(false);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(false)
     }
 
     pub fn logout(mut self) -> Result<(), NetError> {

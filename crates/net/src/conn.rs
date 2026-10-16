@@ -108,6 +108,11 @@ impl Conn {
         Ok(out)
     }
 
+    /// How long a read waits from now on; what it waited before, where the stream can say.
+    pub(crate) fn set_wait(&mut self, wait: std::time::Duration) -> Result<Option<std::time::Duration>, NetError> {
+        Ok(self.s.set_wait(wait)?)
+    }
+
     pub fn send(&mut self, bytes: &[u8]) -> Result<(), NetError> {
         self.s.write_all(bytes).map_err(|e| match e.kind() {
             ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted => NetError::Closed,

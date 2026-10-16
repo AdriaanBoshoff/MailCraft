@@ -23,9 +23,9 @@ pub fn pipe() -> (End, End) {
 }
 
 impl End {
-    /// How long a read waits for the other end before it times out.
-    pub fn set_wait(&mut self, wait: Duration) {
-        self.wait = wait;
+    /// How long a read waits for the other end before it times out; what it waited before.
+    pub fn set_wait(&mut self, wait: Duration) -> Duration {
+        std::mem::replace(&mut self.wait, wait)
     }
 }
 

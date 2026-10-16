@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 95 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 96 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -9,7 +9,7 @@
    every folder of an IMAP server is taken down into the account's own data file, a copy of what
    is sent is put in the server's Sent folder, and read, flagged, moved and deleted messages go
    both ways (M4.8); only what changed is fetched where the server keeps mod-sequences (CONDSTORE,
-   QRESYNC, M4.12); folders renamed or deleted, Drafts on the server and IDLE are do-later items (M4.12);
+   QRESYNC, M4.12); new mail is told of as it comes (IDLE, M4.12); folders renamed or deleted and Drafts on the server are do-later items (M4.12);
    accounts are set up in the window's Account Settings (M4.6), and each keeps its mail in a
    data file of its own (M4.7).
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
@@ -86,6 +86,7 @@
 
 ## Revision history
 
+- 96 · 2026-10-15 — M4.12: new mail told of as it comes (IDLE).
 - 95 · 2026-10-15 — M4.12: only what changed fetched from an IMAP server (CONDSTORE, QRESYNC).
 - 94 · 2026-10-15 — M4.9: Delay Delivery and Expires After.
 - 93 · 2026-10-15 — M4.9: Show Progress.

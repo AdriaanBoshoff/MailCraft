@@ -190,12 +190,10 @@ impl Session {
     /// Returns in how many milliseconds to ask again, `None` while there is nothing to wait for.
     pub fn send_receive_due(&mut self, now_ms: u64) -> Option<u64> {
         self.timer.asked = now_ms;
+        let watch = self.watch_due();
         let held = self.held_due(now_ms);
         let timer = self.timer_due(now_ms);
-        match (held, timer) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [watch, held, timer].into_iter().flatten().min()
     }
 
     /// What a send found still waiting for its time.

@@ -333,7 +333,13 @@ fn main() -> ExitCode {
         viewport = viewport.with_position(pos);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    match eframe::run_native("OpenMailClient", options, Box::new(move |_cc| Ok(Box::new(app)))) {
+    let creator = move |cc: &eframe::CreationContext<'_>| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
+        // A watched Inbox that heard of new mail wakes the window, which receives it at once.
+        let ctx = cc.egui_ctx.clone();
+        app.ui.session.waker = Some(std::sync::Arc::new(move || ctx.request_repaint()));
+        Ok(Box::new(app))
+    };
+    match eframe::run_native("OpenMailClient", options, Box::new(creator)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("openmailclient: {e}");

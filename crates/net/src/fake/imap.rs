@@ -53,6 +53,50 @@ fn runs(mut uids: Vec<u32>) -> String {
     out.join(",")
 }
 
+/// Waiting in IDLE: what changes in the folder meanwhile is told as it comes, until DONE.
+fn idle(c: &mut Conn, state: &Mutex<State>, selected: Option<&str>, qresync: bool) -> Result<(), NetError> {
+    lock(state).idling += 1;
+    let look = |state: &Mutex<State>| {
+        let mut s = lock(state);
+        selected.and_then(|n| s.mailbox(n)).map(|m| (m.modseq, m.messages.len(), m.clone())).unwrap_or_else(|| (0, 0, super::Mailbox::new("", &[])))
+    };
+    let (mut at, mut count, _) = look(state);
+    let was = c.set_wait(std::time::Duration::from_millis(20))?;
+    loop {
+        match c.line() {
+            Ok(line) => {
+                lock(state).heard.push(String::from_utf8_lossy(&line).into_owned());
+                if line.eq_ignore_ascii_case(b"DONE") {
+                    break;
+                }
+                c.send(b"* BAD only DONE ends IDLE\r\n")?;
+            }
+            Err(NetError::TimedOut) => {}
+            Err(e) => return Err(e),
+        }
+        let (now, n, m) = look(state);
+        if now == at {
+            continue;
+        }
+        let mut out = String::new();
+        for (uid, _) in m.vanished.iter().filter(|(_, when)| *when > at) {
+            out.push_str(&if qresync { format!("* VANISHED {uid}\r\n") } else { "* 1 EXPUNGE\r\n".to_string() });
+        }
+        if n != count || !out.is_empty() {
+            out.push_str(&format!("* {n} EXISTS\r\n"));
+        }
+        for (i, msg) in m.messages.iter().enumerate().filter(|(_, msg)| msg.modseq > at) {
+            out.push_str(&format!("* {} FETCH (UID {} FLAGS ({}))\r\n", i + 1, msg.uid, msg.flags.join(" ")));
+        }
+        (at, count) = (now, n);
+        c.send(out.as_bytes())?;
+    }
+    if let Some(was) = was {
+        c.set_wait(was)?;
+    }
+    Ok(())
+}
+
 fn quoted(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -137,6 +181,11 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                     out.push_str("* ENABLED\r\n");
                 }
                 Ok("enabled".into())
+            }
+            "IDLE" => {
+                c.send(b"+ idling\r\n")?;
+                idle(&mut c, state, selected.as_deref(), qresync)?;
+                Ok("idle done".into())
             }
             "LIST" => {
                 let s = lock(state);

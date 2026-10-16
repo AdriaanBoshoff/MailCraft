@@ -107,6 +107,8 @@ pub struct State {
     /// Times a connection was made secure, and sign-ins taken.
     pub secured: usize,
     pub logins: usize,
+    /// How many times a client began to wait in IDLE.
+    pub idling: usize,
     /// Every command line the server was sent, passwords and all: for the tests to look at.
     pub heard: Vec<String>,
     /// What the fake web server answers, by host and path: the whole answer, head and body.
@@ -127,6 +129,7 @@ impl Default for State {
             submitted: Vec::new(),
             imap_caps: vec!["SPECIAL-USE".into(), "UIDPLUS".into()],
             imap_without: Vec::new(),
+            idling: 0,
             smtp_ext: vec!["PIPELINING".into(), "SIZE 10485760".into(), "8BITMIME".into(), "STARTTLS".into(), "AUTH PLAIN LOGIN".into()],
             pop_caps: vec!["USER".into(), "UIDL".into(), "STLS".into(), "SASL PLAIN".into()],
             secured: 0,
@@ -243,7 +246,7 @@ impl Connector for Fake {
 fn script(mut end: End, bytes: &[u8]) -> Result<(), NetError> {
     use std::io::{Read, Write};
     end.write_all(bytes)?;
-    end.set_wait(std::time::Duration::from_millis(150));
+    let _ = end.set_wait(std::time::Duration::from_millis(150));
     let mut sink = [0u8; 4096];
     while end.read(&mut sink)? > 0 {}
     Ok(())

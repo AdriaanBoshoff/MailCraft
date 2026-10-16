@@ -73,6 +73,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
         "saveInPlace": s.save_in_place,
         "autoSaveMinutes": s.autosave_min,
         "sendReceiveMinutes": s.send_receive_min,
+        "newMailAsItComes": s.new_mail_as_it_comes,
         "newMail": s.alerts.to_json(),
         "dataFiles": files,
         "accounts": s.accounts.iter().map(crate::accounts::Account::to_settings).collect::<Vec<_>>(),
@@ -199,6 +200,12 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
         took(minutes.is_some());
         if let Some(m) = minutes {
             s.send_receive_min = m;
+        }
+    }
+    if let Some(v) = all.get("newMailAsItComes") {
+        took(v.is_boolean());
+        if let Some(on) = v.as_bool() {
+            s.new_mail_as_it_comes = on;
         }
     }
     if let Some(v) = all.get("newMail") {

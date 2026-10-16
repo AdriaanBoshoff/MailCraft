@@ -192,6 +192,12 @@ impl ServerCertVerifier for Check {
     }
 }
 
+impl Stream for StreamOwned<ClientConnection, Box<dyn Stream>> {
+    fn set_wait(&mut self, wait: Duration) -> std::io::Result<Option<Duration>> {
+        self.sock.set_wait(wait)
+    }
+}
+
 impl Connector for TcpConnector {
     fn connect(&self, to: &Endpoint) -> Result<Box<dyn Stream>, NetError> {
         one_line("server name", &to.host)?;

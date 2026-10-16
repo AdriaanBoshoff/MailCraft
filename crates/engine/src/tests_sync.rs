@@ -493,3 +493,107 @@ fn where_each_folder_was_left_is_kept_in_the_settings_and_nonsense_is_dropped() 
         assert!(r.steps.is_empty(), "{bad} was taken: {:?}", r.steps);
     }
 }
+
+/// Ask the session as the host does until `ok`, for no more than a while.
+fn until(s: &mut Session, what: &str, mut ok: impl FnMut(&mut Session) -> bool) {
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        s.send_receive_due(0);
+        s.poll();
+        if ok(s) {
+            return;
+        }
+        assert!(std::time::Instant::now() < end, "waited too long for {what}: {:?}", s.watching());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn logouts(fake: &Fake) -> usize {
+    fake.state().heard.iter().filter(|l| l.ends_with("LOGOUT")).count()
+}
+
+#[test]
+fn new_mail_is_received_the_moment_the_server_says_it_came() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let fake = Fake::default();
+    fake.state().imap_caps.push("IDLE".into());
+    fake.state().mailbox("INBOX").unwrap().add(&message("before"), &[]);
+    let (mut s, dir) = account(&fake, "idle");
+    s.send_receive_min = 0;
+    receive(&mut s);
+    assert_eq!(count(&s, "Inbox"), 1);
+    let woken = Arc::new(AtomicUsize::new(0));
+    let theirs = Arc::clone(&woken);
+    s.waker = Some(Arc::new(move || {
+        theirs.fetch_add(1, Ordering::Relaxed);
+    }));
+    until(&mut s, "the Inbox to be watched", |s| s.watching().first().is_some_and(|(_, said)| said.starts_with("Inbox watched")));
+    while fake.state().idling == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // Looked at, not opened for changing: nothing on the server changes for being watched.
+    assert!(fake.state().heard.iter().any(|l| l.ends_with("EXAMINE \"INBOX\"")));
+    assert_eq!(s.watching()[0].0, "pat@example.test");
+
+    fake.state().mailbox("INBOX").unwrap().add(&message("as it comes"), &[]);
+    until(&mut s, "the new message", |s| count(s, "Inbox") == 2);
+    assert!(woken.load(Ordering::Relaxed) > 0, "the host was not woken");
+    assert!(s.arrived.list.iter().any(|a| a.subject == "as it comes"), "{:?}", s.arrived.list);
+
+    // A flag changed elsewhere comes too, with no Send/Receive asked for.
+    fake.state().mailbox("INBOX").unwrap().set_flags(1, &["\\Flagged"]);
+    until(&mut s, "the flag", |s| {
+        pick(s, "Inbox", "before");
+        s.open.as_ref().is_some_and(|m| m.flag() == openmailclient_model::Flag::Flagged)
+    });
+
+    // Turned off, the watch signs out and none is begun again.
+    let before = logouts(&fake);
+    let got = s.run("mail.newMailAsItComes", &json!({ "on": false })).unwrap();
+    assert_eq!(got, json!({ "on": false, "watching": [] }));
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while logouts(&fake) == before {
+        assert!(std::time::Instant::now() < end, "the watch did not sign out");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    s.send_receive_due(0);
+    assert!(s.watching().is_empty());
+    assert_eq!(s.settings(None)["newMailAsItComes"], false);
+    done(s, dir);
+}
+
+#[test]
+fn a_server_without_idle_is_received_from_on_the_timer_and_a_wrong_password_is_not_tried_again_soon() {
+    let fake = Fake::default();
+    let (mut s, dir) = account(&fake, "no-idle");
+    s.send_receive_min = 0;
+    until(&mut s, "the server to be found without IDLE", |s| s.watching().first().is_some_and(|(_, said)| said.contains("on the timer")));
+    assert_eq!(fake.state().idling, 0);
+    assert!(s.jobs.is_empty());
+    done(s, dir);
+
+    let fake = Fake::default();
+    fake.state().imap_caps.push("IDLE".into());
+    fake.state().password = "another".into();
+    let (mut s, dir) = account(&fake, "idle-refused");
+    s.send_receive_min = 0;
+    until(&mut s, "the sign-in to be refused", |s| s.watching().first().is_some_and(|(_, said)| said.contains("tried again in 30 minutes")));
+    assert_eq!(fake.state().idling, 0);
+    done(s, dir);
+}
+
+#[test]
+fn whether_new_mail_comes_as_it_arrives_is_kept_in_the_settings() {
+    let dir = std::env::temp_dir().join(format!("omc-as-it-comes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    let mut s = Session::new();
+    assert!(s.new_mail_as_it_comes);
+    assert_eq!(s.run("mail.newMailAsItComes", &Value::Null).unwrap()["on"], false);
+    assert!(s.run("mail.newMailAsItComes", &json!({ "on": "yes" })).is_err());
+    s.run("settings.save", &json!({ "path": path.display().to_string() })).unwrap();
+    let mut again = Session::new();
+    again.run("settings.load", &json!({ "path": path.display().to_string() })).unwrap();
+    assert!(!again.new_mail_as_it_comes);
+    let _ = std::fs::remove_dir_all(&dir);
+}

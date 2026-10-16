@@ -39,6 +39,7 @@ mod tests_send;
 #[cfg(test)]
 mod tests_sync;
 pub mod undo;
+pub mod watch;
 
 use openmailclient_model::{Attachment, FolderId, FolderInfo, FolderKind, Item, ItemId, Store, StoreError, Summary};
 use serde_json::{Value, json};
@@ -310,6 +311,15 @@ pub struct Session {
     /// (`mail.sendReceiveEvery`); 0 only when asked.
     pub send_receive_min: u32,
     pub(crate) timer: arrival::Timer,
+    /// Whether each IMAP account's Inbox is watched, so new mail comes as it arrives
+    /// (`mail.newMailAsItComes`).
+    pub new_mail_as_it_comes: bool,
+    /// The Inboxes being watched (`watch`).
+    pub(crate) watches: Vec<watch::Watch>,
+    /// Accounts whose Inbox changed and that are to be received from, the first first.
+    pub(crate) watch_pending: Vec<String>,
+    /// Given by the host so that a watch that heard something wakes it.
+    pub waker: Option<watch::Waker>,
     /// Messages that came and were not told of or opened yet.
     pub arrived: arrival::Arrivals,
     /// How new mail is told of (`mail.newMailAlerts`).
@@ -383,6 +393,10 @@ impl Session {
             autosave_min: 5,
             auto: AutoSave::default(),
             send_receive_min: 30,
+            new_mail_as_it_comes: true,
+            watches: Vec::new(),
+            watch_pending: Vec::new(),
+            waker: None,
             timer: arrival::Timer::default(),
             arrived: arrival::Arrivals::default(),
             alerts: arrival::Alerts::default(),

@@ -21,6 +21,7 @@ impl MailUi {
         let next = self.session.send_receive_next_in();
         let every = self.session.send_receive_min;
         let no_account = self.session.accounts.is_empty();
+        let watching = self.session.watching();
         let ended: Vec<Value> = self.session.finished.iter().rev().take(MAX_ENDED).cloned().collect();
         let mut cancel: Option<Option<String>> = None;
         let mut close = false;
@@ -41,6 +42,12 @@ impl MailUi {
                     None => format!("Send/Receive comes on its own every {every} minutes."),
                 };
                 ui.label(egui::RichText::new(when).font(font(12.5)).color(t.text_dim));
+                // Each account whose Inbox is watched, and how that stands: mail that comes
+                // there is received at once.
+                for (account, said) in &watching {
+                    let line = one_line(&format!("{account}: {said}"));
+                    ui.add(egui::Label::new(crate::seen_line(&line, font(12.0), t.text_dim)).truncate());
+                }
                 ui.add_space(8.0);
                 if running.is_empty() {
                     ui.label(egui::RichText::new("Nothing is running.").font(font(13.0)).color(t.text));

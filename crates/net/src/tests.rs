@@ -345,6 +345,7 @@ fn hostile_servers_are_errors_never_panics() {
                         let _ = i.select_since("INBOX", Some((7, 3)));
                         let _ = i.changed_since(1);
                         let _ = i.still_there(&[1, 2]);
+                        let _ = i.idle(std::time::Duration::from_millis(5), &mut || false);
                         let _ = i.list(1);
                         let _ = i.fetch(1);
                     }
@@ -444,4 +445,84 @@ fn mod_sequences_that_cannot_be_are_none() {
         let s = i.select_since("INBOX", Some((7, 3))).unwrap();
         assert_eq!((s.exists, s.highest_modseq), (3, kept), "{said}");
     }
+}
+
+#[test]
+fn idle_waits_until_the_folder_changes_and_stops_when_asked() {
+    use std::time::Duration;
+    let mut state = State::default();
+    state.imap_caps.push("IDLE".into());
+    let fake = Fake::new(state);
+    let mut i = Imap::open(&fake, &Fake::endpoint(Protocol::Imap), &login()).unwrap();
+    assert_eq!(i.examine("INBOX").unwrap().exists, 0);
+    // Nothing changes: it waits as long as it is told to, then says DONE.
+    let mut asked = 0;
+    let woke = i
+        .idle(Duration::from_millis(10), &mut || {
+            asked += 1;
+            asked < 3
+        })
+        .unwrap();
+    assert_eq!((woke, asked), (imap::Woke::default(), 3));
+    // A message that comes while it waits wakes it, with how many there are now.
+    let elsewhere = fake.clone();
+    let comes = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(80));
+        elsewhere.state().mailbox("INBOX").unwrap().add(MESSAGE, &[]);
+    });
+    let woke = i.idle(Duration::from_millis(10), &mut || true).unwrap();
+    comes.join().unwrap();
+    assert_eq!(woke, imap::Woke { exists: Some(1), changed: true });
+    // A flag changed elsewhere wakes it too.
+    let elsewhere = fake.clone();
+    let comes = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(80));
+        elsewhere.state().mailbox("INBOX").unwrap().set_flags(1, &["\\Seen"]);
+    });
+    assert!(i.idle(Duration::from_millis(10), &mut || true).unwrap().changed);
+    comes.join().unwrap();
+    // The session goes on as before: commands are answered at their own pace again.
+    assert_eq!(i.list(1).unwrap().len(), 1);
+    i.logout().unwrap();
+    let state = fake.state();
+    assert_eq!(state.idling, 3);
+    assert_eq!(state.heard.iter().filter(|l| l.as_str() == "DONE").count(), 3);
+
+    // A server without IDLE is not waited on.
+    let fake = Fake::default();
+    let mut i = Imap::open(&fake, &Fake::endpoint(Protocol::Imap), &login()).unwrap();
+    i.examine("INBOX").unwrap();
+    assert!(matches!(i.idle(Duration::from_millis(10), &mut || true), Err(NetError::Unsupported(_))));
+}
+
+#[test]
+fn a_server_that_ends_a_wait_or_chatters_is_dealt_with() {
+    use std::time::Duration;
+    let head = "* OK hi\r\nA0001 OK in\r\n* CAPABILITY IMAP4rev1 IDLE\r\nA0002 OK caps\r\n";
+    // It answers the IDLE itself: nothing is said DONE to.
+    let fake = Fake::script(format!("{head}+ idling\r\n* 4 EXISTS\r\nA0003 OK done\r\n").as_bytes());
+    let mut i = Imap::open(&fake, &tls(Protocol::Imap), &login()).unwrap();
+    assert_eq!(i.idle(Duration::from_millis(10), &mut || true).unwrap().exists, Some(4));
+    let fake = Fake::script(format!("{head}+ idling\r\nA0003 OK enough\r\n").as_bytes());
+    let mut i = Imap::open(&fake, &tls(Protocol::Imap), &login()).unwrap();
+    assert_eq!(i.idle(Duration::from_millis(10), &mut || true).unwrap(), imap::Woke::default());
+    // It goes away, or refuses.
+    for end in ["+ idling\r\n* BYE going\r\n", "A0003 NO not now\r\n", "* BYE going\r\n", "+ idling\r\nA0009 OK what\r\n"] {
+        let fake = Fake::script(format!("{head}{end}").as_bytes());
+        let mut i = Imap::open(&fake, &tls(Protocol::Imap), &login()).unwrap();
+        assert!(i.idle(Duration::from_millis(10), &mut || true).is_err(), "{end:?}");
+    }
+    // It says nothing that matters, without end: it is asked after, and left in the end.
+    let chatter = "* OK still here\r\n".repeat(10_050);
+    let fake = Fake::script(format!("{head}+ idling\r\n{chatter}").as_bytes());
+    let mut i = Imap::open(&fake, &tls(Protocol::Imap), &login()).unwrap();
+    let mut asked = 0;
+    assert!(
+        i.idle(Duration::from_millis(10), &mut || {
+            asked += 1;
+            true
+        })
+        .is_err()
+    );
+    assert!(asked >= 100, "{asked}");
 }
