@@ -2987,6 +2987,7 @@ dependencies = [
  "openmailclient-net",
  "rcgen",
  "ring",
+ "roxmltree 0.21.1",
  "rustls",
  "rustls-native-certs",
  "thiserror 2.0.21",

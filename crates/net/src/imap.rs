@@ -489,6 +489,25 @@ pub struct Imap {
 
 impl Imap {
     pub fn open(with: &dyn Connector, to: &Endpoint, login: &Login) -> Result<Self, NetError> {
+        let (mut i, preauth) = Self::reach(with, to)?;
+        if !preauth {
+            i.sign_in(login)?;
+        }
+        i.capability()?;
+        if i.has("QRESYNC") {
+            i.enable_qresync()?;
+        }
+        Ok(i)
+    }
+
+    /// Whether the server greets us as an IMAP server and the connection is made secure;
+    /// nothing is signed in to, and the connection is left with LOGOUT.
+    pub fn greets(with: &dyn Connector, to: &Endpoint) -> Result<(), NetError> {
+        Self::reach(with, to)?.0.logout()
+    }
+
+    /// The greeting, and the connection made secure; whether the server signed us in already.
+    fn reach(with: &dyn Connector, to: &Endpoint) -> Result<(Self, bool), NetError> {
         let mut i = Self { c: Conn::new(with.connect(to)?), tag: 0, caps: Vec::new(), qresync: false };
         let preauth = match read(&mut i.c)? {
             Resp::Status { tag: None, kind: Kind::Ok, code, .. } => {
@@ -520,14 +539,7 @@ impl Imap {
         if !secure {
             return Err(NetError::NotSecure);
         }
-        if !preauth {
-            i.sign_in(login)?;
-        }
-        i.capability()?;
-        if i.has("QRESYNC") {
-            i.enable_qresync()?;
-        }
-        Ok(i)
+        Ok((i, preauth))
     }
 
     /// QRESYNC is turned on where the server has it; one that refuses leaves it off.

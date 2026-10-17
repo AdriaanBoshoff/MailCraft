@@ -1831,6 +1831,56 @@ fn accounts_are_added_and_tested_in_their_window_and_the_password_is_never_shown
     assert!(ui.account_window.is_none());
 }
 
+#[test]
+fn an_accounts_servers_are_found_from_its_address_in_its_window_and_fill_the_form() {
+    let settings = r#"<clientConfig><emailProvider id="example.test">
+        <incomingServer type="imap"><hostname>mail.example.test</hostname><port>143</port><socketType>STARTTLS</socketType><username>%EMAILADDRESS%</username></incomingServer>
+        <outgoingServer type="smtp"><hostname>send.example.test</hostname><port>587</port><socketType>STARTTLS</socketType></outgoingServer>
+    </emailProvider></clientConfig>"#;
+    let page = format!(
+        "HTTP/1.1 200 OK
+Content-Length: {}
+
+{settings}",
+        settings.len()
+    )
+    .into_bytes();
+    let state = openmailclient_net::fake::State { pages: vec![("autoconfig.example.test/mail/config-v1.1.xml".into(), page)], ..Default::default() };
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.session.connector = Some(std::sync::Arc::new(openmailclient_net::fake::Fake::new(state)));
+    ui.execute("ui.accountSettings", &Value::Null).unwrap();
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    frame(&mut ui, &ctx, Vec::new(), None);
+    let found = |ui: &mut MailUi, email: &str| {
+        let mut window = ui.account_window.take().unwrap();
+        window.form.email = email.into();
+        window.form.display_name = "Pat Lee".into();
+        ui.find_settings(&mut window);
+        assert!(window.finding.is_some(), "{:?}", window.said);
+        ui.account_window = Some(window);
+        let mut waited = 0;
+        while ui.account_window.as_ref().is_some_and(|w| w.finding.is_some()) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            frame(ui, &ctx, Vec::new(), None);
+            waited += 1;
+            assert!(waited < 1000, "finding never ended");
+        }
+        let window = ui.account_window.as_ref().unwrap();
+        (window.form.clone(), window.said.clone())
+    };
+    let (form, said) = found(&mut ui, "pat@example.test");
+    assert_eq!((form.in_host.as_str(), form.in_port.as_str(), form.in_sec), ("mail.example.test", "143", "starttls"));
+    assert_eq!((form.out_host.as_str(), form.out_port.as_str(), form.out_sec), ("send.example.test", "587", "starttls"));
+    assert!(form.user.is_empty() && !form.pop3 && form.display_name == "Pat Lee", "the rest of the form is kept: {form:?}");
+    assert!(said.iter().all(|(_, trouble)| !trouble) && said[0].0.contains("publishes"), "{said:?}");
+    assert!(ui.session.accounts.is_empty(), "nothing is kept until it is saved");
+    // A large provider's come with what its owner should know.
+    let (form, said) = found(&mut ui, "pat@gmail.com");
+    assert_eq!(form.in_host, "imap.gmail.com");
+    assert!(said.len() == 2 && said[1].0.contains("app password"), "{said:?}");
+}
+
 /// A server with a certificate of its own: the window shows it whole after a test, trusts it
 /// on a click and tests again, then shows it as trusted with a way to stop.
 #[test]

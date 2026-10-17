@@ -121,6 +121,9 @@ pub struct State {
     pub own_certificate: Option<Fingerprint>,
     /// The UIDVALIDITY the next folder made is given: each folder made has one of its own.
     pub next_validity: u32,
+    /// The mail servers that answer, as `host:port`; any other refuses the connection. All
+    /// answer when this is `None`.
+    pub answers_only: Option<Vec<String>>,
 }
 
 impl Default for State {
@@ -143,6 +146,7 @@ impl Default for State {
             pages: Vec::new(),
             own_certificate: None,
             next_validity: 100,
+            answers_only: None,
         }
     }
 }
@@ -219,6 +223,10 @@ impl Fake {
 
 impl Connector for Fake {
     fn connect(&self, to: &Endpoint) -> Result<Box<dyn Stream>, NetError> {
+        let at = format!("{}:{}", to.host, to.port);
+        if to.protocol != Protocol::Https && lock(&self.state).answers_only.as_ref().is_some_and(|only| !only.contains(&at)) {
+            return Err(NetError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, format!("nothing answers at {at}"))));
+        }
         if to.security == Security::Tls {
             self.check(to)?;
         }

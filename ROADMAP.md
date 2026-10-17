@@ -1,16 +1,16 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); third-party sign-in is the last milestone (M7) · revision 111 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14); third-party sign-in is the last milestone (M7) · revision 112 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 472, all passing |
+| Catalogued Outlook Classic features with a command | 52 of 120 (43%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 482, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
-| Protocols | none |
+| Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
 
 ## Milestones
 
@@ -148,7 +148,8 @@
 95. Done: Drafts on the server: a draft saved in an IMAP account goes into the account's own Drafts and onto the server's Drafts folder marked `\Draft`; saved again or sent, it takes its own place there and goes from Drafts on both sides; a draft written elsewhere comes here as a draft and opens to be written on with a double-click or the reading pane's bar; Save keeps the message open, as Outlook does (M4.12, `compose.editDraft`, `Draft::filed`, `ui.openSelected`).
 96. Done: The account's data file read apart: the first receive of a run reads each message's place on the server on the receive's own thread, from the mailbox as it stands (`Store::apart`), not on the window's; what it learns is remembered when the receive ends (M4.12, `imap_sync::Gather`).
 97. Done: Pictures decoded off the thread that draws the window: a message's pictures are decoded on a thread of their own; drawing waits only a moment for them, and a picture not ready yet stands as an empty frame until it is (M4.13, `pictures::Pictures`).
-98. Next: M4.14: an account's servers found from its address (RFC 6186 records, the provider's published settings).
+98. Done: An account's servers found from its address: from what is known of large providers, the settings its domain publishes for mail programs, or the usual server names greeted without signing in; the address itself is sent to no one (M4.14, `crates/net/src/find.rs`, `account.find`, Find settings in Account Settings).
+99. Next: M4.15: the provider found from the domain's mail exchangers (MX) and its RFC 6186 SRV records, read with a DNS client; then M4 closes.
 
 ## Do later (from M2)
 
@@ -238,7 +239,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Pictures on a server, loaded on an explicit command (never by themselves): from the info bar and a right-click on a picture | done: M4.10 |
 | Attachments opened on a double-click (Open, Save As, Cancel), a program or script only saved | done: M4.11 |
 | An attachment shown in the reading pane on a click (Attachment Preview) without another program | M5, with the item windows |
-| An account's servers found from its address (RFC 6186 records, the provider's published settings) | M4, after receiving |
+| ~~An account's servers found from its address (the provider's published settings, the usual names tried)~~ | done: M4.14 |
+| A domain's provider found from its mail exchangers (MX), and RFC 6186 SRV records (a DNS client is needed) | M4.15 |
 | A server's own certificate trusted on the owner's word, and kept for that server only | done: M4.9 |
 | Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
@@ -1980,3 +1982,24 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   Headless window pictures wait for every picture (`MailUi::wait_for_pictures`).
   Better than Outlook: a picture never holds the window, however large or damaged.
   1 test.
+- **2026-10-17** - M4.14: an account's servers found from its address.
+  `account.find` ("Find Account Settings", and Find settings in the window's Account Settings)
+  finds the servers for an address in three ways, in order: what is known here of large
+  providers (Gmail, Outlook.com, Yahoo, iCloud, AOL, Fastmail, GMX, Zoho, Yandex), with a note
+  where the provider asks for an app password or its own sign-in; the settings the domain
+  publishes for mail programs (`autoconfig.<domain>/mail/config-v1.1.xml`, then the domain's
+  `.well-known` place), over HTTPS only; and the usual names (`imap.`, `mail.`, `smtp.` and the
+  domain itself, on the usual ports), each greeted over TLS or made secure with STARTTLS and
+  signed in to by none. What is found fills the form; nothing is kept until it is saved. The
+  result says where the settings came from.
+  The settings file is hostile: capped at 64 KB and 4096 nodes, read with no DTD, nested no
+  deeper than 32 (a deeper file overflowed the reader's stack in the hostile test; it is now
+  measured before it is read, with comments, CDATA and quoted values passed over whole so
+  nothing can hide its depth), and a name, port or user name in it that is not one is passed
+  over; a server offering no secure connection is never chosen.
+  IMAP and POP3 opening split into reaching the server and signing in (`Imap::greets`,
+  `Pop3::greets`); the fake server can be told which servers answer (`State::answers_only`).
+  Better than Outlook: the address itself is sent to no one, not even the domain's own web
+  server (only its domain is named, in the names asked for); no outside directory is asked;
+  and the owner is told where the settings came from.
+  10 tests.

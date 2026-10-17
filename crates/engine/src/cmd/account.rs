@@ -5,10 +5,11 @@
 use super::{CommandSpec, always, need_str, p_bool};
 use crate::accounts::{self, Account, Kind, MAX_ACCOUNTS};
 use crate::{CmdResult, EngineError, Session};
+use openmailclient_net::find;
 use openmailclient_net::imap::Imap;
 use openmailclient_net::pop3::Pop3;
 use openmailclient_net::smtp::Smtp;
-use openmailclient_net::{Connector, Login, NetError, Secret, Vault};
+use openmailclient_net::{Connector, Login, NetError, Protocol, Secret, Vault};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -87,6 +88,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             params: r#"{"id", "wait": false to test on a thread of its own}; signs in to the incoming and the outgoing server and sends nothing; returns {"incoming": {"ok", "said"}, "outgoing": {"ok", "said"}}"#,
             enabled: has_accounts,
             run: test,
+        },
+        CommandSpec {
+            id: "account.find",
+            label: "Find Account Settings",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: r#"{"email", "wait": false to find them on a thread of its own}; finds the servers for the address from what is known of large providers, the settings its domain publishes, or the usual server names greeted (none signed in to); keeps nothing, and sends the address to no one; returns {"found": the settings as account.add takes them, or null, "from": "known", "published" or "tried", "note", "error"}"#,
+            enabled: always,
+            run: find_settings,
         },
     ]
 }
@@ -385,6 +396,37 @@ fn test_outgoing(r: &Reach) -> Result<String, NetError> {
     let smtp = Smtp::open(&*r.connector, &r.account.outgoing_endpoint(), login.as_ref())?;
     smtp.quit()?;
     Ok(if login.is_some() { "signed in".to_string() } else { "answered".to_string() })
+}
+
+fn server_json(server: &find::Server) -> Value {
+    json!({ "host": server.host, "port": server.port, "security": accounts::security_name(server.security) })
+}
+
+fn find_settings(s: &mut Session, p: &Value) -> CmdResult {
+    let email = need_str(p, "email")?.trim().to_string();
+    let Some((_, domain)) = find::parts(&email) else {
+        return Err(EngineError::BadParams("\"email\" is not an email address".into()));
+    };
+    let connector = s.connector.clone().ok_or_else(|| EngineError::Format("this build cannot reach mail servers".into()))?;
+    let wait = p_bool(p, "wait") != Some(false);
+    s.begin(format!("Finding the settings for {domain}"), wait, move |progress| {
+        let found = find::find(&*connector, &email, &|| progress.stopped());
+        let (status, value) = match found {
+            Ok(f) => {
+                let kind = if f.protocol == Protocol::Pop3 { "pop3" } else { "imap" };
+                let whence = match f.from {
+                    find::Source::Known => "as they are known for its provider",
+                    find::Source::Published => "as its domain publishes them",
+                    find::Source::Tried => "from servers that answered",
+                };
+                let settings = json!({ "email": email, "kind": kind, "incoming": server_json(&f.incoming), "outgoing": server_json(&f.outgoing), "user": f.user });
+                let status = format!("Found the settings for {domain}, {whence}: {} and {}", f.incoming.host, f.outgoing.host);
+                (status, json!({ "found": settings, "from": f.from.word(), "note": f.note }))
+            }
+            Err(e) => (format!("The settings for {domain} were not found: {e}"), json!({ "found": null, "error": e.to_string() })),
+        };
+        Box::new(move |_| (status, value))
+    })
 }
 
 fn test(s: &mut Session, p: &Value) -> CmdResult {

@@ -133,7 +133,7 @@ pub fn get(with: &dyn Connector, url: &str, limit: usize) -> Result<Fetched, Net
     let limit = limit.min(MAX_PICTURE);
     let mut at = address(url)?;
     for _ in 0..=MAX_REDIRECTS {
-        match once(with, &at, limit)? {
+        match once(with, &at, limit, "image/*")? {
             Answer::Got(fetched) => return Ok(fetched),
             Answer::Moved(to) => at = address(&joined(&at, &to))?,
         }
@@ -164,12 +164,24 @@ enum Answer {
     Moved(String),
 }
 
-fn once(with: &dyn Connector, at: &Address, limit: usize) -> Result<Answer, NetError> {
+/// Fetch a settings file a domain publishes for mail programs, as `get` fetches a picture.
+pub fn get_settings(with: &dyn Connector, url: &str, limit: usize) -> Result<Fetched, NetError> {
+    let mut at = address(url)?;
+    for _ in 0..=MAX_REDIRECTS {
+        match once(with, &at, limit.min(MAX_PICTURE), "text/xml, application/xml")? {
+            Answer::Got(fetched) => return Ok(fetched),
+            Answer::Moved(to) => at = address(&joined(&at, &to))?,
+        }
+    }
+    Err(NetError::Refused("the settings were moved too many times".into()))
+}
+
+fn once(with: &dyn Connector, at: &Address, limit: usize, accept: &str) -> Result<Answer, NetError> {
     let to = Endpoint { protocol: Protocol::Https, host: at.host.clone(), port: at.port, security: Security::Tls, trusted: None };
     let mut conn = Conn::new(with.connect(&to)?);
     let host = if at.port == 443 { at.host.clone() } else { format!("{}:{}", at.host, at.port) };
     let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OpenMailClient\r\nAccept: image/*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: OpenMailClient\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
         at.target
     );
     conn.send(request.as_bytes())?;

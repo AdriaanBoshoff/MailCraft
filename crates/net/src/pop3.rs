@@ -24,6 +24,19 @@ pub struct Listed {
 
 impl Pop3 {
     pub fn open(with: &dyn Connector, to: &Endpoint, login: &Login) -> Result<Self, NetError> {
+        let mut p = Self::reach(with, to)?;
+        p.sign_in(login)?;
+        Ok(p)
+    }
+
+    /// Whether the server greets us as a POP3 server and the connection is made secure;
+    /// nothing is signed in to, and the connection is left with QUIT.
+    pub fn greets(with: &dyn Connector, to: &Endpoint) -> Result<(), NetError> {
+        Self::reach(with, to)?.quit()
+    }
+
+    /// The greeting, and the connection made secure.
+    fn reach(with: &dyn Connector, to: &Endpoint) -> Result<Self, NetError> {
         let mut p = Self { c: Conn::new(with.connect(to)?), caps: Vec::new() };
         p.status()?;
         p.caps = p.capabilities().unwrap_or_default();
@@ -41,7 +54,6 @@ impl Pop3 {
         if !secure {
             return Err(NetError::NotSecure);
         }
-        p.sign_in(login)?;
         Ok(p)
     }
 

@@ -254,3 +254,41 @@ fn a_servers_own_certificate_is_trusted_on_the_owners_word() {
         assert!(s.run("account.trustCertificate", &bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn an_accounts_settings_are_found_from_its_address_and_work_as_found() {
+    use openmailclient_net::fake::State;
+    let settings = r#"<clientConfig version="1.1"><emailProvider id="example.test">
+        <incomingServer type="imap"><hostname>mail.%EMAILDOMAIN%</hostname><port>143</port><socketType>STARTTLS</socketType><username>%EMAILADDRESS%</username></incomingServer>
+        <outgoingServer type="smtp"><hostname>mail.example.test</hostname><port>587</port><socketType>STARTTLS</socketType></outgoingServer>
+    </emailProvider></clientConfig>"#;
+    let page = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{settings}", settings.len()).into_bytes();
+    let state = State { pages: vec![("autoconfig.example.test/mail/config-v1.1.xml".into(), page)], ..State::default() };
+    let mut s = with_fake(Fake::new(state));
+    let found = s.run("account.find", &json!({ "email": "pat@example.test" })).unwrap();
+    assert_eq!(found["from"], "published", "{found}");
+    assert!(s.status.contains("as its domain publishes them"), "{}", s.status);
+    assert!(s.accounts.is_empty(), "finding keeps nothing");
+    // What was found is what account.add takes, and it works.
+    let mut add = found["found"].clone();
+    add["password"] = json!(PASSWORD);
+    s.run("account.add", &add).unwrap();
+    let tested = s.run("account.test", &json!({ "id": "account-1" })).unwrap();
+    assert_eq!(tested["incoming"]["ok"], true, "{tested}");
+    assert_eq!(tested["outgoing"]["ok"], true, "{tested}");
+    never_shows_the_password(&mut s);
+
+    // A large provider's are known without asking anyone; on a thread of its own as well.
+    let started = s.run("account.find", &json!({ "email": "sam@gmail.com", "wait": false })).unwrap();
+    assert_eq!(started["started"], true);
+    assert!(s.end_jobs(true));
+    assert!(s.status.contains("imap.gmail.com"), "{}", s.status);
+
+    // Nothing found is said, and is no error of the command's.
+    let mut none = with_fake(Fake::new(State { answers_only: Some(Vec::new()), ..State::default() }));
+    let found = none.run("account.find", &json!({ "email": "sam@bluebird.example" })).unwrap();
+    assert!(found["found"].is_null());
+    assert!(none.status.contains("were not found"), "{}", none.status);
+    assert!(none.run("account.find", &json!({ "email": "not an address" })).is_err());
+    assert!(Session::new().run("account.find", &json!({ "email": "sam@bluebird.example" })).is_err(), "a build that cannot reach servers says so");
+}

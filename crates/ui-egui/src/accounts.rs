@@ -122,6 +122,17 @@ impl Form {
         }
     }
 
+    /// The servers found for the address, as `account.find` gives them, in place of those
+    /// typed; the rest of the form is kept.
+    fn fill(&mut self, found: &Value) {
+        let of = Self::of(found);
+        self.pop3 = of.pop3;
+        (self.in_host, self.in_port, self.in_sec) = (of.in_host, of.in_port, of.in_sec);
+        (self.out_host, self.out_port, self.out_sec) = (of.out_host, of.out_port, of.out_sec);
+        let user = found.get("user").and_then(Value::as_str).map(one_line).unwrap_or_default();
+        self.user = if user.eq_ignore_ascii_case(self.email.trim()) { String::new() } else { user };
+    }
+
     /// The fields as `account.add` and `account.edit` take them, the password left out.
     fn params(&self) -> Result<Value, String> {
         let port = |text: &str, which: &str| -> Result<Value, String> {
@@ -179,6 +190,8 @@ pub(crate) struct AccountsWindow {
     pub said: Vec<(String, bool)>,
     /// The test under way: the name of its job, until it has ended.
     pub testing: Option<String>,
+    /// The servers being found from the address: the name of that job, until it has ended.
+    pub finding: Option<String>,
     /// Remove was clicked once: the next click removes.
     pub removing: bool,
     focus: bool,
@@ -196,6 +209,8 @@ enum Ask {
     New,
     Save,
     Test,
+    /// Find the servers from the address.
+    Find,
     Remove,
     Close,
     /// Trust the certificate with this fingerprint, for the servers of the account that showed it.
@@ -207,7 +222,15 @@ enum Ask {
 impl MailUi {
     /// Open Account Settings on the account `id`, a new one when `new`, or the first.
     pub(crate) fn open_accounts(&mut self, id: Option<&str>, new: bool) -> Result<(), String> {
-        let mut window = AccountsWindow { accounts: Vec::new(), form: Form::blank(), said: Vec::new(), testing: None, removing: false, focus: true };
+        let mut window = AccountsWindow {
+            accounts: Vec::new(),
+            form: Form::blank(),
+            said: Vec::new(),
+            testing: None,
+            finding: None,
+            removing: false,
+            focus: true,
+        };
         let listed = self.list_accounts(&mut window)?;
         let chosen = match id {
             Some(id) => Some(listed.iter().find(|a| a["id"] == id).ok_or_else(|| format!("There is no account {}", one_line(id)))?),
@@ -307,6 +330,18 @@ impl MailUi {
         }
     }
 
+    /// Find the servers for the address typed, on a thread of its own; what is found fills the
+    /// form when it comes, and nothing is kept until it is saved.
+    pub(crate) fn find_settings(&mut self, window: &mut AccountsWindow) {
+        match self.execute("account.find", &json!({ "email": window.form.email.trim(), "wait": false })) {
+            Ok(_) => {
+                window.finding = self.session.jobs.last().map(|j| j.what.clone());
+                window.said.clear();
+            }
+            Err(e) => window.said = vec![(e, true)],
+        }
+    }
+
     /// Trust a certificate the account's servers showed, then test again at once, so the owner
     /// sees that it signs in now.
     pub(crate) fn trust_certificate(&mut self, window: &mut AccountsWindow, fingerprint: &str) {
@@ -345,9 +380,27 @@ impl MailUi {
                 }
             }
         }
+        // Servers found since the last frame: they fill the form, which is not kept yet.
+        if let Some(job) = window.finding.clone()
+            && !self.session.jobs.iter().any(|j| j.what == job)
+        {
+            window.finding = None;
+            let result = self.session.finished.iter().rev().find(|f| f["job"] == job.as_str()).map(|f| f["result"].clone()).unwrap_or_default();
+            let status = one_line(&self.session.status);
+            match result.get("found").filter(|f| f.is_object()) {
+                Some(found) => {
+                    window.form.fill(found);
+                    window.said = vec![(status, false)];
+                    if let Some(note) = result.get("note").and_then(Value::as_str) {
+                        window.said.push((one_line(note), false));
+                    }
+                }
+                None => window.said = vec![(status, true)],
+            }
+        }
         let t = self.tokens.clone();
         let mut ask: Option<Ask> = None;
-        let busy = window.testing.is_some();
+        let busy = window.testing.is_some() || window.finding.is_some();
         let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18));
         // A certificate shown scrolls in what room the window leaves, rather than run off it.
         let room = (ctx.content_rect().height() - 720.0).clamp(130.0, 420.0);
@@ -451,6 +504,28 @@ impl MailUi {
                         });
 
                         section(ui, &t, "Servers", "account-servers", |ui| {
+                            label(ui, &t, "");
+                            ui.horizontal(|ui| {
+                                let can = self.session.connector.is_some() && f.email.contains('@');
+                                let find = ui
+                                    .add_enabled(!busy && can, egui::Button::new("Find settings"))
+                                    .on_hover_text(
+                                        "Find the servers for this address; the address is sent to no one, and nothing is kept until it is saved",
+                                    )
+                                    .on_disabled_hover_text(if self.session.connector.is_none() {
+                                        "This build cannot reach mail servers"
+                                    } else {
+                                        "Type the address first"
+                                    });
+                                if find.clicked() {
+                                    ask = Some(Ask::Find);
+                                }
+                                if window.finding.is_some() {
+                                    ui.add(egui::Spinner::new().size(14.0));
+                                    ui.label(egui::RichText::new("Looking…").font(font(11.5)).color(t.text_dim));
+                                }
+                            });
+                            ui.end_row();
                             label(ui, &t, "Account type");
                             ui.horizontal(|ui| {
                                 let was = f.pop3;
@@ -642,6 +717,7 @@ impl MailUi {
                 let _ = self.save_account(&mut window);
             }
             Some(Ask::Test) => self.test_account(&mut window),
+            Some(Ask::Find) => self.find_settings(&mut window),
             Some(Ask::Trust(fingerprint)) => self.trust_certificate(&mut window, &fingerprint),
             Some(Ask::Untrust(side)) => {
                 if let Some(id) = window.form.id.clone() {

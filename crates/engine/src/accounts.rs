@@ -390,7 +390,7 @@ pub struct Account {
     pub data_file: Option<std::path::PathBuf>,
 }
 
-fn security_name(s: Security) -> &'static str {
+pub(crate) fn security_name(s: Security) -> &'static str {
     match s {
         Security::Tls => "tls",
         Security::StartTls => "starttls",
