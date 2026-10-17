@@ -391,8 +391,11 @@ impl MailUi {
         let total = y;
         let selected = s.selected;
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
-        let tz = s.tz_offset_min;
+        // In a folder of mail going out, a row says whom it went to, as Outlook's do.
+        let outgoing = s.current_folder().is_some_and(|f| matches!(f.kind, FolderKind::Sent | FolderKind::Drafts | FolderKind::Outbox));
+        let shown = Shown { now, now_day, tz: s.tz_offset_min, region: &s.region, outgoing };
         let rows = &s.rows;
+        let mut unread_previews: Vec<u64> = Vec::new();
         let mut clicked: Option<u64> = None;
         ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -445,7 +448,10 @@ impl MailUi {
                             } else if resp.hovered() {
                                 p.rect_filled(r, 0.0, t.hover);
                             }
-                            draw_row(&p, r, row, (now, now_day), tz, &t);
+                            draw_row(&p, r, row, &shown, &t);
+                            if row.preview.is_empty() {
+                                unread_previews.push(row.id);
+                            }
                             if resp.clicked() {
                                 clicked = Some(row.id);
                             }
@@ -454,6 +460,11 @@ impl MailUi {
                 }
             });
         });
+        // The rows on screen whose folder's table holds no preview get theirs from the
+        // message, a few each frame.
+        if !unread_previews.is_empty() && self.session.fill_previews(&unread_previews) {
+            ui.ctx().request_repaint();
+        }
         if let Some(id) = clicked {
             self.act("mail.select", json!({ "id": id }));
         }
@@ -514,7 +525,7 @@ impl MailUi {
             clip_text(&p, pos2(text_x, y), width - 46.0, &format!("Cc  {cc}"), font(12.0), t.text_dim);
             y += 18.0;
         }
-        let stamp = time::civil(item.time(), self.session.tz_offset_min).long_stamp();
+        let stamp = self.session.region.stamp(&time::civil(item.time(), self.session.tz_offset_min));
         clip_text(&p, pos2(text_x, y), width - 46.0, &stamp, font(12.0), t.text_faint);
         y += 24.0;
 
@@ -964,12 +975,25 @@ fn typed_time(ui: &mut Ui, t: &theme::Tokens, text: &mut String, id: egui::Id, c
 
 /// Children of `parent` in pane order: special folders first, then by name.
 fn children(folders: &[FolderInfo], parent: Option<FolderId>) -> Vec<&FolderInfo> {
-    let mut out: Vec<&FolderInfo> = folders.iter().filter(|f| f.parent == parent && f.kind != FolderKind::Root).collect();
+    // A hidden folder is the mail program's own (quick steps, conversation actions), as Outlook
+    // leaves it out of its folder pane.
+    let mut out: Vec<&FolderInfo> = folders.iter().filter(|f| f.parent == parent && f.kind != FolderKind::Root && !f.hidden).collect();
     out.sort_by(|a, b| a.kind.sort_rank().cmp(&b.kind.sort_rank()).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     out
 }
 
-fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, (now, now_day): (i64, i64), tz: i32, t: &theme::Tokens) {
+/// What every row of the message list is drawn with.
+struct Shown<'a> {
+    now: i64,
+    now_day: i64,
+    tz: i32,
+    region: &'a time::Region,
+    /// The folder holds mail going out: a row says whom it went to.
+    outgoing: bool,
+}
+
+fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, shown: &Shown, t: &theme::Tokens) {
+    let Shown { now, now_day, tz, region, outgoing } = *shown;
     // Of no use any more: struck through, as recipients' mail programs show it too.
     let expired = row.expires > 0 && row.expires <= now;
     // Waiting in the Outbox for its time (Delay Delivery): when it goes stands where the date is.
@@ -1003,7 +1027,7 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, (now, now_day): (i64, i64
         icons::paint(p, Rect::from_min_size(pos2(right, r.top() + 9.0), vec2(13.0, 13.0)), Icon::Importance, t.danger);
         right -= 5.0;
     }
-    let who = if row.from.is_empty() { &row.to } else { &row.from };
+    let who = if (outgoing && !row.to.trim().is_empty()) || row.from.is_empty() { &row.to } else { &row.from };
     let who_w = clip_text(p, pos2(left, r.top() + 6.0), right - left, who, if row.read { font(13.5) } else { bold(13.5) }, t.text);
     let strike = |y: f32, w: f32| {
         if expired && w > 0.0 {
@@ -1022,14 +1046,14 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, (now, now_day): (i64, i64
             i64::MIN..=0 => String::new(),
             1 => "tomorrow ".to_string(),
             2..=6 => format!("{} ", c.weekday_name().get(..3).unwrap_or("")),
-            _ => format!("{}/{}/{} ", c.month, c.day, c.year),
+            _ => format!("{} ", region.date(&c)),
         };
-        format!("Goes {day}{}", c.time_short())
+        format!("Goes {day}{}", region.time(&c))
     } else {
         match now_day.saturating_sub(c.day_number) {
-            i64::MIN..=0 => c.time_short(),
-            1..=6 => format!("{} {}", c.weekday_name().get(..3).unwrap_or(""), c.time_short()),
-            _ => format!("{}/{}/{}", c.month, c.day, c.year),
+            i64::MIN..=0 => region.time(&c),
+            1..=6 => format!("{} {}", c.weekday_name().get(..3).unwrap_or(""), region.time(&c)),
+            _ => region.date(&c),
         }
     };
     let when_w = crate::text_width(p, &when, font(11.5));
@@ -1052,5 +1076,10 @@ fn draw_row(p: &egui::Painter, r: Rect, row: &Summary, (now, now_day): (i64, i64
         p.rect_filled(Rect::from_min_size(pos2(cat_x, r.top() + 46.0), vec2(9.0, 9.0)), 2.0, theme::category_color(category));
         cat_x -= 3.0;
     }
-    clip_text(p, pos2(left, r.top() + 43.0), cat_x - left - 4.0, &row.preview, font(12.0), t.text_faint);
+    // A body that the preview holds whole ends with an end mark, as Outlook's list shows.
+    let preview_w = clip_text(p, pos2(left, r.top() + 43.0), cat_x - left - 4.0, &row.preview, font(12.0), t.text_faint);
+    let end_room = cat_x - 4.0 - (left + preview_w + 4.0);
+    if row.preview_whole && !row.preview.is_empty() && end_room >= text_width(p, "<end>", font(12.0)) {
+        p.text(pos2(left + preview_w + 4.0, r.top() + 43.0), Align2::LEFT_TOP, "<end>", font(12.0), t.text_faint);
+    }
 }

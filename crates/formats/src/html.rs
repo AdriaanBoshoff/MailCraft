@@ -705,8 +705,11 @@ impl Builder {
                     let href: String = href.trim().chars().filter(|c| !c.is_control()).collect();
                     if !href.is_empty() && !href.starts_with('#') {
                         style.link = Some(Arc::from(href));
-                        // A link has the link colour unless a colour is set on the link itself.
+                        // A link has the link colour unless a colour is set on the link itself,
+                        // and is underlined unless its style says `text-decoration: none`, on the
+                        // link or on the text inside it, as Outlook draws Word's signatures.
                         style.color = None;
+                        style.underline = true;
                     }
                 }
             }
@@ -1538,13 +1541,24 @@ fn cell_room(v: &str) -> Option<u16> {
 }
 
 /// One length of a `padding`, in pixels.
+/// Every absolute unit is read (CSS 2.1 section 4.3.2): Word writes `0cm 5.4pt`, and one
+/// length not understood would lose all four. A length without a unit is only allowed as 0,
+/// but is read as pixels, as browsers do in mail.
 fn pad_length(part: &str) -> Option<u16> {
-    let (number, scale) = match part.strip_suffix("pt") {
-        Some(points) => (points, 4.0 / 3.0),
-        None => (part.trim_end_matches("px"), 1.0),
+    let split = part.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(part.len());
+    let n = part.get(..split)?.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+    let scale = match part.get(split..)?.to_ascii_lowercase().as_str() {
+        "px" | "" => 1.0,
+        "pt" => 4.0 / 3.0,
+        "pc" => 16.0,
+        "in" => 96.0,
+        "cm" => 96.0 / 2.54,
+        "mm" => 96.0 / 25.4,
+        "q" => 96.0 / 101.6,
+        _ => return None,
     };
-    let n = number.parse::<f32>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
-    Some((n * scale).round().min(MAX_CELL_ROOM) as u16)
+    let px = n * scale;
+    px.is_finite().then(|| px.round().min(MAX_CELL_ROOM) as u16)
 }
 
 /// A block's `padding`: above, right, below, left, from one to four lengths (CSS 2.1 section

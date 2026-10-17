@@ -190,7 +190,7 @@ impl Field {
         }
     }
 
-    fn of(self, row: &openmailclient_model::Summary, outgoing: bool, tz_offset_min: i32) -> String {
+    fn of(self, row: &openmailclient_model::Summary, outgoing: bool, tz_offset_min: i32, region: &time::Region) -> String {
         match self {
             Self::Who if outgoing || row.from.is_empty() => row.to.clone(),
             Self::Who | Self::From => row.from.clone(),
@@ -198,7 +198,7 @@ impl Field {
             Self::Subject => row.subject.clone(),
             Self::Date if row.time > 0 => {
                 let at = time::civil(row.time, tz_offset_min);
-                format!("{}/{}/{} {}", at.month, at.day, at.year, at.time_short())
+                format!("{} {}", region.date(&at), region.time(&at))
             }
             Self::Date => String::new(),
             Self::Size => attachments::size_words(row.size as usize),
@@ -488,12 +488,14 @@ pub struct Job<'a> {
     pub links: Links,
     /// What Table Style prints of the list.
     pub listing: &'a Listing,
+    /// How dates and times are written.
+    pub region: &'a time::Region,
 }
 
 /// A print of the session's open message: from its owner's mailbox, now.
 pub fn job<'a>(s: &'a crate::Session, setup: &'a Setup, links: Links) -> Job<'a> {
     let owner = if s.user_name.trim().is_empty() { &s.user_email } else { &s.user_name };
-    Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup, links, listing: &s.print_list }
+    Job { owner, tz_offset_min: s.tz_offset_min, now: s.now, setup, links, listing: &s.print_list, region: &s.region }
 }
 
 /// The widest margin that may be asked for, and the most characters of one part of a header
@@ -647,8 +649,8 @@ pub(crate) fn body(item: &Item) -> (Doc, bool) {
 pub(crate) fn words(item: &Item, job: &Job) -> Vec<(String, String)> {
     let now = time::civil(job.now, job.tz_offset_min);
     vec![
-        ("Date".to_string(), format!("{} {}, {}", now.month_name(), now.day, now.year)),
-        ("Time".to_string(), now.time_short()),
+        ("Date".to_string(), job.region.date(&now)),
+        ("Time".to_string(), job.region.time(&now)),
         ("User".to_string(), job.owner.to_string()),
         ("Subject".to_string(), item.subject()),
     ]
@@ -656,13 +658,13 @@ pub(crate) fn words(item: &Item, job: &Job) -> Vec<(String, String)> {
 
 /// Lay `item` out for `job` in the fonts of `library`.
 pub fn layout(item: &Item, job: &Job, library: &Library) -> Result<Laid, EngineError> {
-    let Job { owner, tz_offset_min, links: which, .. } = *job;
+    let Job { owner, tz_offset_min, links: which, region, .. } = *job;
     let mut setup = job.setup.clone();
     setup.words = words(item, job);
     // Each attachment under the name it would be saved as, with its size.
     let attachments: Vec<String> =
         item.visible_attachments().map(|a| format!("{} ({})", attachments::file_name(a), attachments::size_words(a.size()))).collect();
-    let sent = if item.time() > 0 { time::civil(item.time(), tz_offset_min).full_stamp() } else { String::new() };
+    let sent = if item.time() > 0 { region.full_stamp(&time::civil(item.time(), tz_offset_min)) } else { String::new() };
     let fields = [
         ("From", mailbox(&item.sender_name(), &item.sender_email())),
         ("Sent", sent),
@@ -719,7 +721,11 @@ pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<L
             }
             rows.push(Row { cells: vec![says], bold: true, heading: true });
         }
-        rows.push(Row { cells: fields.iter().map(|f| f.of(row, outgoing, job.tz_offset_min)).collect(), bold: !row.read, heading: false });
+        rows.push(Row {
+            cells: fields.iter().map(|f| f.of(row, outgoing, job.tz_offset_min, job.region)).collect(),
+            bold: !row.read,
+            heading: false,
+        });
     }
     let unread = s.rows.iter().filter(|row| !row.read).count();
     let mut note = format!("{} item{}, {unread} unread", s.rows.len(), if s.rows.len() == 1 { "" } else { "s" });
@@ -736,8 +742,8 @@ pub fn list_layout(s: &crate::Session, job: &Job, library: &Library) -> Result<L
     let now = time::civil(job.now, job.tz_offset_min);
     let mut setup = job.setup.clone();
     setup.words = vec![
-        ("Date".to_string(), format!("{} {}, {}", now.month_name(), now.day, now.year)),
-        ("Time".to_string(), now.time_short()),
+        ("Date".to_string(), job.region.date(&now)),
+        ("Time".to_string(), job.region.time(&now)),
         ("User".to_string(), job.owner.to_string()),
         ("Folder".to_string(), folder.name.clone()),
         ("Subject".to_string(), folder.name.clone()),

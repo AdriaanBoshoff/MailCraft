@@ -50,20 +50,163 @@ impl Civil {
         (h, if self.hour < 12 { "AM" } else { "PM" })
     }
 
-    /// "9:14 AM"
+    /// "9:14 AM", as in the United States: [`Region::time`] writes it as the owner's region does.
     pub fn time_short(&self) -> String {
-        let (h, ap) = self.hour12();
-        format!("{h}:{:02} {ap}", self.minute)
+        Region::default().time(self)
     }
 
-    /// "Mon 10/5/2026 9:14 AM", the reading pane's date.
+    /// "Mon 10/5/2026 9:14 AM", as in the United States ([`Region::stamp`]).
     pub fn long_stamp(&self) -> String {
-        format!("{} {}/{}/{} {}", self.weekday_name().get(..3).unwrap_or(""), self.month, self.day, self.year, self.time_short())
+        Region::default().stamp(self)
     }
 
-    /// "Monday, October 5, 2026 9:14 AM", the "Sent:" line of a reply header.
+    /// "Monday, October 5, 2026 9:14 AM", as in the United States ([`Region::full_stamp`]).
     pub fn full_stamp(&self) -> String {
-        format!("{}, {} {}, {} {}", self.weekday_name(), self.month_name(), self.day, self.year, self.time_short())
+        Region::default().full_stamp(self)
+    }
+}
+
+/// Characters of a date or time picture that are read; more is not a date.
+const MAX_PICTURE: usize = 64;
+
+/// How dates and times are written where the owner is, as the system's region settings say:
+/// pictures as Windows gives them (`M/d/yyyy`, `yyyy/MM/dd`, `dddd, d MMMM yyyy`, `h:mm tt`,
+/// `HH:mm`), and the day a week begins on. Outlook writes every date as these say; so do we.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Region {
+    pub short_date: String,
+    pub long_date: String,
+    pub short_time: String,
+    /// What `tt` writes before noon and after.
+    pub am: String,
+    pub pm: String,
+    /// 0 = Sunday.
+    pub week_start: u32,
+}
+
+impl Default for Region {
+    /// As in the United States, until the system says otherwise.
+    fn default() -> Self {
+        Region {
+            short_date: "M/d/yyyy".into(),
+            long_date: "dddd, MMMM d, yyyy".into(),
+            short_time: "h:mm tt".into(),
+            am: "AM".into(),
+            pm: "PM".into(),
+            week_start: 0,
+        }
+    }
+}
+
+impl Region {
+    /// A region from what the system says, each part checked: a picture that is empty, too long
+    /// or writes no part of a date is left as it is by default.
+    pub fn of(short_date: &str, long_date: &str, short_time: &str, am: &str, pm: &str, week_start: u32) -> Region {
+        let base = Region::default();
+        let picture = |given: &str, or: String| {
+            let given: String = given.chars().filter(|c| !c.is_control()).collect();
+            let fits = !given.trim().is_empty()
+                && given.chars().count() <= MAX_PICTURE
+                && given.chars().any(|c| matches!(c, 'd' | 'M' | 'y' | 'h' | 'H' | 'm'));
+            if fits { given } else { or }
+        };
+        let word = |given: &str, or: String| {
+            let given: String = given.chars().filter(|c| !c.is_control()).take(8).collect();
+            if given.trim().is_empty() { or } else { given }
+        };
+        Region {
+            short_date: picture(short_date, base.short_date),
+            long_date: picture(long_date, base.long_date),
+            short_time: picture(short_time, base.short_time),
+            am: word(am, base.am),
+            pm: word(pm, base.pm),
+            week_start: week_start % 7,
+        }
+    }
+
+    /// "9/10/2026", or "2026/09/10".
+    pub fn date(&self, c: &Civil) -> String {
+        self.write(&self.short_date, c)
+    }
+
+    /// "Thursday, September 10, 2026".
+    pub fn long_date(&self, c: &Civil) -> String {
+        self.write(&self.long_date, c)
+    }
+
+    /// "5:04 PM", or "17:04".
+    pub fn time(&self, c: &Civil) -> String {
+        self.write(&self.short_time, c)
+    }
+
+    /// "Thu 9/10/2026 5:04 PM", the reading pane's date.
+    pub fn stamp(&self, c: &Civil) -> String {
+        format!("{} {} {}", c.weekday_name().get(..3).unwrap_or(""), self.date(c), self.time(c))
+    }
+
+    /// "Thursday, September 10, 2026 5:04 PM", the "Sent:" line of a reply header.
+    pub fn full_stamp(&self, c: &Civil) -> String {
+        format!("{} {}", self.long_date(c), self.time(c))
+    }
+
+    /// The day number of the first day of the week `c` is in.
+    pub fn week_begun(&self, c: &Civil) -> i64 {
+        let into = (c.weekday % 7 + 7 - self.week_start % 7) % 7;
+        c.day_number.saturating_sub(i64::from(into))
+    }
+
+    /// A picture written out: letters repeated stand for a part of the date, text in single
+    /// quotes stands for itself, and so does anything else.
+    fn write(&self, picture: &str, c: &Civil) -> String {
+        let mut out = String::new();
+        let mut chars = picture.chars().take(MAX_PICTURE).peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\'' {
+                for quoted in chars.by_ref() {
+                    if quoted == '\'' {
+                        break;
+                    }
+                    out.push(quoted);
+                }
+                continue;
+            }
+            if !matches!(ch, 'd' | 'M' | 'y' | 'h' | 'H' | 'm' | 's' | 't' | 'g') {
+                out.push(ch);
+                continue;
+            }
+            let mut n = 1usize;
+            while chars.next_if_eq(&ch).is_some() {
+                n = n.saturating_add(1);
+            }
+            let (h12, _) = c.hour12();
+            let noon = if c.hour < 12 { &self.am } else { &self.pm };
+            match (ch, n) {
+                ('d', 1) => out.push_str(&c.day.to_string()),
+                ('d', 2) => out.push_str(&format!("{:02}", c.day)),
+                ('d', 3) => out.push_str(c.weekday_name().get(..3).unwrap_or("")),
+                ('d', _) => out.push_str(c.weekday_name()),
+                ('M', 1) => out.push_str(&c.month.to_string()),
+                ('M', 2) => out.push_str(&format!("{:02}", c.month)),
+                ('M', 3) => out.push_str(c.month_name().get(..3).unwrap_or("")),
+                ('M', _) => out.push_str(c.month_name()),
+                ('y', 1) => out.push_str(&c.year.rem_euclid(100).to_string()),
+                ('y', 2) => out.push_str(&format!("{:02}", c.year.rem_euclid(100))),
+                ('y', _) => out.push_str(&c.year.to_string()),
+                ('h', 1) => out.push_str(&h12.to_string()),
+                ('h', _) => out.push_str(&format!("{h12:02}")),
+                ('H', 1) => out.push_str(&c.hour.to_string()),
+                ('H', _) => out.push_str(&format!("{:02}", c.hour)),
+                ('m', 1) => out.push_str(&c.minute.to_string()),
+                ('m', _) => out.push_str(&format!("{:02}", c.minute)),
+                ('s', 1) => out.push_str(&c.second.to_string()),
+                ('s', _) => out.push_str(&format!("{:02}", c.second)),
+                ('t', 1) => out.extend(noon.chars().next()),
+                ('t', _) => out.push_str(noon),
+                // The era is not written: the Gregorian calendar has one.
+                _ => {}
+            }
+        }
+        out.trim().to_string()
     }
 }
 
@@ -131,6 +274,26 @@ mod tests {
         assert_eq!((c.year, c.month, c.day, c.hour, c.minute, c.weekday), (2026, 10, 5, 9, 14, 1));
         assert_eq!(c.long_stamp(), "Mon 10/5/2026 9:14 AM");
         assert_eq!(c.full_stamp(), "Monday, October 5, 2026 9:14 AM");
+    }
+
+    #[test]
+    fn dates_are_written_as_the_region_says() {
+        let c = civil(from_civil(2026, 9, 10, 8, 5, 7, 0), 0);
+        let r = Region::of("yyyy/MM/dd", "dddd, dd MMMM yyyy", "HH:mm", "", "", 0);
+        assert_eq!((r.date(&c), r.time(&c), r.stamp(&c)), ("2026/09/10".into(), "08:05".into(), "Thu 2026/09/10 08:05".into()));
+        assert_eq!(r.full_stamp(&c), "Thursday, 10 September 2026 08:05");
+        let r = Region::of("d.M.yy 'r.'", "ddd d MMM", "h:mm:ss t", "vm", "nm", 1);
+        assert_eq!((r.date(&c), r.long_date(&c), r.time(&c)), ("10.9.26 r.".into(), "Thu 10 Sep".into(), "8:05:07 v".into()));
+        // What is not a picture of a date is not taken: the default stands.
+        let r = Region::of("", "no", &"d".repeat(500), "\u{0}", "PM", 13);
+        assert_eq!(r, Region { week_start: 6, ..Region::default() });
+        // A quote left open, and letters repeated without end, are only text.
+        let r = Region::of("d 'open", "dddddddddd", "HH:mm", "", "", 0);
+        assert_eq!((r.date(&c), r.long_date(&c)), ("10 open".into(), "Thursday".into()));
+        // 10 September 2026 was a Thursday: its week began on Sunday the 6th, or Monday the 7th.
+        assert_eq!(Region::default().week_begun(&c), c.day_number - 4);
+        assert_eq!(Region::of("", "", "", "", "", 1).week_begun(&c), c.day_number - 3);
+        assert_eq!(Region::of("", "", "", "", "", 4).week_begun(&c), c.day_number);
     }
 
     #[test]

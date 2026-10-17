@@ -400,6 +400,10 @@ fn formatted(rtf: &[u8], letters: Option<&dyn Lettering>) -> Doc {
                 scope.close();
                 if was == Dest::Instruction && scope.cur.dest != Dest::Instruction {
                     scope.cur.style.link = link(&b.instruction);
+                    // A link is underlined unless the text it shows turns underlining off.
+                    if scope.cur.style.link.is_some() {
+                        scope.cur.style.underline = true;
+                    }
                     b.instruction.clear();
                 }
                 if was == Dest::Picture && scope.cur.dest != Dest::Picture {

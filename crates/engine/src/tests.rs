@@ -651,7 +651,7 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
     let told = |key, descending| {
         let mut sorted = rows.clone();
         sort(&mut sorted, key, descending);
-        groups(&sorted, key, now, 0).into_iter().map(|g| (g.label, g.start, g.count, g.unread)).collect::<Vec<_>>()
+        groups(&sorted, key, now, 0, 0).into_iter().map(|g| (g.label, g.start, g.count, g.unread)).collect::<Vec<_>>()
     };
     let g = |label: &str, start, count, unread| (label.to_string(), start, count, unread);
     assert_eq!(
@@ -659,13 +659,35 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
         [
             g("Today", 0, 1, 0),
             g("Yesterday", 1, 1, 0),
-            g("This Week", 2, 1, 1),
-            g("Last Week", 3, 1, 0),
-            g("September", 4, 1, 1),
-            g("December 2025", 5, 1, 0),
-            g("2025", 6, 1, 0),
+            g("Last Week", 2, 1, 1),
+            g("Two Weeks Ago", 3, 1, 0),
+            g("Three Weeks Ago", 4, 1, 1),
+            g("Older", 5, 2, 0),
             g("No date", 7, 1, 0)
         ]
+    );
+    // As Outlook heads them where weeks begin on a Monday: Sunday the 11th ends the week, so the
+    // Wednesday before is this week, by its name.
+    let mut sorted = rows.clone();
+    sort(&mut sorted, SortKey::Date, true);
+    let labels = |now, start| groups(&sorted, SortKey::Date, now, 0, start).into_iter().map(|g| g.label).collect::<Vec<_>>();
+    assert_eq!(labels(now, 1), ["Today", "Yesterday", "Wednesday", "Last Week", "Three Weeks Ago", "Older", "No date"]);
+    // Seen from November: the month before, and those before it.
+    let november = time::from_civil(2026, 11, 28, 12, 0, 0, 0);
+    assert_eq!(labels(november, 0), ["Last Month", "Older", "No date"]);
+    // A day still to come is told forward.
+    let ahead = |y, m, d| groups(&[row(1, "a", "b", at(y, m, d))], SortKey::Date, now, 0, 0)[0].label.clone();
+    assert_eq!(
+        [
+            ahead(2026, 10, 12),
+            ahead(2026, 10, 14),
+            ahead(2026, 10, 19),
+            ahead(2026, 10, 26),
+            ahead(2026, 11, 2),
+            ahead(2026, 11, 20),
+            ahead(2027, 1, 1)
+        ],
+        ["Tomorrow", "Wednesday", "Next Week", "Two Weeks Away", "Three Weeks Away", "Next Month", "Beyond Next Month"]
     );
     assert_eq!(
         told(SortKey::From, false),
@@ -688,7 +710,7 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
     assert_eq!(told(SortKey::Attachments, true), [g("With attachments", 0, 1, 0), g("No attachments", 1, 7, 2)]);
     // Earlier in the month than the last two weeks.
     let late = time::from_civil(2026, 10, 30, 12, 0, 0, 0);
-    assert_eq!(groups(&[row(1, "a", "b", at(2026, 10, 2))], SortKey::Date, late, 0)[0].label, "Earlier This Month");
+    assert_eq!(groups(&[row(1, "a", "b", at(2026, 10, 2))], SortKey::Date, late, 0, 0)[0].label, "Earlier This Month");
 
     // Through the session: the groups are told with the rows, and their headings are marked as
     // what the messages say.
@@ -716,13 +738,13 @@ fn rows_are_arranged_as_a_reader_orders_them_and_stand_in_groups() {
         for descending in [false, true] {
             sort(&mut many, key, descending);
             for (now, tz) in [(i64::MIN, i32::MIN), (i64::MAX, i32::MAX), (0, 0)] {
-                let found = groups(&many, key, now, tz);
+                let found = groups(&many, key, now, tz, u32::MAX);
                 assert_eq!(found.iter().map(|g| g.count).sum::<usize>(), 200);
                 assert!(found.iter().all(|g| g.label.chars().count() <= 80));
             }
         }
     }
-    assert!(groups(&[], SortKey::Date, now, 0).is_empty());
+    assert!(groups(&[], SortKey::Date, now, 0, 0).is_empty());
 }
 
 #[test]
@@ -1187,6 +1209,7 @@ fn a_message_prints_to_a_pdf_file() {
                 setup: &openmailclient_layout::Setup::default(),
                 links: crate::print::Links::All,
                 listing: &crate::print::Listing::default(),
+                region: &openmailclient_model::time::Region::default(),
             },
             &library
         )
@@ -1823,6 +1846,7 @@ fn page_setup_is_kept_and_printed_with() {
     run(&mut s, "mail.select", json!({"folder": "Inbox", "index": 0}));
     let item = s.open.clone().unwrap();
     let listing = crate::print::Listing::default();
+    let region = openmailclient_model::time::Region::default();
     let job = |tz: i32| crate::print::Job {
         owner: "Alex Morgan",
         tz_offset_min: tz,
@@ -1830,13 +1854,14 @@ fn page_setup_is_kept_and_printed_with() {
         setup: &kept,
         links: crate::print::Links::default(),
         listing: &listing,
+        region: &region,
     };
     let words = crate::print::words(&item, &job(0));
     let word = |words: &[(String, String)], name: &str| words.iter().find(|w| w.0 == name).unwrap().1.clone();
-    assert_eq!((word(&words, "Date"), word(&words, "Time")), ("October 12, 2026".to_string(), "11:05 PM".to_string()));
+    assert_eq!((word(&words, "Date"), word(&words, "Time")), ("10/12/2026".to_string(), "11:05 PM".to_string()));
     assert_eq!((word(&words, "User"), word(&words, "Subject")), ("Alex Morgan".to_string(), item.subject()));
     let east = crate::print::words(&item, &job(120));
-    assert_eq!((word(&east, "Date"), word(&east, "Time")), ("October 13, 2026".to_string(), "1:05 AM".to_string()));
+    assert_eq!((word(&east, "Date"), word(&east, "Time")), ("10/13/2026".to_string(), "1:05 AM".to_string()));
 
     // Printing uses the setup, and what a print asks for is for that print only. Through the
     // command there is a file, or the word that no font is installed.
@@ -2965,4 +2990,50 @@ fn unsaved_changes_are_saved_on_their_own_but_never_first() {
     assert_eq!(inbox(&s), was - 5);
     drop(s);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_data_files_rows_get_their_preview_from_the_message_and_sent_mail_its_recipients() {
+    let dir = std::env::temp_dir().join(format!("openmailclient-preview-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = session();
+    let path = dir.join("sample.pst");
+    run(&mut s, "file.export", json!({"path": path}));
+    let inbox = |s: &Session| s.folders[0].iter().find(|f| f.kind == openmailclient_model::FolderKind::Inbox).unwrap().id;
+    let at = inbox(&s);
+    s.select_folder(0, at).unwrap();
+    let want: Vec<(u64, String, bool)> = s.rows.iter().map(|r| (r.time as u64, r.preview.clone(), r.preview_whole)).collect();
+    assert!(want.iter().all(|(_, p, _)| !p.is_empty()));
+
+    let mut other = Session::new();
+    other.now = s.now;
+    run(&mut other, "file.open", json!({"path": path}));
+    let at = inbox(&other);
+    other.select_folder(0, at).unwrap();
+    // A folder's table holds no body: the rows are listed without one, then read a few at a time.
+    assert!(other.rows.iter().all(|r| r.preview.is_empty()));
+    let ids: Vec<u64> = other.rows.iter().map(|r| r.id).collect();
+    let mut rounds = 0;
+    while other.rows.iter().any(|r| r.preview.is_empty()) {
+        assert!(other.fill_previews(&ids));
+        rounds += 1;
+        assert!(rounds < 10);
+    }
+    let got: Vec<(u64, String, bool)> = other.rows.iter().map(|r| (r.time as u64, r.preview.clone(), r.preview_whole)).collect();
+    assert_eq!(got, want);
+    // What was read is kept: the rows read again from the file have it at once, and nothing is
+    // read twice.
+    other.reload_rows().unwrap();
+    assert!(other.rows.iter().all(|r| !r.preview.is_empty()));
+    assert!(!other.fill_previews(&ids));
+    // Ids not listed, or asked for again and again, change nothing.
+    assert!(!other.fill_previews(&[u64::MAX, 0, u64::MAX]));
+    drop(other);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // In Sent Items each row says whom the message went to: the list shows `to`, which the
+    // sample's sent mail has.
+    let sent = s.folders[0].iter().find(|f| f.kind == openmailclient_model::FolderKind::Sent).unwrap().id;
+    s.select_folder(0, sent).unwrap();
+    assert!(!s.rows.is_empty() && s.rows.iter().all(|r| !r.to.is_empty()));
 }

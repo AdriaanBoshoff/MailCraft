@@ -3641,3 +3641,55 @@ fn a_cell_padded_on_one_side_is_a_table_and_not_only_layout() {
     let Some(Block::Table(t)) = doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table: {:?}", doc.blocks) };
     assert_eq!(t.rows[0][0].padding, Some([12, 24, 0, 0]));
 }
+
+/// Every run of text in blocks, tables and all, with whether it is a link and underlined.
+fn links_of(blocks: &[Block], out: &mut Vec<(String, bool, bool)>) {
+    for b in blocks {
+        match b {
+            Block::Para(p) => {
+                out.extend(p.runs.iter().filter(|r| !r.text.trim().is_empty()).map(|r| (r.text.clone(), r.style.link.is_some(), r.style.underline)))
+            }
+            Block::Table(t) => t.rows.iter().flatten().for_each(|c| links_of(&c.blocks, out)),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_word_signature_keeps_its_padding_in_centimetres_and_points_and_its_links_not_underlined() {
+    // Written as Word writes a signature: lengths in cm and pt, and the underline turned off
+    // on the text inside each link.
+    let doc = parse(
+        r#"<table border=0 cellspacing=0 cellpadding=0><tr><td style='padding:0cm 12.0pt 0cm 0cm'><p>Logo</p></td><td style='border:none;border-left:solid #E53935 2.25pt;padding:0cm 0cm 0cm 12.0pt'><p><a href="mailto:sam@example.test"><span style='color:#E53935;text-decoration:none'>sam@example.test</span></a></p><p><a href="https://example.test">example.test</a> <a href="https://example.test/b" style="text-decoration:none">B</a></p></td></tr></table>"#,
+    );
+    let Some(Block::Table(t)) = doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table: {:?}", doc.blocks) };
+    assert_eq!(t.rows[0][0].padding, Some([0, 16, 0, 0]));
+    assert_eq!(t.rows[0][1].padding, Some([0, 0, 0, 16]));
+    let mut runs = Vec::new();
+    links_of(&doc.blocks, &mut runs);
+    let get = |text: &str| runs.iter().find(|r| r.0 == text).map(|r| (r.1, r.2));
+    assert_eq!(get("sam@example.test"), Some((true, false)), "{runs:?}");
+    // A link left as it is is underlined, as in a browser.
+    assert_eq!(get("example.test"), Some((true, true)), "{runs:?}");
+    assert_eq!(get("B"), Some((true, false)), "{runs:?}");
+}
+
+#[test]
+fn padding_is_read_in_every_absolute_unit_and_a_length_not_understood_is_no_padding() {
+    let cell = |padding: &str| {
+        let doc = parse(&format!(r#"<table width="100%" border="1"><tr><td style="padding:{padding}">x</td><td>y</td></tr></table>"#));
+        match doc.blocks.iter().find(|b| matches!(b, Block::Table(_))) {
+            Some(Block::Table(t)) => t.rows[0][0].padding,
+            _ => panic!("no table"),
+        }
+    };
+    assert_eq!(cell("0"), Some([0, 0, 0, 0]));
+    // An inch is 96 pixels, more than a cell is given: 64 at most.
+    assert_eq!(cell("1in 1pc 1cm 10mm"), Some([64, 16, 38, 38]));
+    assert_eq!(cell("6PT"), Some([8, 8, 8, 8]));
+    assert_eq!(cell("1em"), None);
+    assert_eq!(cell("-3px"), None);
+    assert_eq!(cell("1e30in"), None);
+    assert_eq!(cell("99999999999999999999999999999999999999999in"), None);
+    assert_eq!(cell("9999999in"), Some([64, 64, 64, 64]));
+}

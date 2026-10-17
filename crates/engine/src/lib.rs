@@ -284,6 +284,13 @@ pub struct Session {
     pub current: Option<(usize, FolderId)>,
     /// The current folder's rows after search, filter and sort: what the message list shows.
     pub rows: Vec<Summary>,
+    /// Previews of the current folder's messages read from the messages themselves, by id,
+    /// where the folder's table has none, as Outlook's data files have none
+    /// ([`Session::fill_previews`]). Each is kept with the message's time and size, so that a
+    /// message changed since is read again.
+    previews: std::collections::HashMap<u64, Read>,
+    /// How dates and times are written, as the system's region settings say. Set by the host.
+    pub region: openmailclient_model::time::Region,
     pub selected: Option<u64>,
     pub open: Option<Item>,
     pub sort: SortKey,
@@ -360,6 +367,22 @@ impl Default for Session {
     }
 }
 
+/// A preview read from a message, for the row it was read for.
+#[derive(Clone, Debug)]
+struct Read {
+    time: i64,
+    size: u32,
+    preview: String,
+    whole: bool,
+}
+
+impl Read {
+    /// True when it was read for this row as it is now.
+    fn of(&self, row: &Summary) -> bool {
+        (self.time, self.size) == (row.time, row.size)
+    }
+}
+
 impl Session {
     pub fn new() -> Self {
         let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -403,6 +426,8 @@ impl Session {
             compose: None,
             status: String::new(),
             tz_offset_min: 0,
+            region: openmailclient_model::time::Region::default(),
+            previews: std::collections::HashMap::new(),
             now: openmailclient_model::time::from_unix(i64::try_from(unix).unwrap_or(0)),
             user_name: "Alex Morgan".to_string(),
             user_email: "alex.morgan@example.org".to_string(),
@@ -557,7 +582,38 @@ impl Session {
         self.selected = None;
         self.open = None;
         self.search.clear();
+        self.previews.clear();
         self.reload_rows()
+    }
+
+    /// Give the rows `ids` that have no preview the one their message has: a data file's table
+    /// of a folder does not hold the body, so the rows on screen are read a few at a time.
+    /// Returns true when any row changed. Each message is read once while the folder is open.
+    pub fn fill_previews(&mut self, ids: &[u64]) -> bool {
+        /// Messages read at a time, so that a long list scrolled fast stays smooth.
+        const AT_A_TIME: usize = 12;
+        /// Previews kept: a folder looked through from end to end starts again past this.
+        const MAX_KEPT: usize = 20_000;
+        let Some((s, f)) = self.current else { return false };
+        if self.previews.len() >= MAX_KEPT {
+            self.previews.clear();
+        }
+        let wanted: Vec<u64> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.rows.iter().any(|r| r.id == *id && r.preview.is_empty() && self.previews.get(id).is_none_or(|p| !p.of(r))))
+            .take(AT_A_TIME)
+            .collect();
+        let Some(store) = self.stores.get_mut(s) else { return false };
+        let mut changed = false;
+        for id in wanted {
+            let (preview, whole) = store.load(f, ItemId(id)).map(|item| item.preview()).unwrap_or_default();
+            let Some(row) = self.rows.iter_mut().find(|r| r.id == id) else { continue };
+            changed |= !preview.is_empty();
+            (row.preview, row.preview_whole) = (preview.clone(), whole);
+            self.previews.insert(id, Read { time: row.time, size: row.size, preview, whole });
+        }
+        changed
     }
 
     /// Re-read the current folder and apply search, filter and sort.
@@ -578,6 +634,11 @@ impl Session {
                 return Err(e.into());
             }
         };
+        for row in rows.iter_mut().filter(|r| r.preview.is_empty()) {
+            if let Some(read) = self.previews.get(&row.id).filter(|p| p.of(row)) {
+                (row.preview, row.preview_whole) = (read.preview.clone(), read.whole);
+            }
+        }
         let query = search::parse(&self.search, self.tz_offset_min);
         if !query.is_empty() {
             rows.retain(|r| query.matches(r));
@@ -598,7 +659,7 @@ impl Session {
 
     /// The groups the listed rows stand in, as they are arranged.
     pub fn groups(&self) -> Vec<arrange::Group> {
-        arrange::groups(&self.rows, self.sort, self.now, self.tz_offset_min)
+        arrange::groups(&self.rows, self.sort, self.now, self.tz_offset_min, self.region.week_start)
     }
 
     pub fn selected_index(&self) -> Option<usize> {

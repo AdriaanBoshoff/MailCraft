@@ -18,6 +18,11 @@
 //!                                            certificate of its own) instead of none
 //! {"arrive": "raw RFC 5322 text"}           put a message in the fake server's Inbox
 //! {"settle": true}                           draw until the jobs under way have ended
+//! {"region": ["yyyy/MM/dd", "dddd, d MMMM yyyy", "HH:mm", 1]}
+//!                                            write dates as a region does: short and long
+//!                                            date, time, and the first day of the week
+//!                                            (0 Sunday)
+//! {"now": [2026, 10, 16, 12, 0]}             the time it is, in UTC
 //! ```
 //!
 //! Without a script it opens the sample mailbox and writes `plan/shots/ui_shot.png`.
@@ -74,6 +79,14 @@ fn run() -> Result<(), String> {
             if let Err(e) = harness.state_mut().execute(id, &params) {
                 eprintln!("ui_shot: {id}: {e}");
             }
+        } else if let Some(r) = step.get("region").and_then(Value::as_array) {
+            let text = |i: usize| r.get(i).and_then(Value::as_str).unwrap_or("");
+            let start = r.get(3).and_then(Value::as_u64).map_or(0, |n| (n % 7) as u32);
+            harness.state_mut().session.region = openmailclient_model::time::Region::of(text(0), text(1), text(2), "", "", start);
+        } else if let Some(at) = step.get("now").and_then(Value::as_array) {
+            let n = |i: usize| at.get(i).and_then(Value::as_u64).unwrap_or(0);
+            harness.state_mut().session.now =
+                openmailclient_model::time::from_civil(n(0) as i64, n(1) as u32, n(2) as u32, n(3) as u32, n(4) as u32, 0, 0);
         } else if let Some(at) = step.get("click").and_then(Value::as_array) {
             let part = |i: usize| at.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
             let at = egui::pos2(part(0), part(1));

@@ -218,6 +218,14 @@ impl PstStore {
                 }
             }
         }
+        // A file whose store does not say where the mail folders begin, as an `.ost` of an IMAP
+        // account may not, has them under a folder named IPM_SUBTREE near the root, beside
+        // folders of Outlook's own (views, search folders) that it does not show: so do we.
+        if store.root == NID_ROOT_FOLDER
+            && let Some(nid) = store.named_near(NID_ROOT_FOLDER, "IPM_SUBTREE")
+        {
+            store.root = nid;
+        }
         // The folders of the other modules and the drafts are named by ids on the root
         // ([MS-OXOSFLD] 2.2.3), whatever they are called in the file's language.
         if let Ok((bag, _)) = store.node_props(NID_ROOT_FOLDER) {
@@ -262,6 +270,23 @@ impl PstStore {
                 (row.id, PropBag(row.cells.into_iter().filter(|c| !LTP_INTERNAL.contains(&c.id)).filter_map(|c| ltp::decode(c, cp)).collect()))
             })
             .collect())
+    }
+
+    /// A folder of this name in `from`, or in a folder in it; of several, as an `.ost`
+    /// has one for the public folders beside the mailbox's, the one with the most folders in it.
+    fn named_near(&mut self, from: u32, name: &str) -> Option<u32> {
+        /// Folders in the root looked into: Outlook's files have one or two.
+        const LOOKED_INTO: usize = 8;
+        let is = |bag: &PropBag| bag.str(pid::DISPLAY_NAME).is_some_and(|n| n.trim().eq_ignore_ascii_case(name));
+        let top = self.children(from);
+        let mut found: Vec<u32> = top.iter().filter(|(_, bag)| is(bag)).map(|(nid, _)| *nid).collect();
+        for (child, _) in top.into_iter().take(LOOKED_INTO) {
+            if child != from {
+                found.extend(self.children(child).into_iter().filter(|(n, bag)| *n != from && is(bag)).map(|(n, _)| n));
+            }
+        }
+        found.truncate(LOOKED_INTO);
+        found.into_iter().map(|nid| (self.children(nid).len(), nid)).max_by_key(|(kids, _)| *kids).map(|(_, nid)| nid)
     }
 
     fn children(&mut self, folder: u32) -> Vec<(u32, PropBag)> {
@@ -397,6 +422,11 @@ impl PstStore {
             let class = bag.str(pid::CONTAINER_CLASS).unwrap_or("").to_string();
             let count = |id: u16| u32::try_from(bag.i32(id).unwrap_or(0)).unwrap_or(0);
             let id = FolderId(u64::from(child));
+            // A hierarchy table's row need not carry the mark: then the folder's own does.
+            let hidden = match bag.bool(pid::ATTR_HIDDEN) {
+                Some(h) => h,
+                None => self.node_props(child).ok().and_then(|(own, _)| own.bool(pid::ATTR_HIDDEN)).unwrap_or(false),
+            };
             out.push(FolderInfo {
                 id,
                 parent,
@@ -406,6 +436,7 @@ impl PstStore {
                 total: count(pid::CONTENT_COUNT),
                 unread: count(pid::CONTENT_UNREAD_COUNT),
                 has_children: bag.bool(pid::SUBFOLDERS).unwrap_or(false),
+                hidden,
             });
             open.push((self.children(child).into_iter(), Some(id)));
         }

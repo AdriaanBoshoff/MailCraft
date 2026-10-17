@@ -1,9 +1,14 @@
 # Gaps
 
-**Status:** revision 96 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 97 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
+0. **No sign-in to Gmail, Outlook.com, Microsoft 365 or Yahoo.** They refuse a password over IMAP
+   and SMTP (or ask for an app password); they want OAuth 2.0 (SASL XOAUTH2 or OAUTHBEARER,
+   RFC 7628). This is the last milestone, M7: sign-in through the system's browser with PKCE,
+   tokens kept and renewed in the system's credential store, a provider's servers filled in from
+   the address.
 1. **IMAP is kept in step by message, not by folder, and there is no Exchange.** Accounts are kept
    and tested (M4.3), mail is sent (M4.4) and received by POP3 and from the IMAP Inbox (M4.5);
    every folder of an IMAP server is taken down into the account's own data file, a copy of what
@@ -86,6 +91,7 @@
 
 ## Revision history
 
+- 97 · 2026-10-17 — M1.8: shown as Outlook shows it; third-party sign-in (OAuth 2.0) is the last milestone, M7.
 - 96 · 2026-10-15 — M4.12: new mail told of as it comes (IDLE).
 - 95 · 2026-10-15 — M4.12: only what changed fetched from an IMAP server (CONDSTORE, QRESYNC).
 - 94 · 2026-10-15 — M4.9: Delay Delivery and Expires After.

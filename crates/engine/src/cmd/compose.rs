@@ -223,7 +223,7 @@ fn quoted(s: &Session, item: &Item) -> String {
     let mut out = format!("\n\n{}\n", outgoing::ORIGINAL);
     out.push_str(&format!("From: {}\n", mailbox(&item.sender_name(), &item.sender_email())));
     if item.time() > 0 {
-        out.push_str(&format!("Sent: {}\n", time::civil(item.time(), s.tz_offset_min).full_stamp()));
+        out.push_str(&format!("Sent: {}\n", s.region.full_stamp(&time::civil(item.time(), s.tz_offset_min))));
     }
     out.push_str(&format!("To: {}\n", item.display_recipients(RECIP_TO)));
     let cc = item.display_recipients(RECIP_CC);
@@ -432,7 +432,7 @@ pub(crate) fn parse_local(text: &str, offset: i32) -> Option<i64> {
 
 /// A time as the reading pane says it: "Fri 10/17/2026 9:00 AM", on this machine's clock.
 pub(crate) fn when_shown(s: &Session, t: i64) -> String {
-    time::civil(t, s.tz_offset_min).long_stamp()
+    s.region.stamp(&time::civil(t, s.tz_offset_min))
 }
 
 impl Session {

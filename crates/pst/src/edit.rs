@@ -539,6 +539,7 @@ impl PstStore {
             total: 0,
             unread: 0,
             has_children: false,
+            hidden: false,
         };
         let at = parent.map_or(edits.folders.len(), |p| edits.end_of(p));
         edits.folders.insert(at, EFolder { info, nid, new: true, items: Some(Vec::new()), had: Vec::new() });

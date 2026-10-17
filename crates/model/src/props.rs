@@ -33,6 +33,8 @@ pub mod pid {
     pub const ATTACH_SIZE: u16 = 0x0E20;
     pub const ATTACH_NUM: u16 = 0x0E21;
     pub const BODY: u16 = 0x1000;
+    /// PidTagPreview ([MS-OXPROPS] 2.871): the start of the body as Outlook keeps it for its list.
+    pub const PREVIEW: u16 = 0x3FD9;
     pub const RTF_COMPRESSED: u16 = 0x1009;
     pub const HTML: u16 = 0x1013;
     pub const INTERNET_MESSAGE_ID: u16 = 0x1035;
@@ -51,6 +53,8 @@ pub mod pid {
     pub const CONTENT_UNREAD_COUNT: u16 = 0x3603;
     pub const SUBFOLDERS: u16 = 0x360A;
     pub const CONTAINER_CLASS: u16 = 0x3613;
+    /// PidTagAttributeHidden: a folder or item not shown ([MS-OXPROPS] 2.609).
+    pub const ATTR_HIDDEN: u16 = 0x10F4;
     pub const ATTACH_DATA: u16 = 0x3701;
     pub const ATTACH_EXTENSION: u16 = 0x3703;
     pub const ATTACH_FILENAME: u16 = 0x3704;

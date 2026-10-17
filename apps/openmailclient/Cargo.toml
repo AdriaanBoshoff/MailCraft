@@ -13,6 +13,7 @@ workspace = true
 openmailclient-engine = { workspace = true }
 openmailclient-ui-egui = { workspace = true }
 openmailclient-formats = { workspace = true }
+openmailclient-model = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 log = { workspace = true }
@@ -22,3 +23,7 @@ serde_json = { workspace = true }
 # The new-mail chime, made in code (`chime.rs`); other systems hand it to their own player.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 rodio = { version = "0.20.1", default-features = false }
+
+# The date and time formats and first day of the week, read from the region settings.
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6.1"

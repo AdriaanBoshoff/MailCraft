@@ -1550,12 +1550,11 @@ fn section(run: &Run, look: Look) -> (String, TextFormat) {
         format.font_id = font(px.min(13.5));
         return (if alt.is_empty() { format!("[{what}]") } else { format!("[{what}: {alt}]") }, format);
     }
-    if s.link.is_some() {
-        if s.color.is_none() && s.background.is_none() && contrast(look.t.accent_dark, look.on) >= 3.0 {
-            format.color = look.t.accent_dark;
-        }
-        format.underline = Stroke::new(1.0, format.color);
-    } else if s.underline {
+    if s.link.is_some() && s.color.is_none() && s.background.is_none() && contrast(look.t.accent_dark, look.on) >= 3.0 {
+        format.color = look.t.accent_dark;
+    }
+    // A link is underlined as its style says: Word's signatures turn it off.
+    if s.underline {
         format.underline = Stroke::new(1.0, format.color);
     }
     if s.strike {

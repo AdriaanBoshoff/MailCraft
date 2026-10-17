@@ -484,3 +484,23 @@ fn hostile_items_are_written_or_refused_never_a_panic() {
     s.push_item(folder, deep);
     assert!(matches!(write_store(Cursor::new(Vec::new()), &mut s, UID), Err(PstError::Write(_))));
 }
+
+#[test]
+fn where_a_store_does_not_say_where_its_mail_begins_the_ipm_subtree_with_folders_in_it_is_taken() {
+    // As an `.ost` has them: one IPM_SUBTREE for the public folders, empty, and the mailbox's.
+    let mut s = MemStore::new("Synthetic cache");
+    let public = s.push_folder(None, "Root - Public", "");
+    s.push_folder(Some(public), "IPM_SUBTREE", "");
+    let mailbox = s.push_folder(None, "Root - Mailbox", "");
+    s.push_folder(Some(mailbox), "Finder", "");
+    let subtree = s.push_folder(Some(mailbox), "IPM_SUBTREE", "");
+    s.push_folder(Some(subtree), "Inbox", "IPF.Note");
+    s.push_folder(Some(subtree), "Sent Items", "IPF.Note");
+    let (bytes, _) = save(&mut s);
+    let mut back = PstStore::from_bytes(bytes).unwrap();
+    let from = back.root;
+    let found = back.named_near(from, "ipm_subtree").unwrap();
+    let names: Vec<String> = back.children(found).iter().filter_map(|(_, bag)| bag.str(pid::DISPLAY_NAME).map(str::to_string)).collect();
+    assert_eq!(names, ["Inbox", "Sent Items"]);
+    assert_eq!(back.named_near(from, "Nowhere"), None);
+}

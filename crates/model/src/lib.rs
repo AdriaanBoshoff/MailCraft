@@ -171,6 +171,9 @@ pub struct FolderInfo {
     pub total: u32,
     pub unread: u32,
     pub has_children: bool,
+    /// A folder of the mail program's own that a folder pane does not show (PidTagAttributeHidden,
+    /// [MS-OXPROPS] 2.609): kept and saved as any other.
+    pub hidden: bool,
 }
 
 /// Follow-up flag ([MS-OXOFLAG] PidTagFlagStatus).
@@ -181,6 +184,9 @@ pub enum Flag {
     Complete,
     Flagged,
 }
+
+/// Characters of a body a message list's preview holds, as many as Outlook keeps (PidTagPreview).
+pub const PREVIEW_CHARS: usize = 255;
 
 /// One row of a folder's message list: enough to draw the list without loading the item.
 #[derive(Clone, Debug, Default)]
@@ -199,6 +205,8 @@ pub struct Summary {
     pub flag: Flag,
     pub message_class: String,
     pub preview: String,
+    /// The preview is the whole body: the list says so after it, as Outlook does.
+    pub preview_whole: bool,
     pub categories: Vec<String>,
     /// When a message held in the Outbox may go; 0 when it is not held.
     pub deliver_after: i64,
@@ -492,8 +500,7 @@ impl Item {
     }
 
     pub fn summary(&self, id: u64) -> Summary {
-        let body = self.body_text();
-        let preview: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
+        let (preview, preview_whole) = self.preview();
         Summary {
             id,
             subject: self.subject(),
@@ -507,10 +514,41 @@ impl Item {
             flag: self.flag(),
             message_class: self.message_class().to_string(),
             preview,
+            preview_whole,
             categories: self.categories.clone(),
             deliver_after: self.deliver_after(),
             expires: self.expires(),
         }
+    }
+
+    /// The start of the body on one line, as the message list shows it, and whether that is
+    /// all of it. A message without a body says what Outlook kept of it (PidTagPreview).
+    pub fn preview(&self) -> (String, bool) {
+        let body = self.body_text();
+        let mut words = body.split_whitespace();
+        let mut preview = String::new();
+        let mut whole = true;
+        for word in words.by_ref() {
+            if preview.chars().count().saturating_add(word.chars().count()) > PREVIEW_CHARS {
+                // A word longer than the whole preview, as a long link is, is cut.
+                if preview.is_empty() {
+                    preview.extend(word.chars().take(PREVIEW_CHARS));
+                }
+                whole = false;
+                break;
+            }
+            if !preview.is_empty() {
+                preview.push(' ');
+            }
+            preview.push_str(word);
+        }
+        if preview.is_empty() && whole {
+            let kept = self.props.str(pid::PREVIEW).unwrap_or("");
+            let kept: String = kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(PREVIEW_CHARS).collect();
+            // What Outlook kept may have been cut short: only an empty body is known whole.
+            return (kept.clone(), kept.is_empty());
+        }
+        (preview, whole)
     }
 
     pub fn approx_size(&self) -> usize {
@@ -771,5 +809,25 @@ mod tests {
         assert_eq!(it.visible_attachments().count(), 0);
         it.attachments.push(Attachment::file("report.pdf", "application/pdf", vec![1]));
         assert_eq!(it.visible_attachments().count(), 1);
+    }
+
+    #[test]
+    fn a_preview_is_the_start_of_the_body_on_one_line_and_says_when_it_is_all_of_it() {
+        let mut it = Item::default();
+        it.props.set_str(pid::BODY, "\r\n\r\n  test\r\n");
+        assert_eq!(it.preview(), ("test".to_string(), true));
+        let long = "word ".repeat(100);
+        it.props.set_str(pid::BODY, &long);
+        let (preview, whole) = it.preview();
+        assert!(!whole && preview.chars().count() <= PREVIEW_CHARS && preview.ends_with("word"));
+        // One word longer than the preview, as a long link is, is cut.
+        it.props.set_str(pid::BODY, &"x".repeat(1000));
+        assert_eq!(it.preview(), ("x".repeat(PREVIEW_CHARS), false));
+        // Without a body, what Outlook kept stands, and may have been cut short.
+        let mut kept = Item::default();
+        kept.props.set_str(pid::PREVIEW, " Kept\r\nby Outlook ");
+        assert_eq!(kept.preview(), ("Kept by Outlook".to_string(), false));
+        assert_eq!(Item::default().preview(), (String::new(), true));
+        assert!(it.summary(1).preview == "x".repeat(PREVIEW_CHARS));
     }
 }

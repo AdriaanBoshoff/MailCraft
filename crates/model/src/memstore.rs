@@ -47,6 +47,7 @@ impl MemStore {
             total: 0,
             unread: 0,
             has_children: false,
+            hidden: false,
         };
         self.folders.push(MemFolder { info, items: Vec::new() });
         if let Some(p) = parent

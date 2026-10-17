@@ -89,24 +89,40 @@ pub struct Group {
     pub unread: usize,
 }
 
-/// The day a message is of, as a heading: the days of this week and the last by name, then the
-/// month, then the year.
-fn day_label(now: &time::Civil, row_time: i64, tz_offset_min: i32) -> String {
+/// The heading a message's day stands under, as Outlook's are: the days of this week by name,
+/// then the weeks before by how many ago, then this month, the month before, and older. A day
+/// still to come, as a held message's is, is told the same way forward. Weeks begin on the day
+/// the region says.
+fn day_label(now: &time::Civil, row_time: i64, tz_offset_min: i32, week_start: u32) -> String {
     if row_time <= 0 {
         return "No date".to_string();
     }
     let day = time::civil(row_time, tz_offset_min);
-    match now.day_number.saturating_sub(day.day_number) {
-        i64::MIN..=0 => "Today".to_string(),
-        1 => "Yesterday".to_string(),
-        2..=6 => "This Week".to_string(),
-        7..=13 => "Last Week".to_string(),
-        _ if day.year == now.year && day.month == now.month => "Earlier This Month".to_string(),
-        _ if day.year == now.year => day.month_name().to_string(),
-        // The months of the year before are still told apart while they are less than a year ago.
-        _ if day.year == now.year.saturating_sub(1) && day.month > now.month => format!("{} {}", day.month_name(), day.year),
-        _ => day.year.to_string(),
-    }
+    let week = |c: &time::Civil| time::Region { week_start, ..time::Region::default() }.week_begun(c);
+    let weeks = week(&day).saturating_sub(week(now)) / 7;
+    let months = (day.year.saturating_mul(12).saturating_add(i64::from(day.month)))
+        .saturating_sub(now.year.saturating_mul(12).saturating_add(i64::from(now.month)));
+    let label = match day.day_number.saturating_sub(now.day_number) {
+        0 => "Today",
+        -1 => "Yesterday",
+        1 => "Tomorrow",
+        _ if weeks == 0 => day.weekday_name(),
+        _ => match (weeks, months) {
+            (-1, _) => "Last Week",
+            (-2, _) => "Two Weeks Ago",
+            (-3, _) => "Three Weeks Ago",
+            (1, _) => "Next Week",
+            (2, _) => "Two Weeks Away",
+            (3, _) => "Three Weeks Away",
+            (_, 0) if weeks < 0 => "Earlier This Month",
+            (_, 0) => "Later This Month",
+            (_, -1) => "Last Month",
+            (_, 1) => "Next Month",
+            _ if weeks < 0 => "Older",
+            _ => "Beyond Next Month",
+        },
+    };
+    label.to_string()
 }
 
 fn size_label(size: u32) -> &'static str {
@@ -125,9 +141,9 @@ fn named(text: &str, none: &str) -> String {
 }
 
 /// The heading `row` stands under when the list is arranged by `key`.
-fn label(row: &Summary, key: SortKey, now: &time::Civil, tz_offset_min: i32) -> String {
+fn label(row: &Summary, key: SortKey, now: &time::Civil, tz_offset_min: i32, week_start: u32) -> String {
     match key {
-        SortKey::Date => day_label(now, row.time, tz_offset_min),
+        SortKey::Date => day_label(now, row.time, tz_offset_min, week_start),
         SortKey::From => named(&row.from, "No sender"),
         SortKey::To => named(&row.to, "No recipient"),
         SortKey::Subject => named(strip_reply_prefix(&row.subject), "No subject"),
@@ -150,13 +166,14 @@ fn label(row: &Summary, key: SortKey, now: &time::Civil, tz_offset_min: i32) -> 
 
 /// The groups `rows` stand in, arranged by `key`: rows that follow one another under the same
 /// heading, with how many they are and how many of them are unread. Names and subjects that
-/// differ only in case or accents are one group, under the heading of its first row.
-pub fn groups(rows: &[Summary], key: SortKey, now: i64, tz_offset_min: i32) -> Vec<Group> {
+/// differ only in case or accents are one group, under the heading of its first row. Weeks
+/// begin on `week_start`, 0 for Sunday.
+pub fn groups(rows: &[Summary], key: SortKey, now: i64, tz_offset_min: i32, week_start: u32) -> Vec<Group> {
     let now = time::civil(now, tz_offset_min);
     let mut groups: Vec<Group> = Vec::new();
     let mut last: Option<String> = None;
     for (at, row) in rows.iter().enumerate() {
-        let label = label(row, key, &now, tz_offset_min);
+        let label = label(row, key, &now, tz_offset_min, week_start);
         let same = fold(&label);
         match groups.last_mut() {
             Some(group) if last.as_deref() == Some(same.as_str()) => {

@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod chime;
+mod region;
 
 use openmailclient_engine::Session;
 use openmailclient_ui_egui::{MailUi, UiRequest};
@@ -287,6 +288,7 @@ fn main() -> ExitCode {
         eprintln!("openmailclient: mail servers cannot be reached: {e}");
     }
     session.tz_offset_min = openmailclient_ui_egui::local_offset_minutes();
+    session.region = region::of_this_system();
     // Copies of attachments an earlier run opened and could not clear away, a day on.
     openmailclient_engine::attachments::clear_opened(false);
     let args: Vec<String> = std::env::args().skip(1).collect();

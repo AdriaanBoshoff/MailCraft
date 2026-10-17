@@ -658,7 +658,7 @@ impl<'f, 'l> Flow<'f, 'l> {
             let mut look = Look {
                 size,
                 color: s.color.unwrap_or(if link { LINK } else { BLACK }),
-                under: s.underline || link,
+                under: s.underline,
                 strike: s.strike,
                 back: s.background,
                 rise,

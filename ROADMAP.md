@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12) · revision 106 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); third-party sign-in is the last milestone (M7) · revision 107 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 452, all passing |
+| Tests | 458, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -24,6 +24,7 @@
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6); each account in a data file of its own, the live check passed (M4.7) |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
+| M7 | Third-party sign-in: Gmail, Outlook.com and Microsoft 365, Yahoo and other providers through OAuth 2.0 (SASL XOAUTH2 and OAUTHBEARER, RFC 7628), signed in through the system's browser with PKCE, tokens kept and renewed in the system's credential store, a provider's servers filled in from its address | not started |
 
 ## Current focus (M1)
 
@@ -142,7 +143,8 @@
 90. Done: Delay Delivery and Expires After on a message being sent: a held message waits in the Outbox and goes at its minute, an expired one is struck through (M4.9, `compose.delayDelivery`, `compose.expires`, `Session::send_receive_due`).
 91. Done: Only what changed is asked of an IMAP server that keeps mod-sequences: CONDSTORE's CHANGEDSINCE and QRESYNC's SELECT, what it says went made sure of before anything goes here (M4.12, `Imap::select_since`, `imap_sync::since`, `accounts::Step`).
 92. Done: New mail told of as it comes: each IMAP account's Inbox watched with IDLE on a connection of its own and received from the moment the server says it changed (M4.12, `Imap::idle`, `crates/engine/src/watch.rs`, `mail.newMailAsItComes`).
-93. Next: M4.12: IMAP folders renamed, moved and deleted followed both ways.
+93. Done: Shown as Outlook shows it, from a side-by-side look at an account's mail: cell padding in centimetres and points, links underlined only where their style says, recipients in Sent Items, previews read from the message with an end mark, Outlook's date headings, dates and times as the system's region writes them, and an `.ost` that starts at its mail folders with hidden folders left out (M1.8, `time::Region`, `Session::fill_previews`, `PstStore::named_near`).
+94. Next: M4.12: IMAP folders renamed, moved and deleted followed both ways.
 
 ## Do later (from M2)
 
@@ -1899,3 +1901,21 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   chatters without end or answers out of turn ends the watch, not the window; the window is
   woken when a watch hears something rather than looking all the time.
   5 tests.
+- **2026-10-17** - M1.8: shown as Outlook shows it.
+  An account's mail was put beside Outlook's showing of it, locally, and what differed was fixed:
+  a table cell's padding written in centimetres, points or any other absolute unit is read (it
+  was dropped, so a signature's cells sat tight); a link is underlined only when its style says
+  so, as a signature's are not; Sent Items, Drafts and the Outbox show whom a message went to;
+  a data file's rows, whose table holds no preview, get theirs from the message, a few at a time
+  as they come on screen, and a body the preview holds whole ends with an end mark; the date
+  headings are Outlook's (the days of this week by name, Last Week, Two Weeks Ago, Three Weeks
+  Ago, Earlier This Month, Last Month, Older, and forward for a held message); dates and times
+  are written as the system's region settings say, and weeks begin where they say; an `.ost`
+  whose store does not say where its mail begins starts at the mailbox's IPM_SUBTREE, not at
+  the file's root with Outlook's own folders, and folders marked hidden are left out of the
+  folder pane but kept and saved.
+  Better than Outlook: a region's pictures are read with control characters, length and missing
+  date letters guarded; previews read from a message are kept while the folder is open and
+  capped, so a long folder scrolled end to end stays smooth; padding that is not a finite length
+  is no padding, and any padding is capped.
+  6 tests.
