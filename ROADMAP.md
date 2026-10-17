@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); third-party sign-in is the last milestone (M7) · revision 109 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); third-party sign-in is the last milestone (M7) · revision 110 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 469, all passing |
+| Tests | 471, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -146,7 +146,8 @@
 93. Done: Shown as Outlook shows it, from a side-by-side look at an account's mail: cell padding in centimetres and points, links underlined only where their style says, recipients in Sent Items, previews read from the message with an end mark, Outlook's date headings, dates and times as the system's region writes them, and an `.ost` that starts at its mail folders with hidden folders left out (M1.8, `time::Region`, `Session::fill_previews`, `PstStore::named_near`).
 94. Done: IMAP folders renamed, moved and deleted followed both ways: a folder renamed or moved on the server is renamed or moved here, known again by the server's id for it (OBJECTID, RFC 8474) or its UIDVALIDITY, without its mail taken down twice; one renamed, moved or put with the deleted mail here is renamed or moved there; one deleted here for good is deleted there; one the server no longer has is kept here with the deleted mail; a folder made here is made there (M4.12, `imap_sync::follow`, `Imap::rename`, `Imap::delete`, `Imap::status`, `Received::folders_gone`).
 95. Done: Drafts on the server: a draft saved in an IMAP account goes into the account's own Drafts and onto the server's Drafts folder marked `\Draft`; saved again or sent, it takes its own place there and goes from Drafts on both sides; a draft written elsewhere comes here as a draft and opens to be written on with a double-click or the reading pane's bar; Save keeps the message open, as Outlook does (M4.12, `compose.editDraft`, `Draft::filed`, `ui.openSelected`).
-96. Next: M4.12: the place of each message on the server read once on a thread of its own.
+96. Done: The account's data file read apart: the first receive of a run reads each message's place on the server on the receive's own thread, from the mailbox as it stands (`Store::apart`), not on the window's; what it learns is remembered when the receive ends (M4.12, `imap_sync::Gather`).
+97. Next: M4.13: pictures decoded off the thread that draws the window.
 
 ## Do later (from M2)
 
@@ -246,7 +247,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | New mail told of as it comes (IDLE, RFC 2177) | done: M4.12 |
 | IMAP folders renamed, moved and deleted here or on the server, each side following the other | done: M4.12 |
 | Drafts kept on the server as they are written | done: M4.12 |
-| The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | M4.12 |
+| The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | done: M4.12 |
 | New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | done: M4.9 |
 | Send/Receive's progress shown in a window of its own (Show Progress) | done: M4.9 |
 | Delay Delivery and Expires After on a message being sent, and a send held until a time | done: M4.9 |
@@ -1952,3 +1953,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   draft ever goes to the server; a draft closed with nothing written since its save is not kept a
   second time as discarded.
   3 tests.
+- **2026-10-17** - M4.12: the places of messages read apart from the window.
+  To keep an IMAP account in step, a receive needs to know where each message of the account's
+  data file is on the server, and that is kept on the message itself. It was read for every
+  message on the window's thread the first time a run received, which held the window for a while
+  on a large file. Now only what is remembered is taken there; the rest, and each message to be
+  put on the server, is read on the receive's own thread through a handle of its own on the data
+  file, with the unsaved changes as they were when the receive began (`Store::apart`,
+  `imap_sync::Gather`). What it learns is remembered when the receive ends, so the next one reads
+  nothing again. A store in no file is read where it is, as before.
+  Better than Outlook: when the file cannot be read apart (another program changed it since it was
+  opened, say), the account is not kept in step this time and says so, rather than being taken for
+  a file without those messages; nothing goes from the server for it.
+  2 tests.

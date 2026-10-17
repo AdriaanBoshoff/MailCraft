@@ -98,8 +98,9 @@ struct Taking {
     /// goes into a data file of the account's own, where the folders can be as the server's.
     folders: bool,
     /// IMAP with a data file of the account's own: what it holds, kept in step with the
-    /// server both ways.
+    /// server both ways; read from `gather` on the receive's own thread.
     local: Option<Local>,
+    gather: Option<imap_sync::Gather>,
 }
 
 /// A message taken down.
@@ -277,8 +278,8 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
         let saved = s.stores.get(target.store).is_some_and(|st| st.path().is_some() && !st.unsaved());
         let (received, take_off) = (account.received.kept_in(&into_of(s, target)), !account.leave_on_server && saved);
         targets.push((account.id.clone(), target));
-        let local = (target.own && account.kind == Kind::Imap).then(|| imap_sync::local(s, target.store, &received));
-        taking.push(Taking { reach: Reach::of(s, at)?, received, take_off, folders: target.own, local });
+        let gather = (target.own && account.kind == Kind::Imap).then(|| imap_sync::local(s, target.store, &received));
+        taking.push(Taking { reach: Reach::of(s, at)?, received, take_off, folders: target.own, local: None, gather });
     }
     if taking.is_empty() {
         return Err(EngineError::Format(skipped.first().cloned().unwrap_or_else(|| "there is no account to receive from".into())));
@@ -295,7 +296,17 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
                 break;
             }
             let mut one = match t.reach.account.kind {
-                Kind::Imap => from_imap(&mut t, progress),
+                Kind::Imap => match t.gather.take().map(|g| g.finish(progress)).transpose() {
+                    Ok(local) => {
+                        t.local = local;
+                        from_imap(&mut t, progress)
+                    }
+                    Err(e) => {
+                        let mut out = self::took(&t);
+                        out.error = Some(e);
+                        out
+                    }
+                },
                 Kind::Pop3 => from_pop3(&t, progress),
             };
             // What was to go on the server is not wanted any more.

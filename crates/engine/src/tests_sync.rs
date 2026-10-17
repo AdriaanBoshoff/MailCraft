@@ -938,3 +938,52 @@ fn a_server_without_a_drafts_folder_is_given_one() {
     assert!(is_draft(&fake, "Note"));
     done(s, dir);
 }
+
+#[test]
+fn the_places_of_messages_are_read_apart_from_the_window_and_remembered_after() {
+    let fake = Fake::default();
+    for n in 0..5 {
+        fake.state().mailbox("INBOX").unwrap().add(&message(&format!("Mail {n}")), &[]);
+    }
+    let (mut s, dir) = account(&fake, "apart");
+    receive(&mut s);
+    assert!(!s.stores[1].unsaved(), "the account's data file is saved by the receive");
+    assert_eq!(count(&s, "Inbox"), 5);
+
+    // As if the program were started again: nothing is remembered of the data file.
+    s.places = Default::default();
+    s.run("account.receive", &json!({ "wait": false })).unwrap();
+    assert!(s.places.is_empty(), "the window read none of the data file's messages");
+    settle(&mut s);
+    assert!(s.places.len() >= 5, "what was read apart is remembered: {}", s.places.len());
+    // Kept in step as before: nothing came twice and nothing went up again.
+    assert_eq!(count(&s, "Inbox"), 5);
+    assert_eq!(on_server(&fake, "INBOX"), 5);
+
+    // Read and changed here meanwhile: the next receive takes the change up.
+    pick(&mut s, "Inbox", "Mail 0");
+    s.run("mail.flag", &Value::Null).unwrap();
+    receive(&mut s);
+    assert!(flags(&fake, "INBOX", "Mail 0").iter().any(|f| f == "\\Flagged"), "{}", s.status);
+    done(s, dir);
+}
+
+#[test]
+fn a_data_file_that_cannot_be_read_apart_is_not_kept_in_step_and_nothing_goes_from_the_server() {
+    let fake = Fake::default();
+    fake.state().mailbox("INBOX").unwrap().add(&message("Kept"), &[]);
+    let (mut s, dir) = account(&fake, "apart-gone");
+    receive(&mut s);
+    assert!(!s.stores[1].unsaved(), "the account's data file is saved by the receive");
+    let path = s.stores[1].path().unwrap().to_path_buf();
+
+    // Another program seems to have changed the file, so it is not opened again apart.
+    s.places = Default::default();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+    let _ = s.run("account.receive", &json!({ "wait": false }));
+    settle(&mut s);
+    assert!(s.status.contains("could not be read"), "{}", s.status);
+    assert_eq!(on_server(&fake, "INBOX"), 1, "nothing went from the server");
+    done(s, dir);
+}

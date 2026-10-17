@@ -134,7 +134,7 @@ pub struct Places {
     by: HashMap<(String, u64, u64), Known>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Known {
     time: i64,
     subject: String,
@@ -143,6 +143,16 @@ struct Known {
 }
 
 impl Places {
+    /// How many items are remembered.
+    pub fn len(&self) -> usize {
+        self.by.len()
+    }
+
+    /// Whether none is.
+    pub fn is_empty(&self) -> bool {
+        self.by.is_empty()
+    }
+
     fn forget(&mut self, path: &str, folder: FolderId, id: ItemId) {
         self.by.remove(&(path.to_string(), folder.0, id.0));
     }
@@ -184,6 +194,8 @@ pub(super) struct Local {
     pub marks: Vec<Mark>,
     /// Folders deleted here for good that are to go from the server.
     pub folders_gone: Vec<GoneFolder>,
+    /// What was learnt of messages read apart, remembered when the receive ends.
+    known: Vec<((String, u64, u64), Known)>,
 }
 
 impl Local {
@@ -280,9 +292,12 @@ fn flagged(flag: Flag) -> bool {
     flag == Flag::Flagged
 }
 
-/// What the account's data file holds, for a receive to keep in step with the server: read once
-/// for each item and remembered after.
-pub(super) fn local(s: &mut Session, store: usize, received: &Received) -> Local {
+/// What the account's data file holds, for a receive to keep in step with the server: what is
+/// remembered of each message is taken here, at once; the messages not read before (each of
+/// them, the first time) and those to be put on the server are read by `Gather::finish` on the
+/// receive's own thread, from the mailbox as it stands now (`Store::apart`), so that the window
+/// is not held while a large data file is read through. A store in no file is read here.
+pub(super) fn local(s: &mut Session, store: usize, received: &Received) -> Gather {
     let path = s.stores.get(store).and_then(|st| st.path()).map(|p| p.display().to_string()).unwrap_or_default();
     let folders: Vec<LocalFolder> = s
         .folders
@@ -292,57 +307,160 @@ pub(super) fn local(s: &mut Session, store: usize, received: &Received) -> Local
     if s.places.by.len() > MAX_KNOWN {
         s.places.by.clear();
     }
-    let (mut items, mut uploads, mut bytes) = (Vec::new(), 0usize, 0u64);
+    let (mut items, mut unread) = (Vec::new(), Vec::new());
     for f in folders.iter().filter(|f| holds_mail(f.kind)) {
         let Some(st) = s.stores.get_mut(store) else { break };
         let Ok(rows) = st.list(f.id) else { continue };
         for r in rows {
             let key = (path.clone(), f.id.0, r.id);
-            let known = match s.places.by.get(&key).filter(|k| k.time == r.time && k.subject == r.subject) {
-                Some(k) => k.clone(),
-                None => {
-                    let Ok(item) = st.load(f.id, ItemId(r.id)) else { continue };
-                    let k = Known {
-                        time: r.time,
-                        subject: r.subject.clone(),
-                        place: Place::of(&item),
-                        message_id: item.props.str(openmailclient_model::pid::INTERNET_MESSAGE_ID).map(str::trim).unwrap_or_default().to_string(),
-                    };
-                    s.places.by.insert(key, k.clone());
-                    k
+            let known = s.places.by.get(&key).filter(|k| k.time == r.time && k.subject == r.subject).cloned();
+            let up = received.matched && goes_up(f.kind) && known.as_ref().is_none_or(|k| k.place.is_none());
+            if known.is_none() || up {
+                let learn = known.is_none();
+                unread.push(Unread {
+                    at: items.len(),
+                    folder: f.id,
+                    kind: f.kind,
+                    id: ItemId(r.id),
+                    time: r.time,
+                    subject: r.subject.clone(),
+                    learn,
+                });
+            }
+            let (place, message_id) = known.map(|k| (k.place, k.message_id)).unwrap_or_default();
+            items.push(LocalItem {
+                folder: f.id,
+                id: ItemId(r.id),
+                place,
+                read: r.read,
+                flagged: flagged(r.flag),
+                message_id,
+                upload: None,
+                draft: false,
+            });
+        }
+    }
+    let marks = received.folders.iter().filter(|m| m.here != 0).cloned().collect();
+    let local = Local {
+        folders,
+        items,
+        gone: received.gone.clone(),
+        matched: received.matched,
+        marks,
+        folders_gone: received.folders_gone.clone(),
+        known: Vec::new(),
+    };
+    let mut g = Gather { local, path, unread, apart: None };
+    if g.unread.is_empty() {
+        return g;
+    }
+    let Some(st) = s.stores.get_mut(store) else { return g };
+    // A data file is read apart; a store in no file (or one that cannot be) is read here, and
+    // what is read of it is remembered at once.
+    g.apart = if st.path().is_some() { st.apart().ok().flatten() } else { None };
+    if g.apart.is_none() {
+        g.read(st.as_mut(), None);
+        for (key, known) in g.local.known.drain(..) {
+            s.places.by.insert(key, known);
+        }
+    }
+    g
+}
+
+/// A message `Gather::finish` reads: where it is among the items, and what tells it again.
+struct Unread {
+    at: usize,
+    folder: FolderId,
+    kind: FolderKind,
+    id: ItemId,
+    time: i64,
+    subject: String,
+    /// It was not read before: what it says of its place is to be learnt.
+    learn: bool,
+}
+
+/// The account's data file as a receive began, part of it still to be read (`local`).
+pub(super) struct Gather {
+    local: Local,
+    path: String,
+    unread: Vec<Unread>,
+    /// The mailbox as it stood, to be read on the receive's own thread.
+    apart: Option<openmailclient_model::Apart>,
+}
+
+impl Gather {
+    /// The rest read, on the receive's own thread: the data file through a handle of its own,
+    /// with the changes as they were when the receive began. One that cannot be read is not
+    /// kept in step this time, rather than being taken for a file without those messages.
+    pub(super) fn finish(mut self, progress: &openmailclient_model::Progress) -> Result<Local, NetError> {
+        if let Some(apart) = self.apart.take() {
+            let mut st = apart(std::sync::Arc::new(openmailclient_model::Progress::default())).map_err(|e| {
+                NetError::Unsupported(format!(
+                    "the account's data file could not be read apart ({e}); it is kept in step with the server at the next Send/Receive"
+                ))
+            })?;
+            if !self.read(st.as_mut(), Some(progress)) {
+                return Err(NetError::Unsupported("stopped before the account's data file was read".into()));
+            }
+        }
+        Ok(self.local)
+    }
+
+    /// Read each message waiting: its place, when it was not known, and what goes on the
+    /// server. False when stopped.
+    fn read(&mut self, st: &mut dyn openmailclient_model::Store, progress: Option<&openmailclient_model::Progress>) -> bool {
+        let (mut uploads, mut bytes) = (0usize, 0u64);
+        let mut lost = HashSet::new();
+        for u in &self.unread {
+            if progress.is_some_and(openmailclient_model::Progress::stopped) {
+                return false;
+            }
+            let Some(i) = self.local.items.get_mut(u.at) else { continue };
+            let Ok(item) = st.load(u.folder, u.id) else {
+                // One not read before that cannot be read now is left out, as if not there.
+                if u.learn {
+                    lost.insert(u.at);
                 }
+                continue;
             };
-            let (mut upload, mut draft) = (None, false);
-            if known.place.is_none()
-                && received.matched
-                && goes_up(f.kind)
+            if u.learn {
+                let known = Known {
+                    time: u.time,
+                    subject: u.subject.clone(),
+                    place: Place::of(&item),
+                    message_id: item.props.str(openmailclient_model::pid::INTERNET_MESSAGE_ID).map(str::trim).unwrap_or_default().to_string(),
+                };
+                i.place = known.place.clone();
+                i.message_id = known.message_id.clone();
+                if self.local.known.len() < MAX_KNOWN {
+                    self.local.known.push(((self.path.clone(), u.folder.0, u.id.0), known));
+                }
+            }
+            if i.place.is_none()
+                && self.local.matched
+                && goes_up(u.kind)
                 && uploads < MAX_UPLOADS
                 && bytes < MAX_UPLOAD_BYTES
-                && let Ok(item) = st.load(f.id, ItemId(r.id))
                 // A message not sent yet goes up only as a draft, from Drafts.
-                && (!item.is_unsent() || f.kind == FolderKind::Drafts)
+                && (!item.is_unsent() || u.kind == FolderKind::Drafts)
                 && item.message_class().to_ascii_uppercase().starts_with("IPM.")
             {
                 let data = openmailclient_mime::write(&item);
                 uploads += 1;
                 bytes = bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
-                upload = Some(data);
-                draft = item.is_unsent();
+                i.upload = Some(data);
+                i.draft = item.is_unsent();
             }
-            items.push(LocalItem {
-                folder: f.id,
-                id: ItemId(r.id),
-                place: known.place,
-                read: r.read,
-                flagged: flagged(r.flag),
-                message_id: known.message_id,
-                upload,
-                draft,
+        }
+        if !lost.is_empty() {
+            let mut at = 0usize;
+            self.local.items.retain(|_| {
+                at += 1;
+                !lost.contains(&(at - 1))
             });
         }
+        true
     }
-    let marks = received.folders.iter().filter(|m| m.here != 0).cloned().collect();
-    Local { folders, items, gone: received.gone.clone(), matched: received.matched, marks, folders_gone: received.folders_gone.clone() }
 }
 
 /// The folder of the account's data file a server's folder is kept in, when it is there: the
@@ -1042,6 +1160,12 @@ pub(super) struct Applied {
 /// has, and the first time, the place of each message taken down before.
 pub(super) fn apply(s: &mut Session, store: usize, local: &Local, done: &Synced, received: &mut Received) -> Applied {
     let path = s.stores.get(store).and_then(|st| st.path()).map(|p| p.display().to_string()).unwrap_or_default();
+    // What was read apart is remembered first, so that what changes below is forgotten after.
+    for (key, known) in &local.known {
+        if s.places.by.len() < MAX_KNOWN {
+            s.places.by.insert(key.clone(), known.clone());
+        }
+    }
     let mut out = Applied::default();
     let mut edits: Vec<(FolderId, ItemId, Box<dyn Fn(&mut Item) -> bool + '_>)> = Vec::new();
     for (folder, id, place) in done.replaced.iter().chain(&done.placed) {

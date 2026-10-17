@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 99 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 100 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 100 · 2026-10-17 — M4.12: the places of messages read apart from the window.
 - 99 · 2026-10-17 — M4.12: Drafts on the server.
 - 98 · 2026-10-17 — M4.12: IMAP folders renamed, moved and deleted followed both ways.
 - 97 · 2026-10-17 — M1.8: shown as Outlook shows it; third-party sign-in (OAuth 2.0) is the last milestone, M7.
