@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 106 · 2026-10-17 · ranked: the top of the list is what hurts most.
+**Status:** revision 107 · 2026-10-17 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 107 · 2026-10-17 — M5.2: Import from Outlook: accounts and their data files.
 - 106 · 2026-10-17 — M1.9: dialogs in the theme's colours; themes of your own for light and dark.
 - 105 · 2026-10-17 — M5.1: the Calendar: views and appointments made, changed and deleted.
 - 104 · 2026-10-17 — M7 (OAuth sign-in) put after the first release; M5 next.

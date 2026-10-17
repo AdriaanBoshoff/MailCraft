@@ -16,6 +16,7 @@ pub mod io;
 pub mod jobs;
 pub mod links;
 pub mod outgoing;
+pub mod outlook;
 pub mod pictures;
 pub mod print;
 pub mod remote;
@@ -30,6 +31,8 @@ mod tests_accounts;
 mod tests_arrival;
 #[cfg(test)]
 mod tests_calendar;
+#[cfg(test)]
+mod tests_import;
 #[cfg(test)]
 mod tests_pictures;
 #[cfg(test)]
@@ -374,6 +377,9 @@ pub struct Session {
     pub account_dir: Option<std::path::PathBuf>,
     /// Where the messages of IMAP accounts are on their servers, as read before.
     pub places: cmd::imap_sync::Places,
+    /// How Outlook Classic's profiles are read to be imported (`outlook::system_profiles`).
+    /// Set by the host; `None` (tests, other systems) reads none.
+    pub outlook: Option<std::sync::Arc<dyn Fn() -> Vec<outlook::RawProfile> + Send + Sync>>,
     /// What the Calendar module shows.
     pub calendar: cmd::calendar::Shown,
 }
@@ -453,6 +459,7 @@ impl Session {
             page_setup: openmailclient_layout::Setup::default(),
             journal_dir: None,
             account_dir: None,
+            outlook: None,
             places: cmd::imap_sync::Places::default(),
             calendar: cmd::calendar::Shown::default(),
             certificates: accounts::Shown::default(),

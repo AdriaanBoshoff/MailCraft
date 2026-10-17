@@ -118,7 +118,7 @@ impl MailUi {
 }
 
 /// How far a piece of work is: a bar that fills, or one that moves while it is not known.
-fn bar(ui: &mut Ui, done: f32, stopping: bool, t: &crate::theme::Tokens) {
+pub(crate) fn bar(ui: &mut Ui, done: f32, stopping: bool, t: &crate::theme::Tokens) {
     let (rect, _) = ui.allocate_exact_size(vec2(330.0, 16.0), Sense::hover());
     let p = ui.painter_at(rect);
     let track = Rect::from_min_size(rect.min + vec2(0.0, 5.0), vec2(250.0, 6.0));

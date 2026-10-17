@@ -16,6 +16,11 @@
 //! {"type": "words"}                          type into what has the keyboard
 //! {"fake": {"ownCertificate": "AB:CD:…"}}    reach the in-process fake server (with a
 //!                                            certificate of its own) instead of none
+//! {"outlook": {"name": "Outlook", "accounts": [{"Account Name": "Work", "IMAP Port": 993, …}],
+//!   "sections": [{"name": "1111…", "001f6700": "C:\…\a.pst"}], "importTo": "plan/try"}}
+//!                                            read this profile, written by hand, as Outlook's
+//!                                            settings (numbers as numbers, "hex:…" as bytes,
+//!                                            the rest as words)
 //! {"arrive": "raw RFC 5322 text"}           put a message in the fake server's Inbox
 //! {"settle": true}                           draw until the jobs under way have ended
 //! {"region": ["yyyy/MM/dd", "dddd, d MMMM yyyy", "HH:mm", 1]}
@@ -102,6 +107,12 @@ fn run() -> Result<(), String> {
             server.state().own_certificate = fake.get("ownCertificate").and_then(Value::as_str).and_then(openmailclient_net::Fingerprint::parse);
             harness.state_mut().session.connector = Some(std::sync::Arc::new(server.clone()));
             fake_server = Some(server);
+        } else if let Some(profile) = step.get("outlook") {
+            let raw = outlook_profile(profile);
+            harness.state_mut().session.outlook = Some(std::sync::Arc::new(move || vec![raw.clone()]));
+            if let Some(dir) = profile.get("importTo").and_then(Value::as_str) {
+                harness.state_mut().session.account_dir = Some(Path::new(dir).join("Accounts"));
+            }
         } else if let Some(raw) = step.get("arrive").and_then(Value::as_str) {
             if let Some(server) = &fake_server
                 && let Some(mailbox) = server.state().mailbox("INBOX")
@@ -130,4 +141,43 @@ fn run() -> Result<(), String> {
         harness.run_steps(2);
     }
     Ok(())
+}
+
+/// A profile as a script writes it: each section an object of values, `name` its name.
+fn outlook_profile(v: &Value) -> openmailclient_engine::outlook::RawProfile {
+    use openmailclient_engine::outlook::{Raw, RawProfile, Section};
+    let sections = |key: &str| -> Vec<Section> {
+        let all = v.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object);
+        all.enumerate()
+            .map(|(n, o)| Section {
+                name: o.get("name").and_then(Value::as_str).map_or_else(|| format!("{n:08}"), str::to_string),
+                values: o
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "name")
+                    .map(|(k, v)| {
+                        let raw = match v {
+                            Value::Number(n) => Raw::Number(n.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0)),
+                            Value::String(s) => match s.strip_prefix("hex:") {
+                                Some(hex) => Raw::Bytes(
+                                    (0..hex.len() / 2)
+                                        .filter_map(|i| hex.get(i * 2..i * 2 + 2))
+                                        .filter_map(|b| u8::from_str_radix(b, 16).ok())
+                                        .collect(),
+                                ),
+                                None => Raw::Text(s.clone()),
+                            },
+                            other => Raw::Text(other.to_string()),
+                        };
+                        (k.clone(), raw)
+                    })
+                    .collect(),
+            })
+            .collect()
+    };
+    RawProfile {
+        name: v.get("name").and_then(Value::as_str).unwrap_or("Outlook").to_string(),
+        default: true,
+        sections: sections("sections"),
+        accounts: sections("accounts"),
+    }
 }

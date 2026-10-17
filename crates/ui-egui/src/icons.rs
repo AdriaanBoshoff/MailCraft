@@ -44,6 +44,7 @@ pub enum Icon {
     ChevronRight,
     Back,
     Open,
+    Import,
     Page,
     NewAppointment,
     Today,
@@ -288,6 +289,13 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Open => {
             pen.line(&[(14.0, 7.0), (14.0, 5.5), (7.5, 5.5), (6.0, 3.5), (1.5, 3.5), (1.5, 13.0)]);
             pen.closed(&[(4.0, 7.5), (15.0, 7.5), (12.5, 13.0), (1.5, 13.0)]);
+        }
+        Icon::Import => {
+            // A tray, and an arrow coming down into it from the top.
+            pen.line(&[(1.5, 9.5), (1.5, 14.0), (14.5, 14.0), (14.5, 9.5)]);
+            pen.line(&[(4.5, 9.5), (6.0, 11.5), (10.0, 11.5), (11.5, 9.5)]);
+            pen.line(&[(8.0, 1.5), (8.0, 8.5)]);
+            pen.line(&[(5.0, 5.5), (8.0, 8.5), (11.0, 5.5)]);
         }
         Icon::Page => {
             pen.closed(&[(3.5, 1.5), (9.5, 1.5), (12.5, 4.5), (12.5, 14.5), (3.5, 14.5)]);

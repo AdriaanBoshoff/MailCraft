@@ -659,7 +659,7 @@ impl MailUi {
         let side = Rect::from_min_size(rect.min, vec2(256.0, rect.height()));
         p.rect_filled(rect, 0.0, t.surface);
         p.rect_filled(side, 0.0, t.accent);
-        let entries: [(Icon, &str, &str, Value); 12] = [
+        let entries: [(Icon, &str, &str, Value); 13] = [
             (Icon::Back, "Back", "ui.ribbonTab", json!({ "tab": "home" })),
             (Icon::Open, "Open Data File or Message…", "ui.openDialog", Value::Null),
             (Icon::Mail, "Open Sample Mailbox", "file.openSample", Value::Null),
@@ -670,6 +670,7 @@ impl MailUi {
             (Icon::Print, "Print…", "ui.printPreview", Value::Null),
             (Icon::Save, "Export to a Data File…", "ui.exportDialog", Value::Null),
             (Icon::Close, "Close Data File", "file.closeStore", Value::Null),
+            (Icon::Import, "Import from Outlook…", "ui.importOutlook", Value::Null),
             (Icon::People, "Account Settings…", "ui.accountSettings", Value::Null),
             (Icon::Junk, "Exit", "ui.quit", Value::Null),
         ];
@@ -682,6 +683,7 @@ impl MailUi {
                 }
                 "ui.printPreview" => self.session.is_enabled("file.print"),
                 "ui.exportDialog" => self.session.is_enabled("file.export"),
+                "ui.importOutlook" => self.session.is_enabled("file.importOutlook"),
                 c if c.starts_with("ui.") => true,
                 c => self.session.is_enabled(c),
             };

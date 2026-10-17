@@ -27,6 +27,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+# Outlook Classic's profiles are read from the registry to be imported; nothing is written.
+windows-registry = "0.6.1"
+
 [dev-dependencies]
 openmailclient-net = { workspace = true, features = ["fake"] }
 # Builds the attached objects the tests read.

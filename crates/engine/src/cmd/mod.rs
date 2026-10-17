@@ -8,6 +8,7 @@ pub(crate) mod compose;
 mod file;
 mod folder;
 pub(crate) mod imap_sync;
+mod import;
 mod link;
 mod mail;
 mod picture;
@@ -43,6 +44,7 @@ pub fn registry() -> &'static [CommandSpec] {
     REG.get_or_init(|| {
         let mut v = Vec::new();
         v.extend(file::commands());
+        v.extend(import::commands());
         v.extend(mail::commands());
         v.extend(link::commands());
         v.extend(picture::commands());

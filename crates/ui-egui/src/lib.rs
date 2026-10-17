@@ -13,6 +13,7 @@ mod calendar;
 mod dialog;
 mod faces;
 pub mod icons;
+mod import;
 mod line_edit;
 mod panes;
 mod pictures;
@@ -127,6 +128,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         id: "ui.accountSettings",
         label: "Account Settings…",
         params: r#"{"id": the account to show (the first when not given), "new": true for a new one, "close": true to close it}; the window adds, changes, tests and removes accounts through the account.* commands"#,
+    },
+    UiCommand {
+        id: "ui.importOutlook",
+        label: "Import from Outlook…",
+        params: r#"{} opens the window on what Outlook's profiles hold (file.importOutlook), everything that can be brought chosen; {"import": true} imports what is chosen; {"close": true} closes it"#,
     },
     UiCommand {
         id: "ui.showProgress",
@@ -277,6 +283,7 @@ pub struct MailUi {
     pub(crate) theme_name: String,
     pub(crate) follow_system: bool,
     pub(crate) themes_window: Option<themes::ThemesWindow>,
+    pub(crate) import_window: Option<import::ImportWindow>,
     /// Exit was asked for once while changes were unsaved.
     quit_asked: bool,
     /// Messages are read as plain text even when they have a formatted body.
@@ -504,6 +511,7 @@ impl MailUi {
             theme_name: "Blue".to_string(),
             follow_system: false,
             themes_window: None,
+            import_window: None,
             quit_asked: false,
             plain_bodies: false,
             body_doc: None,
@@ -882,6 +890,7 @@ impl MailUi {
                 self.follow_system = false;
                 self.set_dark(dark);
             }
+            "ui.importOutlook" => return self.import_command(params),
             "ui.themes" | "ui.useTheme" | "ui.themeColor" | "ui.newTheme" | "ui.renameTheme" | "ui.deleteTheme" => {
                 return self.theme_command(id, params);
             }
@@ -1022,6 +1031,7 @@ impl MailUi {
             dialog::scrim(ui, &t, full);
         }
         self.themes_window(&ctx);
+        self.import_window(&ctx);
         self.prompt_window(&ctx);
         self.accounts_window(&ctx);
         self.link_window(&ctx);
@@ -1047,6 +1057,7 @@ impl MailUi {
             || self.account_window.is_some()
             || self.appointment.is_some()
             || self.themes_window.is_some()
+            || self.import_window.is_some()
     }
 
     fn shortcuts(&mut self, ui: &mut Ui) {

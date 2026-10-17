@@ -2372,7 +2372,11 @@ fn every_dialog_draws_in_every_theme_light_and_dark() {
                 ("ui.printPreview", Value::Null),
                 ("ui.showProgress", json!({ "open": true })),
                 ("ui.appointment", Value::Null),
+                ("ui.importOutlook", Value::Null),
             ] {
+                if id == "ui.importOutlook" {
+                    ui.session.outlook = Some(outlook_profile());
+                }
                 ui.execute(id, &params).unwrap();
                 // Small and large: a dialog never asks for room it cannot have.
                 draw_window(&mut ui, egui::vec2(1100.0, 760.0));
@@ -2381,4 +2385,95 @@ fn every_dialog_draws_in_every_theme_light_and_dark() {
             assert!(ui.modal_open());
         }
     }
+}
+
+/// An Outlook profile written by hand: an IMAP account whose data file is not there, a POP3 one
+/// with no TLS, an Exchange one and an archive, each name long enough to need room.
+fn outlook_profile() -> std::sync::Arc<dyn Fn() -> Vec<openmailclient_engine::outlook::RawProfile> + Send + Sync> {
+    use openmailclient_engine::outlook::{Raw, RawProfile, Section};
+    let text = |s: &str| Raw::Text(s.to_string());
+    let gone = std::env::temp_dir().join("omc-ui-import-none");
+    let section = |name: &str, values: Vec<(&str, Raw)>| Section {
+        name: name.to_string(),
+        values: values.into_iter().map(|(n, v)| (n.to_string(), v)).collect(),
+    };
+    let raw = RawProfile {
+        name: "Outlook".into(),
+        default: true,
+        sections: vec![
+            section("11111111111111111111111111111111", vec![("001f6610", text(&gone.join("work.ost").display().to_string()))]),
+            section(
+                "33333333333333333333333333333333",
+                vec![("001f3001", text("Archive of a long while ago")), ("001f6700", text(&gone.join("archive.pst").display().to_string()))],
+            ),
+        ],
+        accounts: vec![
+            section(
+                "00000001",
+                vec![
+                    ("Account Name", text("Work")),
+                    ("Email", text("pat@example.test")),
+                    ("IMAP Server", text("mail.example.test")),
+                    ("IMAP Port", Raw::Number(993)),
+                    ("IMAP Use SSL", Raw::Number(1)),
+                    ("SMTP Server", text("mail.example.test")),
+                    ("SMTP Port", Raw::Number(587)),
+                    ("SMTP Secure Connection", Raw::Number(2)),
+                    ("Service UID", Raw::Bytes(vec![0x11; 16])),
+                ],
+            ),
+            section(
+                "00000002",
+                vec![
+                    ("Account Name", text("Home")),
+                    ("Email", text("kim@example.test")),
+                    ("POP3 Server", text("pop.example.test")),
+                    ("SMTP Server", text("smtp.example.test")),
+                ],
+            ),
+            section("00000003", vec![("Account Name", text("Corp")), ("Email", text("corp@example.test"))]),
+        ],
+    };
+    std::sync::Arc::new(move || vec![raw.clone()])
+}
+
+#[test]
+fn outlook_is_shown_before_it_is_imported_and_the_passwords_are_asked_for_after() {
+    let dir = std::env::temp_dir().join(format!("omc-ui-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut ui = MailUi::new(Session::new());
+    // Not reading Outlook's settings, the window does not open.
+    assert!(ui.execute("ui.importOutlook", &Value::Null).is_err());
+    assert!(ui.import_window.is_none());
+    ui.session.outlook = Some(outlook_profile());
+    ui.session.account_dir = Some(dir.join("Accounts"));
+    let shown = ui.execute("ui.importOutlook", &Value::Null).unwrap();
+    // The accounts are chosen; the archive that is not there cannot be.
+    assert_eq!(shown["chosen"], json!(["p0a0", "p0a1"]));
+    draw_window(&mut ui, egui::vec2(1100.0, 760.0));
+    assert!(ui.session.accounts.is_empty(), "nothing is done before it is asked for");
+    ui.execute("ui.importOutlook", &json!({ "import": true })).unwrap();
+    assert!(ui.execute("ui.importOutlook", &json!({ "import": true })).is_err(), "once at a time");
+    let mut frames = 0;
+    while ui.import_window.as_ref().is_some_and(|w| w.running) {
+        ui.session.poll();
+        draw_window(&mut ui, egui::vec2(1100.0, 760.0));
+        frames += 1;
+        assert!(frames < 500, "never ended: {}", ui.session.status);
+    }
+    let window = ui.import_window.as_ref().unwrap();
+    let result = window.result.clone().unwrap();
+    assert_eq!(result["accounts"].as_array().unwrap().len(), 2, "{result}");
+    assert!(ui.session.accounts.iter().all(|a| ui.session.vault.get(&a.id).unwrap().is_none()));
+    // Looked at again, an account brought is here already and is not chosen.
+    assert!(window.chosen.is_empty());
+    assert_eq!(window.preview["profiles"][0]["accounts"][0]["here"], true);
+    draw_window(&mut ui, egui::vec2(1100.0, 760.0));
+    draw_window(&mut ui, egui::vec2(320.0, 240.0));
+    ui.execute("ui.importOutlook", &json!({ "close": true })).unwrap();
+    assert!(ui.import_window.is_none() && !ui.modal_open());
+    for junk in [json!({ "import": "yes" }), json!({ "close": 1 }), json!([1, 2])] {
+        let _ = ui.execute("ui.importOutlook", &junk);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 116 · 2026-10-17
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 117 · 2026-10-17
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 56 of 120 (46%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 507, all passing |
+| Tests | 514, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -152,14 +152,15 @@
 99. Done: An account's servers found from the DNS too: the servers its domain's RFC 6186 SRV records name, implicit TLS first, and the provider its mail exchangers (MX) belong to, given that provider's own servers; read with a DNS client of our own that takes hostile answers apart safely (M4.15, `crates/net/src/dns.rs`); M4 closed.
 100. Done: The Calendar: day, work week, week and month views of the data file's Calendar, a month to pick days from, appointments side by side when they overlap, all-day events in a band of their own, Show As drawn on each, a line at the time now; appointments made, opened, changed and deleted in a window of their own that names what clashes, every change undone (M5.1, `crates/model/src/calendar.rs`, `crates/engine/src/cmd/calendar.rs`, `crates/ui-egui/src/calendar.rs`).
 101. Done: Dialogs in the theme's colours, and themes of your own: every dialog has a coloured head with its own mark and a close button, a foot that holds its buttons with the one that does the work in the accent, warnings in tinted boxes, and the window behind dimmed; nine built-in themes and any number of one's own, each with its own light and dark colours, changed in a Themes window that shows the change at once and checks that text can be read, or following the system's light or dark setting (M1.9, `crates/ui-egui/src/dialog.rs`, `crates/ui-egui/src/themes.rs`, `crates/ui-egui/src/theme.rs`).
-102. Next: M5.2: Import from Outlook: accounts read from the Outlook profile's settings (servers, names, ports; never passwords, which are asked of the owner), and mail, calendar, contacts and tasks from the profile's data files, which we already read.
+102. Done: Import from Outlook: every IMAP and POP3 account of every Outlook profile, with its servers, ports, security and user name and never its password, and the data files the profile holds, shown before anything is done, then brought on a thread of their own: each account's data file is copied with Outlook kept from writing it meanwhile and checked, an `.ost` becomes a `.pst` of our own, and Outlook's own files are not changed (M5.2, `crates/engine/src/outlook.rs`, `crates/engine/src/cmd/import.rs`, `crates/ui-egui/src/import.rs`).
+103. Next: M5.3: Recurring appointments ([MS-OXOCAL] 2.2.1.44 pattern, exceptions), shown on every day they fall.
 
 ## M5 plan
 
 | Step | What |
 |---|---|
 | ~~M5.1~~ | done: the Calendar: day, work week, week and month views; appointments made, changed and deleted |
-| M5.2 | Import from Outlook: accounts from the Outlook profile's settings (servers, user names, ports, security; never passwords: Outlook keeps them protected by the system, so the owner is asked for each), and the mail, calendar, contacts and tasks of the profile's data files, which we already read; each import shown before it is done, and nothing in Outlook changed |
+| ~~M5.2~~ | done: Import from Outlook: every IMAP and POP3 account of every profile with its servers and without its password, and the profile's data files, shown first and copied without changing Outlook's |
 | M5.3 | Recurring appointments ([MS-OXOCAL] 2.2.1.44 pattern, exceptions), shown on every day they fall |
 | M5.4 | iCalendar: `.ics` files opened, imported and saved (RFC 5545, [MS-OXCICAL]) |
 | M5.5 | Calendar sync over CalDAV (RFC 4791), as with Nextcloud: calendars found from the account, changes asked for by sync token (RFC 6578) and ETags, both ways, HTTPS only, the password in the credential store; tested against an in-process fake CalDAV server |
@@ -275,6 +276,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles (after M5.10) |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
 | Themes saved to a file of their own and read from one, to share them | with M5.4's files, after the Calendar's `.ics` |
+| Signatures, rules and the AutoComplete list brought from Outlook; a POP3 account's own "leave a copy on the server" setting read (kept on until then); Outlook 2010's profile place | with M5.10, after People (the AutoComplete list) and rules |
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -2097,3 +2099,34 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   strict #RRGGBB taken, names cleaned and capped at 60 characters, built-in and repeated names
   left out, and at most 40 kept. Every dialog is drawn in every theme, light and dark, in a large
   window and a tiny one. Do later: themes saved to and read from a file of their own. 4 tests.
+- **2026-10-17** - M5.2: Import from Outlook: accounts and their data files.
+  File > Import from Outlook reads the Outlook profiles' settings (Office 2016 and later, and
+  2013) and shows, before anything is done, each IMAP and POP3 account with its address, its
+  incoming and outgoing servers, ports and security, how big its data file is and whether Outlook
+  holds it open; the other data files of the profile (archives, files of old mail) with theirs;
+  and what cannot be brought and why (an Exchange or Microsoft 365 account waits for M7). Each is
+  chosen or left, and Import brings them on a thread of its own, with progress and Stop:
+  - an account comes with its servers and user name, never its password: Outlook keeps passwords
+    locked to the system, so the window says to give each one in Account Settings, and Done goes
+    there;
+  - its data file is copied with other writers kept out, so a copy is never torn, checked by
+    opening it, and kept as the account's own data file; an `.ost` is written as a `.pst` of our
+    own, so it can take changes. Its calendar, contacts and tasks come with its mail;
+  - a data file of its own is copied beside the settings (Imported) and opened, kept for the next
+    run as any data file;
+  - an account here already brings only its data file, beside it, under a name of its own.
+  Outlook's files are only read: nothing is written beside them, not even a journal, and one
+  Outlook holds open for writing is said ("close Outlook") and not copied. The IMAP mail brought
+  is known again by its Message-ID on the first Send/Receive, so it is not taken down twice.
+  Commands: `file.importOutlook` (`{}` shows; `{"import": [ids], "withData", "wait"}` imports),
+  `ui.importOutlook`. `ui_shot` takes a profile written by hand (`{"outlook": …}`).
+  Better than Outlook, whose Import/Export brings one data file into one folder and no accounts:
+  every account of every profile with its servers and its mail, together, shown first, while the
+  window stays in use.
+  Hostile input: profiles, sections, values and their lengths are capped (16, 512, 256, 64 KB);
+  text is read from words or UTF-16 bytes to its first NUL, cut at 1024 characters, control
+  characters left out; ports of 0 or over 65535 are dropped, paths that are not absolute or not
+  `.pst`/`.ost` are not taken, ids are checked, and the accounts are checked as Account Settings
+  checks them. Do later: signatures, rules and the AutoComplete list from Outlook; a POP3
+  account's own "leave a copy on the server" setting (kept on, the safe way, until then); and
+  Outlook 2010's profile place. 7 tests.
