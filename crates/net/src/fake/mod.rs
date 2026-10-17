@@ -35,6 +35,8 @@ pub struct Mailbox {
     pub messages: Vec<Message>,
     /// The folder's highest mod-sequence, raised by every change ([RFC 7162] 3.1.1).
     pub modseq: u64,
+    /// The server's own id for the folder, which stays with it when it is renamed ([RFC 8474]).
+    pub id: String,
     /// Messages taken away, and the mod-sequence they went at, for QRESYNC.
     pub vanished: Vec<(u32, u64)>,
 }
@@ -49,6 +51,7 @@ impl Mailbox {
             messages: Vec::new(),
             modseq: 1,
             vanished: Vec::new(),
+            id: format!("F{}", name.bytes().map(|b| format!("{b:02x}")).collect::<String>()),
         }
     }
 
@@ -116,6 +119,8 @@ pub struct State {
     /// A certificate of the server's own making, which no system trusts: a connection made
     /// secure is refused unless the endpoint trusts exactly this one.
     pub own_certificate: Option<Fingerprint>,
+    /// The UIDVALIDITY the next folder made is given: each folder made has one of its own.
+    pub next_validity: u32,
 }
 
 impl Default for State {
@@ -137,6 +142,7 @@ impl Default for State {
             heard: Vec::new(),
             pages: Vec::new(),
             own_certificate: None,
+            next_validity: 100,
         }
     }
 }

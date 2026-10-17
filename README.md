@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M4%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-48%20of%20118%20%C2%B7%2040%25-yellow)
-![tests](https://img.shields.io/badge/tests-458%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-466%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -104,10 +104,9 @@ read, a reader we can try without driving a window, a printer we may use).
 
 ## What does not work yet
 
-- **IMAP folders changed.** Messages are kept in step with an IMAP server both ways, but a folder
-  renamed or deleted on one side is not yet followed on the other, and Drafts stay here (M4.12).
-  Where the server keeps mod-sequences (CONDSTORE, QRESYNC) only what changed is asked for, and new
-  mail is told of as it comes where it offers IDLE (done).
+- **Drafts on the server.** Messages and folders are kept in step with an IMAP server both ways
+  (a folder renamed, moved or deleted on one side is followed on the other), but Drafts stay
+  here (M4.12).
 - **Proof against Outlook.** `.pst` files written here open in Outlook Classic with every folder
   and message as written, whole, ANSI and saved into in place; a file written before M3c.1 is written
   whole on its next save, keeping its ids, and then opens too; an `.ost` is exported with its

@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); third-party sign-in is the last milestone (M7) · revision 107 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); third-party sign-in is the last milestone (M7) · revision 108 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 458, all passing |
+| Tests | 466, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -144,7 +144,8 @@
 91. Done: Only what changed is asked of an IMAP server that keeps mod-sequences: CONDSTORE's CHANGEDSINCE and QRESYNC's SELECT, what it says went made sure of before anything goes here (M4.12, `Imap::select_since`, `imap_sync::since`, `accounts::Step`).
 92. Done: New mail told of as it comes: each IMAP account's Inbox watched with IDLE on a connection of its own and received from the moment the server says it changed (M4.12, `Imap::idle`, `crates/engine/src/watch.rs`, `mail.newMailAsItComes`).
 93. Done: Shown as Outlook shows it, from a side-by-side look at an account's mail: cell padding in centimetres and points, links underlined only where their style says, recipients in Sent Items, previews read from the message with an end mark, Outlook's date headings, dates and times as the system's region writes them, and an `.ost` that starts at its mail folders with hidden folders left out (M1.8, `time::Region`, `Session::fill_previews`, `PstStore::named_near`).
-94. Next: M4.12: IMAP folders renamed, moved and deleted followed both ways.
+94. Done: IMAP folders renamed, moved and deleted followed both ways: a folder renamed or moved on the server is renamed or moved here, known again by the server's id for it (OBJECTID, RFC 8474) or its UIDVALIDITY, without its mail taken down twice; one renamed, moved or put with the deleted mail here is renamed or moved there; one deleted here for good is deleted there; one the server no longer has is kept here with the deleted mail; a folder made here is made there (M4.12, `imap_sync::follow`, `Imap::rename`, `Imap::delete`, `Imap::status`, `Received::folders_gone`).
+95. Next: M4.12: Drafts on the server.
 
 ## Do later (from M2)
 
@@ -242,7 +243,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | done: M4.8 |
 | Only what changed fetched from an IMAP server (CONDSTORE and QRESYNC, RFC 7162) | done: M4.12 |
 | New mail told of as it comes (IDLE, RFC 2177) | done: M4.12 |
-| IMAP folders renamed, moved and deleted here or on the server, each side following the other; Drafts kept on the server as they are written | M4.12 |
+| IMAP folders renamed, moved and deleted here or on the server, each side following the other | done: M4.12 |
+| Drafts kept on the server as they are written | M4.12 |
 | The place of each message on the server read once on a thread of its own, not on the window's the first time a run receives | M4.12 |
 | New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | done: M4.9 |
 | Send/Receive's progress shown in a window of its own (Show Progress) | done: M4.9 |
@@ -1919,3 +1921,19 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   capped, so a long folder scrolled end to end stays smooth; padding that is not a finite length
   is no padding, and any padding is capped.
   6 tests.
+- **2026-10-17** - M4.12: IMAP folders renamed, moved and deleted followed both ways.
+  Each folder of an IMAP server is now paired with the folder here it is kept in, and what the
+  two were called and where they stood when last in step is remembered. A folder renamed or
+  moved on the server is found again by the server's own id for it (MAILBOXID, RFC 8474) or, where
+  the server gives none, by its UIDVALIDITY asked with STATUS, and the folder here is renamed or
+  moved to match, its messages keeping their places by the new name; nothing is taken down
+  again. A folder renamed or moved here, or put with the deleted mail, is renamed there with
+  RENAME (into the server's Trash for the deleted mail); one deleted here for good is deleted
+  there with DELETE; a folder made here is made there. A folder the server no longer has is
+  kept here, with what it holds, in Deleted Items.
+  Better than Outlook: a server folder is deleted only when the owner deleted it here, never
+  because it is merely missing here, and only while its UIDVALIDITY is still the one known, so a
+  folder made there anew by that name stays; where two folders cannot be told apart nothing is
+  done rather than the wrong one followed; a folder gone from the server keeps its mail here
+  instead of losing it; the ids a server gives are checked as RFC 8474 says before they are kept.
+  8 tests.

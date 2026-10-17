@@ -371,6 +371,24 @@ pub struct Selected {
     /// Selected with what was known of it (QRESYNC, [RFC 7162] 3.2.5): the messages the server
     /// says went since, as it says them, and those whose flags changed.
     pub since: Option<Since>,
+    /// The server's own id for the folder, which stays with it when it is renamed or moved
+    /// ([RFC 8474] 4.1), where the server gives one.
+    pub mailbox_id: Option<String>,
+}
+
+/// What STATUS says of a folder that is not selected ([RFC 9051] 6.3.11).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Status {
+    pub uid_validity: Option<u32>,
+    /// The server's own id for the folder ([RFC 8474] 4.2), where it gives one.
+    pub mailbox_id: Option<String>,
+}
+
+/// A folder's id as a server gives it ([RFC 8474] 4: objectid, 1 to 255 letters, digits, `-`
+/// and `_`); anything else is no id.
+fn object_id(text: &str) -> Option<String> {
+    let id = text.trim().trim_start_matches('(').trim_end_matches(')').trim();
+    (!id.is_empty() && id.len() <= 255 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')).then(|| id.to_string())
 }
 
 /// What a folder selected with QRESYNC says changed since the mod-sequence given.
@@ -739,6 +757,7 @@ impl Imap {
                         // A mod-sequence is at most 2^63 - 1 ([RFC 7162] 7).
                         "HIGHESTMODSEQ" => s.highest_modseq = value.filter(|v| *v > 0 && *v < 1 << 63),
                         "NOMODSEQ" => s.highest_modseq = None,
+                        "MAILBOXID" => s.mailbox_id = code.get("MAILBOXID".len()..).and_then(object_id),
                         _ => {}
                     }
                 }
@@ -915,6 +934,47 @@ impl Imap {
     /// `[TRYCREATE]` asks for.
     pub fn create(&mut self, raw: &str) -> Result<(), NetError> {
         self.run(vec![Part::Text("CREATE ".into()), astring(raw.as_bytes())]).map(|_| ())
+    }
+
+    /// Rename a folder on the server, or move it under another ([RFC 9051] 6.3.6). The folders
+    /// inside it go with it, and its messages keep their ids.
+    pub fn rename(&mut self, from: &str, to: &str) -> Result<(), NetError> {
+        self.run(vec![Part::Text("RENAME ".into()), astring(from.as_bytes()), Part::Text(" ".into()), astring(to.as_bytes())]).map(|_| ())
+    }
+
+    /// Delete a folder on the server, with the messages in it ([RFC 9051] 6.3.5).
+    pub fn delete(&mut self, raw: &str) -> Result<(), NetError> {
+        self.run(vec![Part::Text("DELETE ".into()), astring(raw.as_bytes())]).map(|_| ())
+    }
+
+    /// What a folder is without selecting it: its UIDVALIDITY, and its own id where the server
+    /// keeps one (`OBJECTID`, [RFC 8474]).
+    pub fn status(&mut self, raw: &str) -> Result<Status, NetError> {
+        let items = if self.has("OBJECTID") { " (UIDVALIDITY MAILBOXID)" } else { " (UIDVALIDITY)" };
+        let (data, _) = self.run(vec![Part::Text("STATUS ".into()), astring(raw.as_bytes()), Part::Text(items.into())])?;
+        let mut out = Status::default();
+        for d in data {
+            let Resp::Data { name, rest, .. } = d else { continue };
+            if name != "STATUS" {
+                continue;
+            }
+            let Some(Tok::List(pairs)) = rest.get(1) else { continue };
+            let mut at = 0;
+            while let (Some(key), Some(value)) = (pairs.get(at).and_then(Tok::atom), pairs.get(at + 1)) {
+                match key.to_ascii_uppercase().as_str() {
+                    "UIDVALIDITY" => out.uid_validity = value.number().and_then(|v| u32::try_from(v).ok()).filter(|v| *v > 0),
+                    "MAILBOXID" => {
+                        out.mailbox_id = match value {
+                            Tok::List(id) => id.first().and_then(Tok::text).as_deref().and_then(object_id),
+                            other => other.text().as_deref().and_then(object_id),
+                        }
+                    }
+                    _ => {}
+                }
+                at += 2;
+            }
+        }
+        Ok(out)
     }
 
     /// Wait on the folder selected until the server says something in it changed ([RFC 2177]):

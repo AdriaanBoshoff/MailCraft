@@ -16,6 +16,14 @@
 //! holds, lacks it. The first time, the messages taken down before they could know their place
 //! are found on the server by their Message-ID; none of them is put there anew.
 //!
+//! Folders follow too, before any message does (`follow`): a folder renamed or moved on the
+//! server is renamed or moved here, found by the server's own id for it ([RFC 8474]) or by its
+//! UIDVALIDITY, and its messages keep their places; one the server no longer has at all is kept
+//! here, with the deleted mail. A folder renamed or moved here is renamed or moved there (RENAME,
+//! into the server's Trash when it is put with the deleted mail), one made here is made there,
+//! and one deleted here for good (`Received::folders_gone`) is deleted there. A folder only
+//! missing here deletes nothing.
+//!
 //! Where the server keeps a mod-sequence for every change (CONDSTORE and QRESYNC, [RFC 7162]),
 //! each folder remembers the one it was last kept in step at (`Step`): a folder that has not
 //! changed since costs its SELECT and nothing more, and one that has is asked only for what
@@ -25,10 +33,10 @@
 
 use super::receive::{is_view, kind_of, path_of};
 use crate::Session;
-use crate::accounts::{Gone, Kind, Received, Step};
+use crate::accounts::{Gone, GoneFolder, Kind, Mark, Received, Step, renamed_raw};
 use openmailclient_model::{Flag, FolderId, FolderKind, Item, ItemId, NameId, NamedKey, PropValue};
 use openmailclient_net::NetError;
-use openmailclient_net::imap::{Folder, Imap, Selected, Summary};
+use openmailclient_net::imap::{Folder, Imap, Selected, Status, Summary};
 use std::collections::{HashMap, HashSet};
 
 /// The property set of what this program keeps on an item for itself.
@@ -40,6 +48,10 @@ const MAX_UPLOADS: usize = 300;
 const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 /// Items whose place is remembered between receives, across every data file.
 const MAX_KNOWN: usize = 1_000_000;
+/// Folders asked of with STATUS in one receive, to find where folders went.
+const MAX_STATUS: usize = 50;
+/// Folders made on the server in one receive as they were made here; the rest go with the next.
+const MAX_MADE: usize = 50;
 
 /// Where a message of an IMAP account is on the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,12 +175,70 @@ pub(super) struct Local {
     pub gone: Vec<Gone>,
     /// The messages taken down before they knew their place were found on the server.
     pub matched: bool,
+    /// The folders of the server paired with folders here, as remembered.
+    pub marks: Vec<Mark>,
+    /// Folders deleted here for good that are to go from the server.
+    pub folders_gone: Vec<GoneFolder>,
 }
 
 impl Local {
     fn kind(&self, id: FolderId) -> Option<FolderKind> {
-        self.folders.iter().find(|f| f.id == id).map(|f| f.kind)
+        self.folder(id).map(|f| f.kind)
     }
+
+    fn folder(&self, id: FolderId) -> Option<&LocalFolder> {
+        self.folders.iter().find(|f| f.id == id)
+    }
+
+    /// Where the server's top is here: where the Inbox stands.
+    fn top(&self) -> Option<FolderId> {
+        self.folders.iter().find(|l| l.kind == FolderKind::Inbox).and_then(|l| l.parent)
+    }
+
+    /// Whether `id` is `of` or a folder inside it.
+    fn inside(&self, id: FolderId, of: FolderId) -> bool {
+        let mut at = Some(id);
+        for _ in 0..64 {
+            match at {
+                Some(a) if a == of => return true,
+                Some(a) => at = self.folder(a).and_then(|f| f.parent),
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// A folder of the server renamed `from` to `to`, with those inside it: the messages kept in
+    /// step with it and what is remembered of it take the new name, and the messages' places are
+    /// rewritten as they are now.
+    fn renamed(&mut self, from: &str, to: &str, d: Option<char>, done: &mut Synced) {
+        for i in &mut self.items {
+            let (Some(Place::On { raw, .. }) | Some(Place::Pending { raw })) = &mut i.place else { continue };
+            let Some(new) = renamed_raw(raw, from, to, d) else { continue };
+            *raw = new;
+            if let Some(place) = &i.place {
+                done.replaced.push((i.folder, i.id, place.clone()));
+            }
+        }
+        let new = |raw: &mut String| {
+            if let Some(r) = renamed_raw(raw, from, to, d) {
+                *raw = r;
+            }
+        };
+        self.gone.iter_mut().for_each(|g| new(&mut g.raw));
+        self.marks.iter_mut().for_each(|m| new(&mut m.raw));
+        self.folders_gone.iter_mut().for_each(|g| new(&mut g.raw));
+    }
+}
+
+/// Folders the owner makes, names and moves: not those of a kind the server has its own of.
+fn own_folder(kind: FolderKind) -> bool {
+    matches!(kind, FolderKind::Mail | FolderKind::Other)
+}
+
+/// The name of the folder a server's folder is in, by its delimiter.
+fn parent_raw(raw: &str, d: Option<char>) -> Option<&str> {
+    raw.rsplit_once(d?).map(|(p, _)| p)
 }
 
 /// Folders mail is kept in, as against appointments, contacts and the like.
@@ -256,7 +326,8 @@ pub(super) fn local(s: &mut Session, store: usize, received: &Received) -> Local
             });
         }
     }
-    Local { folders, items, gone: received.gone.clone(), matched: received.matched }
+    let marks = received.folders.iter().filter(|m| m.here != 0).cloned().collect();
+    Local { folders, items, gone: received.gone.clone(), matched: received.matched, marks, folders_gone: received.folders_gone.clone() }
 }
 
 /// The folder of the account's data file a server's folder is kept in, when it is there: the
@@ -299,6 +370,8 @@ impl Map {
     pub(super) fn of(folders: &[Folder], local: &Local) -> Self {
         let usable: Vec<&Folder> = folders.iter().filter(|f| f.selectable() && !is_view(f)).collect();
         let mut pairs: Vec<(String, FolderId)> = Vec::new();
+        // The pairs remembered first, so that a folder renamed on either side stays itself.
+        remember(&mut pairs, folders, local);
         for f in &usable {
             if let Some(here) = here_of(&local.folders, f)
                 && !pairs.iter().any(|(r, _)| r.eq_ignore_ascii_case(&f.raw))
@@ -317,8 +390,28 @@ impl Map {
         self.pairs.iter().find(|(r, _)| r == raw).map(|(_, h)| *h)
     }
 
+    /// A folder of the server renamed, with those inside it.
+    fn renamed(&mut self, from: &str, to: &str) {
+        for (raw, _) in &mut self.pairs {
+            if let Some(r) = renamed_raw(raw, from, to, self.delimiter) {
+                *raw = r;
+            }
+        }
+    }
+
     fn raw(&self, here: FolderId) -> Option<String> {
         self.pairs.iter().find(|(_, h)| *h == here).map(|(r, _)| r.clone())
+    }
+}
+
+/// The folders of the server paired as remembered with folders here that are still there.
+fn remember(pairs: &mut Vec<(String, FolderId)>, folders: &[Folder], local: &Local) {
+    for m in &local.marks {
+        let here = FolderId(m.here);
+        let listed = folders.iter().any(|f| f.raw == m.raw && f.selectable() && !is_view(f));
+        if listed && local.folder(here).is_some_and(|f| holds_mail(f.kind)) && !pairs.iter().any(|(r, _)| *r == m.raw) {
+            pairs.push((m.raw.clone(), here));
+        }
     }
 }
 
@@ -348,6 +441,21 @@ pub(super) struct Synced {
     /// Folders found unchanged since last time, and those of which only what changed was read.
     pub unchanged: usize,
     pub changes_only: usize,
+    /// Items whose place went with their folder's new name: taken in before anything else.
+    pub replaced: Vec<(FolderId, ItemId, Place)>,
+    /// Folders of the server renamed or moved, by either side: the name before, the name now,
+    /// and the server's delimiter.
+    pub renamed: Vec<(String, String, Option<char>)>,
+    /// Folders here to be moved or renamed as the server has them now: the folder, the folder to
+    /// put it in (none: where it is), and its name.
+    pub moved_here: Vec<(FolderId, Option<Option<FolderId>>, String)>,
+    /// Folders here whose folder the server no longer has: put with the deleted mail, kept.
+    pub kept_here: Vec<FolderId>,
+    /// Folders deleted on the server as asked here, or no longer there to delete.
+    pub folders_deleted: Vec<String>,
+    /// Each folder paired, with where its folder here stands and its name as they are now, to be
+    /// remembered as agreed.
+    pub agreed: Vec<(String, FolderId, Option<FolderId>, String)>,
 }
 
 /// A change the server has for an item here.
@@ -399,31 +507,250 @@ fn make_on_server(
     if let Some(raw) = map.raw(here) {
         return Ok(Some(raw));
     }
-    let Some(f) = local.folders.iter().find(|f| f.id == here) else { return Ok(None) };
-    if depth > 32 || !goes_up(f.kind) || f.kind == FolderKind::Deleted || f.kind == FolderKind::Inbox {
+    let Some(f) = local.folder(here) else { return Ok(None) };
+    // A folder paired before that the server no longer has is not made there again.
+    if depth > 32 || !goes_up(f.kind) || f.kind == FolderKind::Deleted || f.kind == FolderKind::Inbox || local.marks.iter().any(|m| m.here == here.0)
+    {
         return Ok(None);
     }
-    let top = local.folders.iter().find(|l| l.kind == FolderKind::Inbox).and_then(|l| l.parent);
-    let name = openmailclient_net::utf7::encode(&f.name);
-    if name.is_empty() || f.name.contains(|c: char| c.is_control() || Some(c) == map.delimiter || matches!(c, '*' | '%')) {
-        return Ok(None);
-    }
-    let raw = if f.parent == top {
-        match map.delimiter {
-            Some(d) if map.under_inbox => format!("INBOX{d}{name}"),
-            _ => name,
-        }
-    } else {
-        let (Some(parent), Some(d)) = (f.parent, map.delimiter) else { return Ok(None) };
-        let Some(above) = make_on_server(imap, local, map, parent, depth + 1, done)? else { return Ok(None) };
-        format!("{above}{d}{name}")
-    };
+    let f = f.clone();
+    let Some(raw) = wanted_raw(imap, local, map, &f, depth, done)? else { return Ok(None) };
     if tolerate(imap.create(&raw))?.is_none() {
         return Ok(None);
     }
     map.pairs.push((raw.clone(), here));
     done.created.push(raw.clone());
     Ok(Some(raw))
+}
+
+/// The name on the server a folder here has, standing where it stands: under the folder its
+/// parent is kept in step with, made there when it is not there yet, or at the top.
+fn wanted_raw(imap: &mut Imap, local: &Local, map: &mut Map, f: &LocalFolder, depth: usize, done: &mut Synced) -> Result<Option<String>, NetError> {
+    let name = openmailclient_net::utf7::encode(&f.name);
+    if name.is_empty() || f.name.contains(|c: char| c.is_control() || Some(c) == map.delimiter || matches!(c, '*' | '%')) {
+        return Ok(None);
+    }
+    if f.parent == local.top() {
+        return Ok(Some(match map.delimiter {
+            Some(d) if map.under_inbox => format!("INBOX{d}{name}"),
+            _ => name,
+        }));
+    }
+    let (Some(parent), Some(d)) = (f.parent, map.delimiter) else { return Ok(None) };
+    let Some(above) = make_on_server(imap, local, map, parent, depth + 1, done)? else { return Ok(None) };
+    Ok(Some(format!("{above}{d}{name}")))
+}
+
+/// A folder of the server renamed, by either side: everything that knows it by its name takes
+/// the new one.
+fn follow_rename(from: &str, to: &str, local: &mut Local, received: &mut Received, map: &mut Map, done: &mut Synced) {
+    let d = map.delimiter;
+    done.renamed.push((from.to_string(), to.to_string(), d));
+    received.renamed(from, to, d);
+    local.renamed(from, to, d, done);
+    map.renamed(from, to);
+}
+
+/// Folders follow, each way, before any message does. On the server's side: a folder paired
+/// before that the server no longer has by its name was renamed or moved there, when one of
+/// its new folders has its id ([RFC 8474]) or, where the server keeps none, alone its
+/// UIDVALIDITY; then it is renamed or moved here. One that no folder there can be is gone, and
+/// what it holds is kept here, with the deleted mail. Where it cannot be told, nothing is done.
+/// On this side: a folder renamed or moved here since the two last agreed is renamed or moved
+/// there; one deleted here for good is deleted there, while the server's folder is still the
+/// one it was; one made here is made there. True when the server's folders changed.
+pub(super) fn follow(
+    imap: &mut Imap,
+    listed: &[Folder],
+    map: &mut Map,
+    local: &mut Local,
+    received: &mut Received,
+    done: &mut Synced,
+    progress: &openmailclient_model::Progress,
+) -> Result<bool, NetError> {
+    let is_listed = |raw: &str| listed.iter().any(|f| f.raw == raw && f.selectable() && !is_view(f));
+    let mut changed = false;
+    let mut asked: HashMap<String, Status> = HashMap::new();
+    let mut claimed: HashSet<String> = HashSet::new();
+    // Those nearest the top first: a folder renamed with the one it is in is followed with it.
+    let mut order: Vec<u64> = local.marks.iter().filter(|m| !is_listed(&m.raw)).map(|m| m.here).collect();
+    order.sort_by_key(|h| local.marks.iter().find(|m| m.here == *h).map_or(0, |m| m.raw.len()));
+    order.dedup();
+    for h in order {
+        let Some(m) = local.marks.iter().find(|m| m.here == h).cloned() else { continue };
+        let here = FolderId(h);
+        if is_listed(&m.raw) || m.raw.eq_ignore_ascii_case("INBOX") || progress.stopped() {
+            continue;
+        }
+        let Some(f) = local.folder(here).cloned() else { continue };
+        let candidates: Vec<&Folder> = listed
+            .iter()
+            .filter(|c| {
+                c.selectable()
+                    && !is_view(c)
+                    && !c.raw.eq_ignore_ascii_case("INBOX")
+                    && map.here(&c.raw).is_none()
+                    && !claimed.contains(&c.raw)
+                    && !local.marks.iter().any(|x| x.raw == c.raw)
+            })
+            .collect();
+        let mut unknown = false;
+        for c in &candidates {
+            if asked.contains_key(&c.raw) {
+                continue;
+            }
+            if asked.len() >= MAX_STATUS {
+                unknown = true;
+                continue;
+            }
+            match tolerate(imap.status(&c.raw))? {
+                Some(st) => {
+                    asked.insert(c.raw.clone(), st);
+                }
+                None => unknown = true,
+            }
+        }
+        // By the server's id where it keeps them; by UIDVALIDITY where it does not.
+        let matches: Vec<&&Folder> = candidates
+            .iter()
+            .filter(|c| {
+                let st = asked.get(&c.raw);
+                if m.mailbox_id.is_empty() {
+                    m.uid_validity != 0 && st.and_then(|s| s.uid_validity) == Some(m.uid_validity)
+                } else {
+                    st.and_then(|s| s.mailbox_id.as_deref()) == Some(m.mailbox_id.as_str())
+                }
+            })
+            .collect();
+        match matches.as_slice() {
+            [one] => {
+                let to = one.raw.clone();
+                claimed.insert(to.clone());
+                follow_rename(&m.raw, &to, local, received, map, done);
+                if !map.pairs.iter().any(|(r, _)| *r == to) {
+                    map.pairs.push((to.clone(), here));
+                }
+                if own_folder(f.kind) {
+                    let name = path_of(one).last().cloned().unwrap_or_default();
+                    let top = local.top();
+                    let parent = match parent_raw(&to, map.delimiter) {
+                        None => Some(top),
+                        Some(p) if map.under_inbox && p.eq_ignore_ascii_case("INBOX") => Some(top),
+                        Some(p) => map.here(p).map(Some),
+                    };
+                    // Never into itself or a folder inside it.
+                    let parent = parent.filter(|p| *p != f.parent && p.is_none_or(|p| !local.inside(p, here)));
+                    if !name.is_empty() && (parent.is_some() || name != f.name) {
+                        done.moved_here.push((here, parent, name));
+                    }
+                }
+            }
+            [] if !unknown => {
+                // Gone from the server: what it holds stays here only.
+                for i in &mut local.items {
+                    let in_it = match &i.place {
+                        Some(Place::On { raw, .. } | Place::Pending { raw }) => renamed_raw(raw, &m.raw, &m.raw, map.delimiter).is_some(),
+                        _ => false,
+                    };
+                    if in_it {
+                        i.place = Some(Place::Here);
+                        done.replaced.push((i.folder, i.id, Place::Here));
+                    }
+                }
+                if own_folder(f.kind) && !done.kept_here.iter().any(|k| local.inside(here, *k)) {
+                    done.kept_here.push(here);
+                }
+            }
+            // Two or more could be it, or not every one could be asked: left until it can be told.
+            _ => {}
+        }
+    }
+    remember(&mut map.pairs, listed, local);
+
+    // This side: folders renamed or moved here since the two last agreed.
+    let heres: Vec<u64> = local.marks.iter().map(|m| m.here).collect();
+    for h in heres {
+        if progress.stopped() {
+            break;
+        }
+        let Some(m) = local.marks.iter().find(|m| m.here == h).cloned() else { continue };
+        let (Some(f), Some((parent, name))) = (local.folder(FolderId(h)).cloned(), m.agreed.clone()) else { continue };
+        let followed = done.moved_here.iter().any(|(x, ..)| x.0 == h) || done.renamed.iter().any(|(_, to, _)| *to == m.raw);
+        if !own_folder(f.kind) || followed || !is_listed(&m.raw) || (f.parent.map(|p| p.0) == parent && f.name == name) {
+            continue;
+        }
+        let Some(to) = wanted_raw(imap, local, map, &f, 0, done)? else { continue };
+        if to == m.raw || listed.iter().any(|x| x.raw.eq_ignore_ascii_case(&to)) {
+            continue;
+        }
+        if tolerate(imap.rename(&m.raw, &to))?.is_some() {
+            follow_rename(&m.raw, &to, local, received, map, done);
+            done.pushed += 1;
+            changed = true;
+        }
+    }
+
+    // Folders deleted here for good, those deepest first; only while the server's folder is
+    // still the one deleted here.
+    let mut going = local.folders_gone.clone();
+    going.sort_by_key(|g| std::cmp::Reverse(g.raw.len()));
+    for g in going {
+        if progress.stopped() {
+            break;
+        }
+        if !listed.iter().any(|f| f.raw == g.raw) {
+            done.folders_deleted.push(g.raw);
+            continue;
+        }
+        let Some(st) = tolerate(imap.status(&g.raw))? else { continue };
+        if st.uid_validity != Some(g.uid_validity) || g.uid_validity == 0 {
+            // Another folder by that name: it stays.
+            done.folders_deleted.push(g.raw);
+            continue;
+        }
+        if tolerate(imap.delete(&g.raw))?.is_some() {
+            done.pushed += 1;
+            changed = true;
+            done.folders_deleted.push(g.raw);
+        }
+    }
+
+    // Folders made here, as Outlook makes them on the server at once; not those with the deleted
+    // mail, nor those the server lost.
+    let bin = local.folders.iter().find(|f| f.kind == FolderKind::Deleted).map(|f| f.id);
+    let new: Vec<FolderId> = local
+        .folders
+        .iter()
+        .filter(|f| {
+            own_folder(f.kind)
+                && map.raw(f.id).is_none()
+                && !bin.is_some_and(|b| local.inside(f.id, b))
+                && !done.kept_here.iter().any(|k| local.inside(f.id, *k))
+        })
+        .map(|f| f.id)
+        .collect();
+    let before = done.created.len();
+    for id in new {
+        if progress.stopped() || done.created.len().saturating_sub(before) >= MAX_MADE {
+            break;
+        }
+        make_on_server(imap, local, map, id, 0, done)?;
+    }
+    changed |= done.created.len() > before;
+
+    // What each pair is as of now, to be remembered as agreed.
+    for (raw, here) in &map.pairs {
+        let Some(f) = local.folder(*here) else { continue };
+        if raw.eq_ignore_ascii_case("INBOX") {
+            continue;
+        }
+        let (parent, name) = match done.moved_here.iter().find(|(h, ..)| h == here) {
+            Some((_, p, n)) => (p.unwrap_or(f.parent), n.clone()),
+            None => (f.parent, f.name.clone()),
+        };
+        done.agreed.push((raw.clone(), *here, parent, name));
+    }
+    Ok(changed)
 }
 
 /// What was done here goes to the server: flags, moves, deletions and messages put here.
@@ -699,7 +1026,7 @@ pub(super) fn apply(s: &mut Session, store: usize, local: &Local, done: &Synced,
     let path = s.stores.get(store).and_then(|st| st.path()).map(|p| p.display().to_string()).unwrap_or_default();
     let mut out = Applied::default();
     let mut edits: Vec<(FolderId, ItemId, Box<dyn Fn(&mut Item) -> bool + '_>)> = Vec::new();
-    for (folder, id, place) in &done.placed {
+    for (folder, id, place) in done.replaced.iter().chain(&done.placed) {
         edits.push((
             *folder,
             *id,
@@ -855,6 +1182,22 @@ pub(super) fn adopt(
 fn account_of(s: &mut Session, store: usize) -> Option<&mut crate::accounts::Account> {
     let path = s.stores.get(store)?.path()?.display().to_string();
     s.accounts.iter_mut().find(|a| a.kind == Kind::Imap && !a.received.into.is_empty() && a.received.into == path)
+}
+
+/// Folders deleted for good from an IMAP account's data file are deleted from the server too at
+/// the next Send/Receive: each that was paired with a folder there. Asked before they go.
+pub(crate) fn forget_folders(s: &mut Session, store: usize, folders: &[FolderId]) {
+    let Some(a) = account_of(s, store) else { return };
+    let going: Vec<GoneFolder> = a
+        .received
+        .folders
+        .iter()
+        .filter(|m| m.here != 0 && folders.contains(&FolderId(m.here)) && !m.raw.eq_ignore_ascii_case("INBOX"))
+        .map(|m| GoneFolder { raw: m.raw.clone(), uid_validity: m.uid_validity })
+        .collect();
+    for g in going {
+        a.received.delete_folder_on_server(g);
+    }
 }
 
 /// A message deleted for good from an IMAP account's data file is deleted from the server too

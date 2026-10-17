@@ -154,6 +154,10 @@ struct FromFolder {
     got: Vec<Got>,
     /// The highest id passed over, as a message here has it already.
     passed: u32,
+    /// The folder here it is paired with, when it is.
+    here: Option<FolderId>,
+    /// The server's own id for it ([RFC 8474]), when it gives one.
+    mailbox_id: Option<String>,
 }
 
 /// What one receive may still take down from an account, shared by its folders.
@@ -289,7 +293,7 @@ pub(crate) fn receive_from(s: &mut Session, one: Option<usize>, wait: bool) -> C
                 break;
             }
             let mut one = match t.reach.account.kind {
-                Kind::Imap => from_imap(&t, progress),
+                Kind::Imap => from_imap(&mut t, progress),
                 Kind::Pop3 => from_pop3(&t, progress),
             };
             // What was to go on the server is not wanted any more.
@@ -323,7 +327,7 @@ fn took(t: &Taking) -> Took {
     }
 }
 
-fn from_imap(t: &Taking, progress: &openmailclient_model::Progress) -> Took {
+fn from_imap(t: &mut Taking, progress: &openmailclient_model::Progress) -> Took {
     let mut out = took(t);
     if let Err(e) = imap_into(t, progress, &mut out) {
         out.error = Some(e);
@@ -331,21 +335,23 @@ fn from_imap(t: &Taking, progress: &openmailclient_model::Progress) -> Took {
     out
 }
 
-fn imap_into(t: &Taking, progress: &openmailclient_model::Progress, out: &mut Took) -> Result<(), NetError> {
+fn imap_into(t: &mut Taking, progress: &openmailclient_model::Progress, out: &mut Took) -> Result<(), NetError> {
     let login = t.reach.login()?;
     let mut imap = Imap::open(&*t.reach.connector, &t.reach.account.incoming_endpoint(), &login)?;
     // What was done here goes to the server first, so that what is taken down after is the
-    // server as it is with it.
+    // server as it is with it: folders, and then messages.
     let mut map = None;
     let mut folders = None;
-    if let Some(local) = &t.local {
+    if let Some(local) = t.local.as_mut() {
         let listed = imap.folders()?;
         let mut m = Map::of(&listed, local);
+        let moved = imap_sync::follow(&mut imap, &listed, &mut m, local, &mut t.received, &mut out.synced, progress)?;
         imap_sync::push(&mut imap, &mut m, local, &mut out.synced, progress)?;
-        // Folders made on the server are taken down with the rest.
-        folders = Some(if out.synced.created.is_empty() { listed } else { imap.folders()? });
+        // Folders made, renamed or deleted on the server are listed as they are now.
+        folders = Some(if out.synced.created.is_empty() && !moved { listed } else { imap.folders()? });
         map = Some(m);
     }
+    let t: &Taking = t;
     let sync = t.local.as_ref().zip(map.as_ref());
     let step = sync.and(t.received.step("INBOX"));
     let inbox = imap.select_since("INBOX", step.map(|s| (s.uid_validity, s.modseq)))?;
@@ -532,7 +538,16 @@ fn others_into(
         let (got, waiting, passed) =
             take(imap, &selected, mark.uid_validity, mark.last_uid, budget, progress, whole.as_deref(), sync.map(|(l, _)| l), &f.raw, &out.synced)?;
         out.waiting = out.waiting.saturating_add(waiting);
-        out.others.push(FromFolder { raw: f.raw.clone(), path, kind: kind_of(f, &path_of(f)), uid_validity: selected.uid_validity, got, passed });
+        out.others.push(FromFolder {
+            raw: f.raw.clone(),
+            path,
+            kind: kind_of(f, &path_of(f)),
+            uid_validity: selected.uid_validity,
+            got,
+            passed,
+            here: sync.and_then(|(_, m)| m.here(&f.raw)),
+            mailbox_id: selected.mailbox_id.clone(),
+        });
     }
     Ok(())
 }
@@ -610,6 +625,12 @@ fn item_of(got: &Got, now: i64, on: Option<(&str, u32)>) -> Item {
 /// mail must not go into here: the Outbox, whose mail would be sent, and folders of
 /// appointments, contacts and the like.
 fn local_folder(s: &mut Session, store: usize, from: &FromFolder) -> Result<Option<FolderId>, String> {
+    // The folder it is paired with, wherever it stands and whatever it is called now.
+    if let Some(here) = from.here
+        && s.folder_info(store, here).is_some()
+    {
+        return Ok(Some(here));
+    }
     if let Some(kind) = from.kind
         && let Some(id) = s.find_folder(store, kind)
     {
@@ -667,13 +688,21 @@ fn keep_folder(
     if let Some(v) = from.uid_validity
         && v != mark.uid_validity
     {
-        mark = Mark { raw: from.raw.clone(), uid_validity: v, last_uid: 0 };
+        mark = Mark { raw: from.raw.clone(), uid_validity: v, last_uid: 0, ..mark };
+    }
+    if let Some(id) = &from.mailbox_id {
+        mark.mailbox_id = id.clone();
     }
     let (mut kept, mut unread, mut why) = (0, 0, None);
     // A folder the server has is made here even while it holds nothing, as the server shows it.
     {
         match local_folder(s, store, from) {
             Ok(Some(folder)) => {
+                // Paired from now on: a rename or move on either side is followed by this.
+                if mark.here != folder.0 || mark.agreed.is_none() {
+                    mark.here = folder.0;
+                    mark.agreed = s.folder_info(store, folder).map(|f| (f.parent.map(|p| p.0), f.name.clone()));
+                }
                 let sent = s.folders.get(store).and_then(|l| l.iter().find(|f| f.id == folder)).is_some_and(|f| f.kind == FolderKind::Sent);
                 for got in &from.got {
                     let Uid::Imap(uid) = got.uid else { continue };
@@ -762,8 +791,13 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 gone: received.gone,
                 matched: received.matched,
                 steps: received.steps,
+                folders_gone: received.folders_gone,
                 ..Received::default()
             };
+        }
+        // Folders renamed on the server, or by it as asked here, keep what is remembered of them.
+        for (from, to, d) in &t.synced.renamed {
+            received.renamed(from, to, *d);
         }
         let mut kept = 0usize;
         let mut trouble = t.error.as_ref().map(ToString::to_string);
@@ -772,7 +806,11 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         if let Some(why) = &applied.why {
             trouble.get_or_insert(why.clone());
         }
-        let in_step = applied.changed + applied.removed + t.synced.pushed;
+        let (folders_moved, why) = if t.local.is_some() { folders_here(s, store, &t.synced) } else { (0, None) };
+        if let Some(why) = why {
+            trouble.get_or_insert(why);
+        }
+        let in_step = applied.changed + applied.removed + t.synced.pushed + folders_moved + t.synced.replaced.len().min(1);
         let mut sync = Adopting { local: t.local.as_ref(), adopted: std::collections::HashSet::new() };
         for from in &t.others {
             let (n, unread_here, why) = keep_folder(s, store, from, &mut received, now, &mut sync);
@@ -786,6 +824,14 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         if let Some(listed) = &t.listed {
             received.folders.retain(|m| listed.contains(&m.raw));
         }
+        // Each pair as it stands now is what the two agree on, so neither side follows it back.
+        for (raw, here, parent, name) in &t.synced.agreed {
+            if let Some(m) = received.folders.iter_mut().find(|m| m.raw == *raw) {
+                m.here = here.0;
+                m.agreed = Some((parent.map(|p| p.0), name.clone()));
+            }
+        }
+        received.folders_gone.retain(|g| !t.synced.folders_deleted.contains(&g.raw));
         let mut new_seen = Vec::new();
         let inbox_on = sync.local.is_some().then_some("INBOX").zip(t.uid_validity);
         let mut inbox_kept = true;
@@ -861,6 +907,11 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
                 "changed": applied.changed,
                 "removed": applied.removed,
                 "created": t.synced.created,
+                // Folders renamed or moved, on either side; deleted on the server as asked
+                // here; and kept here as the server no longer has them.
+                "renamed": t.synced.renamed.iter().map(|(from, to, _)| json!({ "from": from, "to": to })).collect::<Vec<_>>(),
+                "foldersDeleted": t.synced.folders_deleted,
+                "keptHere": t.synced.kept_here.len(),
                 // Folders that cost one SELECT, unchanged, and those of which only what changed
                 // was read, where the server keeps mod-sequences.
                 "unchanged": t.synced.unchanged,
@@ -901,6 +952,53 @@ fn ended(s: &mut Session, targets: &[(String, Target)], took: Vec<Took>, mut sai
         status.push_str(&format!("; {}", said.join("; ")));
     }
     (status, json!({ "received": all, "accounts": accounts }))
+}
+
+/// Folders here moved and renamed as the server's are now, and those the server no longer has
+/// put with the deleted mail. How many changed, and what went wrong.
+fn folders_here(s: &mut Session, store: usize, synced: &Synced) -> (usize, Option<String>) {
+    let (mut n, mut why) = (0, None);
+    for (here, parent, name) in &synced.moved_here {
+        let Some(info) = s.folder_info(store, *here).cloned() else { continue };
+        let to = parent.unwrap_or(info.parent);
+        if to.is_some_and(|p| super::folder::subtree(s, store, *here).contains(&p)) {
+            continue;
+        }
+        if super::folder::clash(s, store, to, name, Some(*here)) {
+            why.get_or_insert(format!("the folder {} was not named {name} as on the server: one by that name is there", info.name));
+            continue;
+        }
+        let Some(st) = s.stores.get_mut(store) else { break };
+        let moved = match to.filter(|p| Some(*p) != info.parent) {
+            Some(p) => st.move_folder(*here, p),
+            None => Ok(()),
+        };
+        let done = moved.and_then(|()| if *name == info.name { Ok(()) } else { st.rename_folder(*here, name) });
+        match done {
+            Ok(()) => n += 1,
+            Err(e) => {
+                why.get_or_insert(format!("the folder {} could not be moved as on the server: {e}", info.name));
+            }
+        }
+        s.refresh_folders(store);
+    }
+    for here in &synced.kept_here {
+        let (Some(info), Some(bin)) = (s.folder_info(store, *here).cloned(), s.find_folder(store, FolderKind::Deleted)) else { continue };
+        if info.parent == Some(bin) || super::folder::subtree(s, store, *here).contains(&bin) {
+            continue;
+        }
+        let name = super::folder::free_name(s, store, bin, &info.name);
+        let Some(st) = s.stores.get_mut(store) else { break };
+        let done = st.move_folder(*here, bin).and_then(|()| if name == info.name { Ok(()) } else { st.rename_folder(*here, &name) });
+        match done {
+            Ok(()) => n += 1,
+            Err(e) => {
+                why.get_or_insert(format!("the folder {} the server no longer has could not be put with the deleted mail: {e}", info.name));
+            }
+        }
+        s.refresh_folders(store);
+    }
+    (n, why)
 }
 
 /// Messages taken down that were put on the server from here: the item here stands for each.

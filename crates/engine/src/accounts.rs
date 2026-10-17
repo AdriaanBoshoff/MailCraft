@@ -85,6 +85,18 @@ pub struct Received {
     /// IMAP: each folder as it was when it was last kept in step, so that only what changed
     /// since is asked for where the server keeps mod-sequences ([RFC 7162]).
     pub steps: Vec<Step>,
+    /// IMAP: folders deleted here for good whose folder on the server is to go too, at the next
+    /// Send/Receive. Only a folder deleted here by the owner goes there: a folder that is merely
+    /// missing here, as in a data file made anew, is taken down again instead.
+    pub folders_gone: Vec<GoneFolder>,
+}
+
+/// A folder of an IMAP server that is to be deleted there.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GoneFolder {
+    pub raw: String,
+    /// Its UIDVALIDITY as it was known: a folder made there anew by that name since stays.
+    pub uid_validity: u32,
 }
 
 /// An IMAP folder as it was when it was last kept in step with what is here.
@@ -108,13 +120,39 @@ pub struct Gone {
     pub uid: u32,
 }
 
-/// How far one IMAP folder was taken down.
+/// How far one IMAP folder was taken down, and the folder here it is kept in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Mark {
     /// The folder's name as the server knows it.
     pub raw: String,
     pub uid_validity: u32,
     pub last_uid: u32,
+    /// The folder of the account's data file it is kept in, once known; 0 until then.
+    pub here: u64,
+    /// The folder here's parent and name when the two were last in step: a folder moved or
+    /// renamed here since is moved or renamed on the server.
+    pub agreed: Option<(Option<u64>, String)>,
+    /// The server's own id for the folder, which stays with it when it is renamed ([RFC 8474]).
+    pub mailbox_id: String,
+}
+
+/// The name a folder of the server has once `from` is renamed `to`: `from` itself, or a folder
+/// inside it. None for any other.
+pub(crate) fn renamed_raw(raw: &str, from: &str, to: &str, delimiter: Option<char>) -> Option<String> {
+    if raw == from {
+        return Some(to.to_string());
+    }
+    let d = delimiter?;
+    let rest = raw.strip_prefix(from)?.strip_prefix(d)?;
+    Some(format!("{to}{d}{rest}"))
+}
+
+/// A folder id as a server gives it ([RFC 8474] 4): letters, digits, `-` and `_`.
+fn kept_object_id(v: Option<&Value>) -> String {
+    v.and_then(Value::as_str)
+        .filter(|t| !t.is_empty() && t.len() <= 255 && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// POP3 ids remembered at most; the server's list is the bound in practice.
@@ -132,8 +170,25 @@ fn kept_text(v: &Value, max: usize) -> Option<&str> {
 
 impl Received {
     pub(crate) fn to_json(&self) -> Value {
-        let folders: Vec<Value> =
-            self.folders.iter().map(|m| json!({ "raw": m.raw, "uidValidity": m.uid_validity, "lastUid": m.last_uid })).collect();
+        let folders: Vec<Value> = self
+            .folders
+            .iter()
+            .map(|m| {
+                let mut v = json!({ "raw": m.raw, "uidValidity": m.uid_validity, "lastUid": m.last_uid });
+                if m.here != 0 {
+                    v["here"] = json!(m.here);
+                }
+                if let Some((parent, name)) = &m.agreed {
+                    v["agreedParent"] = json!(parent);
+                    v["agreedName"] = json!(name);
+                }
+                if !m.mailbox_id.is_empty() {
+                    v["mailboxId"] = json!(m.mailbox_id);
+                }
+                v
+            })
+            .collect();
+        let folders_gone: Vec<Value> = self.folders_gone.iter().map(|g| json!({ "raw": g.raw, "uidValidity": g.uid_validity })).collect();
         let gone: Vec<Value> = self.gone.iter().map(|g| json!({ "raw": g.raw, "uidValidity": g.uid_validity, "uid": g.uid })).collect();
         // A mod-sequence may be past what a JSON number holds exactly: kept as text.
         let steps: Vec<Value> = self
@@ -144,7 +199,8 @@ impl Received {
             )
             .collect();
         json!({ "uidValidity": self.uid_validity, "lastUid": self.last_uid, "seen": self.seen, "into": self.into,
-                "folders": folders, "sentHere": self.sent_here, "gone": gone, "matched": self.matched, "steps": steps })
+                "folders": folders, "sentHere": self.sent_here, "gone": gone, "matched": self.matched, "steps": steps,
+                "foldersGone": folders_gone })
     }
 
     /// As a settings file gives it: what makes no sense is left as nothing taken down yet.
@@ -156,7 +212,18 @@ impl Received {
         for f in v.get("folders").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_FOLDERS) {
             let Some(raw) = f.get("raw").and_then(|r| kept_text(r, 1000)) else { continue };
             if !folders.iter().any(|m| m.raw == raw) {
-                folders.push(Mark { raw: raw.to_string(), uid_validity: number(f, "uidValidity"), last_uid: number(f, "lastUid") });
+                let agreed = f
+                    .get("agreedName")
+                    .and_then(|n| kept_text(n, 1000))
+                    .map(|name| (f.get("agreedParent").and_then(Value::as_u64), name.to_string()));
+                folders.push(Mark {
+                    raw: raw.to_string(),
+                    uid_validity: number(f, "uidValidity"),
+                    last_uid: number(f, "lastUid"),
+                    here: f.get("here").and_then(Value::as_u64).unwrap_or(0),
+                    agreed,
+                    mailbox_id: kept_object_id(f.get("mailboxId")),
+                });
             }
         }
         let sent_here = v
@@ -194,9 +261,27 @@ impl Received {
                 steps.push(Step { raw: raw.to_string(), uid_validity, modseq, exists, uid_next: number(t, "uidNext") });
             }
         }
+        let mut folders_gone: Vec<GoneFolder> = Vec::new();
+        for g in v.get("foldersGone").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().take(MAX_FOLDERS) {
+            let Some(raw) = g.get("raw").and_then(|r| kept_text(r, 1000)) else { continue };
+            if !raw.eq_ignore_ascii_case("INBOX") && !folders_gone.iter().any(|x| x.raw == raw) {
+                folders_gone.push(GoneFolder { raw: raw.to_string(), uid_validity: number(g, "uidValidity") });
+            }
+        }
         let matched = v.get("matched").and_then(Value::as_bool).unwrap_or(false);
         let into = v.get("into").and_then(Value::as_str).filter(|p| p.len() <= 1024 && !p.chars().any(char::is_control)).unwrap_or_default();
-        Self { uid_validity: n("uidValidity"), last_uid: n("lastUid"), seen, into: into.to_string(), folders, sent_here, gone, matched, steps }
+        Self {
+            uid_validity: n("uidValidity"),
+            last_uid: n("lastUid"),
+            seen,
+            into: into.to_string(),
+            folders,
+            sent_here,
+            gone,
+            matched,
+            steps,
+            folders_gone,
+        }
     }
 
     /// What was taken down into the data file `into`: nothing, when it went into another.
@@ -215,6 +300,38 @@ impl Received {
             *t = step;
         } else if self.steps.len() < MAX_FOLDERS {
             self.steps.push(step);
+        }
+    }
+
+    /// A folder of the server was renamed `from` to `to`, with the folders inside it: what is
+    /// remembered of each goes with it.
+    pub fn renamed(&mut self, from: &str, to: &str, delimiter: Option<char>) {
+        // What was remembered by the new name is not the folder now there: it goes.
+        let stale = |raw: &str| renamed_raw(raw, to, to, delimiter).is_some();
+        self.folders.retain(|m| !stale(&m.raw));
+        self.steps.retain(|t| !stale(&t.raw));
+        self.gone.retain(|g| !stale(&g.raw));
+        self.folders_gone.retain(|g| !stale(&g.raw));
+        let new = |raw: &mut String| {
+            if let Some(r) = renamed_raw(raw, from, to, delimiter) {
+                *raw = r;
+            }
+        };
+        self.folders.iter_mut().for_each(|m| new(&mut m.raw));
+        self.steps.iter_mut().for_each(|t| new(&mut t.raw));
+        self.gone.iter_mut().for_each(|g| new(&mut g.raw));
+        self.folders_gone.iter_mut().for_each(|g| new(&mut g.raw));
+    }
+
+    /// Remember that a folder of the server is to be deleted there.
+    pub fn delete_folder_on_server(&mut self, g: GoneFolder) {
+        if g.raw.is_empty() || g.raw.eq_ignore_ascii_case("INBOX") || self.folders_gone.iter().any(|x| x.raw == g.raw) {
+            return;
+        }
+        self.folders_gone.push(g);
+        if self.folders_gone.len() > MAX_FOLDERS {
+            let over = self.folders_gone.len() - MAX_FOLDERS;
+            self.folders_gone.drain(..over);
         }
     }
 

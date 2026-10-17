@@ -136,7 +136,7 @@ fn valid_name(p: &Value) -> Result<String, EngineError> {
 }
 
 /// `folder` and every folder under it, parents first, each once however the parents point.
-fn subtree(s: &Session, store: usize, folder: FolderId) -> Vec<FolderId> {
+pub(super) fn subtree(s: &Session, store: usize, folder: FolderId) -> Vec<FolderId> {
     let list = s.folders.get(store).map(Vec::as_slice).unwrap_or(&[]);
     let mut seen = HashSet::from([folder]);
     let mut found = vec![folder];
@@ -150,7 +150,7 @@ fn subtree(s: &Session, store: usize, folder: FolderId) -> Vec<FolderId> {
 
 /// Whether a folder named `name` stands under `parent` already, other than `except`. Names that
 /// differ only in the case of their letters are one name, in any alphabet.
-fn clash(s: &Session, store: usize, parent: Option<FolderId>, name: &str, except: Option<FolderId>) -> bool {
+pub(super) fn clash(s: &Session, store: usize, parent: Option<FolderId>, name: &str, except: Option<FolderId>) -> bool {
     let name = name.to_lowercase();
     s.folders.get(store).is_some_and(|l| l.iter().any(|f| f.parent == parent && Some(f.id) != except && f.name.to_lowercase() == name))
 }
@@ -235,7 +235,7 @@ fn move_to(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// A name for `name` that no folder under `parent` has: itself, or itself with a number.
-fn free_name(s: &Session, store: usize, parent: FolderId, name: &str) -> String {
+pub(super) fn free_name(s: &Session, store: usize, parent: FolderId, name: &str) -> String {
     if !clash(s, store, Some(parent), name, None) {
         return name.to_string();
     }
@@ -268,7 +268,11 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
                 "this data file has no Deleted Items folder to put it in; \"permanently\": true removes the folder and what it holds for good".into(),
             ));
         }
-        _ => s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.delete_folder(folder)?,
+        _ => {
+            s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.delete_folder(folder)?;
+            // Deleted for good here: the IMAP server's folders go too, at the next Send/Receive.
+            super::imap_sync::forget_folders(s, store, &tree);
+        }
     }
     s.refresh_folders(store);
     s.current = None;
@@ -333,6 +337,7 @@ fn empty(s: &mut Session, p: &Value) -> CmdResult {
             st.delete_folder(child)?;
         }
     }
+    super::imap_sync::forget_folders(s, store, &inside);
     for item in &gone {
         super::imap_sync::forget(s, store, item);
     }

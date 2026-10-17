@@ -597,3 +597,254 @@ fn whether_new_mail_comes_as_it_arrives_is_kept_in_the_settings() {
     assert!(!again.new_mail_as_it_comes);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A folder of the fake server, numbered as one of its own, holding messages.
+fn server_folder(fake: &Fake, name: &str, uid_validity: u32, subjects: &[&str]) {
+    let mut m = Mailbox::new(name, &[]);
+    m.uid_validity = uid_validity;
+    for s in subjects {
+        m.add(&message(s), &[]);
+    }
+    fake.state().mailboxes.push(m);
+}
+
+/// Rename a folder on the fake server, with the folders inside it, as another program would.
+fn rename_there(fake: &Fake, from: &str, to: &str) {
+    let mut state = fake.state();
+    let inside = format!("{from}/");
+    for m in state.mailboxes.iter_mut() {
+        if m.name == from {
+            m.name = to.to_string();
+        } else if let Some(rest) = m.name.strip_prefix(&inside) {
+            m.name = format!("{to}/{rest}");
+        }
+    }
+}
+
+fn parent_of(s: &Session, name: &str) -> Option<String> {
+    let f = s.folders[1].iter().find(|f| f.name == name)?;
+    s.folders[1].iter().find(|p| Some(p.id) == f.parent).map(|p| p.name.clone())
+}
+
+fn names_there(fake: &Fake) -> Vec<String> {
+    let mut all: Vec<String> = fake.state().mailboxes.iter().map(|m| m.name.clone()).collect();
+    all.sort();
+    all
+}
+
+#[test]
+fn a_folder_renamed_or_moved_on_the_server_is_renamed_or_moved_here_and_nothing_comes_twice() {
+    let fake = Fake::default();
+    server_folder(&fake, "Projects", 200, &["plan"]);
+    server_folder(&fake, "Projects/Old", 201, &["old plan"]);
+    server_folder(&fake, "Clients", 202, &[]);
+    let (mut s, dir) = account(&fake, "server-rename");
+    assert_eq!(receive(&mut s)["received"], 2, "{}", s.status);
+    assert_eq!(parent_of(&s, "Old").as_deref(), Some("Projects"));
+
+    rename_there(&fake, "Projects", "Work");
+    let got = receive(&mut s);
+    assert_eq!(got["received"], 0, "the folder's mail is not taken down again: {got}");
+    assert_eq!(got["accounts"][0]["inStep"]["renamed"], json!([{ "from": "Projects", "to": "Work" }]), "{got}");
+    assert!(!s.folders[1].iter().any(|f| f.name == "Projects"), "{:?}", s.folders[1]);
+    assert_eq!((count(&s, "Work"), count(&s, "Old")), (1, 1));
+    assert_eq!(parent_of(&s, "Old").as_deref(), Some("Work"));
+    let id = folder(&s, "Work");
+    assert!(s.accounts[0].received.folders.iter().any(|m| m.raw == "Work" && m.here == id.0), "{:?}", s.accounts[0].received.folders);
+
+    // The messages know their place by the new name: a change goes there, and one made there
+    // comes here.
+    pick(&mut s, "Work", "plan");
+    s.run("mail.markRead", &Value::Null).unwrap();
+    fake.state().mailbox("Work/Old").unwrap().messages[0].flags.push("\\Flagged".into());
+    receive(&mut s);
+    assert_eq!(flags(&fake, "Work", "plan"), ["\\Seen"], "{}", s.status);
+    pick(&mut s, "Old", "old plan");
+    assert_eq!(s.open.as_ref().unwrap().flag(), openmailclient_model::Flag::Flagged);
+
+    // Moved into another folder there: moved here too.
+    rename_there(&fake, "Work/Old", "Clients/Old");
+    let got = receive(&mut s);
+    assert_eq!(got["received"], 0, "{got}");
+    assert_eq!(parent_of(&s, "Old").as_deref(), Some("Clients"));
+    assert_eq!(count(&s, "Old"), 1);
+    done(s, dir);
+}
+
+#[test]
+fn a_folder_renamed_moved_and_deleted_here_is_renamed_moved_and_deleted_there() {
+    let fake = Fake::default();
+    server_folder(&fake, "Projects", 200, &["plan"]);
+    server_folder(&fake, "Clients", 201, &[]);
+    let (mut s, dir) = account(&fake, "local-rename");
+    receive(&mut s);
+
+    s.select_folder(1, folder(&s, "Projects")).unwrap();
+    s.run("folder.rename", &json!({ "name": "Work" })).unwrap();
+    let got = receive(&mut s);
+    assert_eq!(names_there(&fake), ["Clients", "Drafts", "INBOX", "Sent", "Trash", "Work"], "{got}");
+    assert_eq!((got["received"].as_u64(), on_server(&fake, "Work")), (Some(0), 1), "{got}");
+    assert_eq!(count(&s, "Work"), 1);
+
+    s.select_folder(1, folder(&s, "Work")).unwrap();
+    s.run("folder.move", &json!({ "toId": folder(&s, "Clients").0 })).unwrap();
+    receive(&mut s);
+    assert!(names_there(&fake).contains(&"Clients/Work".to_string()), "{:?} {}", names_there(&fake), s.status);
+    pick(&mut s, "Work", "plan");
+    s.run("mail.markRead", &Value::Null).unwrap();
+    receive(&mut s);
+    assert_eq!(flags(&fake, "Clients/Work", "plan"), ["\\Seen"], "the message's place went with its folder");
+
+    // Deleted, it is put with the deleted mail, here and there.
+    s.select_folder(1, folder(&s, "Work")).unwrap();
+    s.run("folder.delete", &Value::Null).unwrap();
+    assert_eq!(parent_of(&s, "Work").as_deref(), Some("Deleted Items"));
+    receive(&mut s);
+    assert!(names_there(&fake).contains(&"Trash/Work".to_string()), "{:?} {}", names_there(&fake), s.status);
+    assert_eq!(count(&s, "Work"), 1, "nothing came twice");
+
+    // Deleted for good here: from the server as well.
+    s.select_folder(1, folder(&s, "Work")).unwrap();
+    s.run("folder.delete", &Value::Null).unwrap();
+    assert_eq!(s.accounts[0].received.folders_gone.len(), 1);
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["foldersDeleted"], json!(["Trash/Work"]), "{got}");
+    assert!(!names_there(&fake).iter().any(|n| n.contains("Work")), "{:?}", names_there(&fake));
+    assert!(s.accounts[0].received.folders_gone.is_empty());
+    done(s, dir);
+}
+
+#[test]
+fn a_folder_the_server_no_longer_has_is_kept_here_with_the_deleted_mail_and_not_made_again() {
+    let fake = Fake::default();
+    server_folder(&fake, "Projects", 200, &["plan"]);
+    let (mut s, dir) = account(&fake, "server-delete");
+    receive(&mut s);
+    fake.state().mailboxes.retain(|m| m.name != "Projects");
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["keptHere"], 1, "{got}");
+    assert_eq!(parent_of(&s, "Projects").as_deref(), Some("Deleted Items"));
+    assert_eq!(count(&s, "Projects"), 1, "what it held is kept");
+    receive(&mut s);
+    assert!(!names_there(&fake).iter().any(|n| n.contains("Projects")), "{:?}", names_there(&fake));
+    assert_eq!(count(&s, "Projects"), 1);
+    done(s, dir);
+}
+
+#[test]
+fn a_folder_made_anew_there_by_the_name_of_one_deleted_here_stays() {
+    let fake = Fake::default();
+    server_folder(&fake, "Projects", 200, &["plan"]);
+    let (mut s, dir) = account(&fake, "only-asked");
+    receive(&mut s);
+    s.select_folder(1, folder(&s, "Projects")).unwrap();
+    s.run("folder.delete", &json!({ "permanently": true })).unwrap();
+    fake.state().mailboxes.retain(|m| m.name != "Projects");
+    server_folder(&fake, "Projects", 300, &["new plan"]);
+    let got = receive(&mut s);
+    assert!(names_there(&fake).contains(&"Projects".to_string()), "{got}");
+    assert!(s.accounts[0].received.folders_gone.is_empty(), "forgotten once it cannot be done");
+    assert_eq!(count(&s, "Projects"), 1, "the new folder's mail comes here: {got}");
+    done(s, dir);
+}
+
+#[test]
+fn a_folder_made_here_is_made_on_the_server_but_not_one_with_the_deleted_mail() {
+    let fake = Fake::default();
+    let (mut s, dir) = account(&fake, "made-here");
+    receive(&mut s);
+    // The server's top is where the Inbox stands.
+    let bin = folder(&s, "Deleted Items");
+    match s.folders[1].iter().find(|f| f.kind == FolderKind::Inbox).and_then(|f| f.parent) {
+        Some(top) => s.stores[1].create_folder(top, "Ideas").unwrap(),
+        None => s.stores[1].create_top_folder("Ideas").unwrap(),
+    };
+    s.stores[1].create_folder(bin, "Thrown away").unwrap();
+    s.refresh_folders(1);
+    let ideas = folder(&s, "Ideas");
+    s.stores[1].create_folder(ideas, "Big").unwrap();
+    s.refresh_folders(1);
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["created"], json!(["Ideas", "Ideas/Big"]), "{got}");
+    assert!(!names_there(&fake).iter().any(|n| n.contains("Thrown")), "{:?}", names_there(&fake));
+    // Once there, they are not made again.
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["created"], json!([]), "{got}");
+    done(s, dir);
+}
+
+#[test]
+fn where_the_server_gives_folders_ids_a_rename_is_followed_by_the_id() {
+    let fake = Fake::default();
+    fake.state().imap_caps.push("OBJECTID".into());
+    // The same UIDVALIDITY in both, as servers may give: only the id tells them apart.
+    server_folder(&fake, "Projects", 1, &["plan"]);
+    server_folder(&fake, "Clients", 1, &["client"]);
+    let (mut s, dir) = account(&fake, "ids");
+    receive(&mut s);
+    assert!(s.accounts[0].received.folders.iter().any(|m| m.raw == "Projects" && !m.mailbox_id.is_empty()), "{:?}", s.accounts[0].received.folders);
+    rename_there(&fake, "Projects", "Work");
+    let got = receive(&mut s);
+    assert_eq!(got["received"], 0, "{got}");
+    assert_eq!((count(&s, "Work"), count(&s, "Clients")), (1, 1));
+    assert!(fake.state().heard.iter().any(|c| c.contains("MAILBOXID")));
+    done(s, dir);
+}
+
+#[test]
+fn where_two_folders_cannot_be_told_apart_nothing_is_followed() {
+    let fake = Fake::default();
+    server_folder(&fake, "Projects", 7, &["plan"]);
+    let (mut s, dir) = account(&fake, "ambiguous");
+    receive(&mut s);
+    rename_there(&fake, "Projects", "Work");
+    server_folder(&fake, "Other", 7, &[]);
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["renamed"], json!([]), "{got}");
+    assert!(s.folders[1].iter().any(|f| f.name == "Projects"), "kept as it was: {:?}", s.folders[1]);
+    assert!(names_there(&fake).contains(&"Work".to_string()), "nothing done there: {:?}", names_there(&fake));
+    done(s, dir);
+}
+
+#[test]
+fn what_is_kept_of_folders_round_trips_and_nonsense_is_dropped() {
+    use crate::accounts::{GoneFolder, Mark, Received};
+    let r = Received {
+        folders: vec![Mark {
+            raw: "Work".into(),
+            uid_validity: 5,
+            last_uid: 9,
+            here: 77,
+            agreed: Some((Some(3), "Work".into())),
+            mailbox_id: "F12-ab_c".into(),
+        }],
+        folders_gone: vec![GoneFolder { raw: "Trash/Old".into(), uid_validity: 4 }],
+        ..Received::default()
+    };
+    assert_eq!(Received::from_json(Some(&r.to_json())), r);
+    let top = Received { folders: vec![Mark { raw: "A".into(), agreed: Some((None, "A".into())), ..Mark::default() }], ..Received::default() };
+    assert_eq!(Received::from_json(Some(&top.to_json())), top, "a folder at the very top keeps having no parent");
+    let bad = json!({
+        "folders": [
+            { "raw": "A", "mailboxId": "has spaces", "agreedName": "", "here": -4 },
+            { "raw": "B", "mailboxId": "x".repeat(256), "agreedName": 5, "agreedParent": "3" },
+        ],
+        "foldersGone": [{ "raw": "INBOX", "uidValidity": 3 }, { "raw": "" }, { "raw": 4 }, { "raw": "D", "uidValidity": -1 }, { "raw": "D" }],
+    });
+    let r = Received::from_json(Some(&bad));
+    assert!(r.folders.iter().all(|m| m.mailbox_id.is_empty() && m.agreed.is_none() && m.here == 0), "{:?}", r.folders);
+    assert_eq!(r.folders_gone, [GoneFolder { raw: "D".into(), uid_validity: 0 }]);
+    // A rename takes the folders inside with it, and what was kept by the new name goes.
+    let mut r = Received {
+        folders: vec![
+            Mark { raw: "A".into(), ..Mark::default() },
+            Mark { raw: "A/B".into(), ..Mark::default() },
+            Mark { raw: "AB".into(), ..Mark::default() },
+            Mark { raw: "Z".into(), last_uid: 4, ..Mark::default() },
+        ],
+        ..Received::default()
+    };
+    r.renamed("A", "Z", Some('/'));
+    let raws: Vec<&str> = r.folders.iter().map(|m| m.raw.as_str()).collect();
+    assert_eq!(raws, ["Z", "Z/B", "AB"]);
+}

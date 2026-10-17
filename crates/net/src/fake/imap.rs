@@ -206,6 +206,7 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                 };
                 let mut s = lock(state);
                 let modseqs = s.imap_caps.iter().any(|c| c == "CONDSTORE" || c == "QRESYNC");
+                let objectid = s.imap_caps.iter().any(|c| c == "OBJECTID");
                 match s.mailbox(&name) {
                     Some(m) => {
                         out.push_str(&format!(
@@ -216,6 +217,9 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                         ));
                         if modseqs {
                             out.push_str(&format!("* OK [HIGHESTMODSEQ {}] changes\r\n", m.modseq));
+                        }
+                        if objectid {
+                            out.push_str(&format!("* OK [MAILBOXID ({})] id\r\n", m.id));
                         }
                         if let Some((_, modseq)) = since.filter(|(v, _)| qresync && *v == u64::from(m.uid_validity)) {
                             let gone: Vec<u32> = m.vanished.iter().filter(|(_, at)| *at > modseq).map(|(uid, _)| *uid).collect();
@@ -378,8 +382,64 @@ pub fn serve(end: End, state: &Mutex<State>, tls: bool) -> Result<(), NetError> 
                 if name.is_empty() || s.mailbox(&name).is_some() {
                     Err("NO it is there already".into())
                 } else {
-                    s.mailboxes.push(super::Mailbox::new(&name, &[]));
+                    let mut m = super::Mailbox::new(&name, &[]);
+                    m.uid_validity = s.next_validity;
+                    m.id = format!("M{}", s.next_validity);
+                    s.next_validity = s.next_validity.saturating_add(1);
+                    s.mailboxes.push(m);
                     Ok("created".into())
+                }
+            }
+            "RENAME" => {
+                let (from, to) = (args.first().and_then(Tok::text).unwrap_or_default(), args.get(1).and_then(Tok::text).unwrap_or_default());
+                let mut s = lock(state);
+                let inside = format!("{from}/");
+                if from.eq_ignore_ascii_case("INBOX") || to.is_empty() || s.mailbox(&from).is_none() {
+                    Err("NO no such folder".into())
+                } else if s.mailbox(&to).is_some() || to.starts_with(&inside) {
+                    Err("NO [ALREADYEXISTS] there is one by that name".into())
+                } else {
+                    // The folders inside it go with it ([RFC 9051] 6.3.6).
+                    for m in s.mailboxes.iter_mut() {
+                        if m.name.eq_ignore_ascii_case(&from) {
+                            m.name = to.clone();
+                        } else if let Some(rest) = m.name.strip_prefix(&inside) {
+                            m.name = format!("{to}/{rest}");
+                        }
+                    }
+                    Ok("renamed".into())
+                }
+            }
+            "DELETE" => {
+                let name = args.first().and_then(Tok::text).unwrap_or_default();
+                let mut s = lock(state);
+                if name.eq_ignore_ascii_case("INBOX") || s.mailbox(&name).is_none() {
+                    Err("NO no such folder".into())
+                } else {
+                    s.mailboxes.retain(|m| !m.name.eq_ignore_ascii_case(&name));
+                    if selected.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(&name)) {
+                        selected = None;
+                    }
+                    Ok("deleted".into())
+                }
+            }
+            "STATUS" => {
+                let name = args.first().and_then(Tok::text).unwrap_or_default();
+                let mut s = lock(state);
+                let objectid = s.imap_caps.iter().any(|c| c == "OBJECTID");
+                match s.mailbox(&name) {
+                    Some(m) => {
+                        let id = if objectid { format!(" MAILBOXID ({})", m.id) } else { String::new() };
+                        out.push_str(&format!(
+                            "* STATUS {} (MESSAGES {} UIDNEXT {} UIDVALIDITY {}{id})\r\n",
+                            quoted(&m.name),
+                            m.messages.len(),
+                            m.uid_next,
+                            m.uid_validity
+                        ));
+                        Ok("status".into())
+                    }
+                    None => Err("NO no such folder".into()),
                 }
             }
             "APPEND" => {
