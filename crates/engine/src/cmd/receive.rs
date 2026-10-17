@@ -110,6 +110,8 @@ struct Got {
     read: bool,
     /// IMAP: the server has it flagged.
     flagged: bool,
+    /// IMAP: the server has it as a draft, not sent yet ([RFC 9051] 2.3.2).
+    draft: bool,
     data: Vec<u8>,
 }
 
@@ -494,7 +496,7 @@ fn take(
             budget.messages = budget.messages.saturating_sub(1);
             budget.bytes = budget.bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX).max(1));
             let has = |flag: &str| m.flags.iter().any(|f| f.eq_ignore_ascii_case(flag));
-            got.push(Got { uid: Uid::Imap(m.uid), read: has("\\Seen"), flagged: has("\\Flagged"), data });
+            got.push(Got { uid: Uid::Imap(m.uid), read: has("\\Seen"), flagged: has("\\Flagged"), draft: has("\\Draft"), data });
         }
     }
     Ok((got, 0, passed))
@@ -586,7 +588,7 @@ fn pop3_into(t: &Taking, progress: &openmailclient_model::Progress, out: &mut To
         let data = pop.retrieve(m.number)?;
         bytes = bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
         new += 1;
-        out.got.push(Got { uid: Uid::Pop(m.uid.clone()), read: false, flagged: false, data });
+        out.got.push(Got { uid: Uid::Pop(m.uid.clone()), read: false, flagged: false, draft: false, data });
     }
     // Messages marked to go are taken off only when the session ends well ([RFC 1939] 6);
     // until then the server has them all.
@@ -609,7 +611,11 @@ fn item_of(got: &Got, now: i64, on: Option<(&str, u32)>) -> Item {
     if item.props.time(pid::MESSAGE_DELIVERY_TIME).is_none_or(|t| t <= 0 || t > now) {
         item.props.set(pid::MESSAGE_DELIVERY_TIME, PropValue::Time(now));
     }
-    let flags = item.props.i32(pid::MESSAGE_FLAGS).unwrap_or(0) & !MSGFLAG_READ & !openmailclient_model::MSGFLAG_UNSENT;
+    let mut flags = item.props.i32(pid::MESSAGE_FLAGS).unwrap_or(0) & !MSGFLAG_READ & !openmailclient_model::MSGFLAG_UNSENT;
+    // A draft written elsewhere is a draft here too, to be written on and sent.
+    if got.draft {
+        flags |= openmailclient_model::MSGFLAG_UNSENT;
+    }
     item.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(if got.read { flags | MSGFLAG_READ } else { flags }));
     if got.flagged {
         item.set_flag(Flag::Flagged);

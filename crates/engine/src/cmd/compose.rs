@@ -3,7 +3,7 @@
 //! sent by `cmd/send.rs` when there is an account to send it from.
 
 use super::{CommandSpec, always, has_selection, need_str, ok, p_bool, p_u64};
-use crate::{CmdResult, Draft, EngineError, Session, outgoing};
+use crate::{CmdResult, Draft, EngineError, Filed, Session, outgoing};
 use openmailclient_model::{
     Attachment, FolderKind, Item, MSGFLAG_READ, MSGFLAG_UNSENT, PropValue, RECIP_BCC, RECIP_CC, RECIP_TO, StoreError, pid, recipient_email,
     recipient_label, time,
@@ -134,6 +134,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: expires,
         },
         CommandSpec {
+            id: "compose.editDraft",
+            label: "Edit Draft",
+            tab: "",
+            group: "",
+            shortcut: "",
+            params: "the selected message, which has not been sent, opens to be written on; saving it then takes its place in Drafts, and sending it takes it out of Drafts (on the server too, for an IMAP account)",
+            enabled: draft_open,
+            run: edit_draft,
+        },
+        CommandSpec {
             id: "compose.saveDraft",
             label: "Save",
             tab: "Message",
@@ -168,6 +178,10 @@ pub(super) fn commands() -> Vec<CommandSpec> {
 
 fn composing(s: &Session) -> bool {
     s.compose.is_some()
+}
+
+fn draft_open(s: &Session) -> bool {
+    s.open.as_ref().is_some_and(Item::is_unsent) && s.current.is_some() && s.selected.is_some()
 }
 
 fn has_set_aside(s: &Session) -> bool {
@@ -557,15 +571,118 @@ fn thread_of(item: &Item) -> (String, String) {
     (id.to_string(), all.get(from..).unwrap_or_default().join(" "))
 }
 
+/// The path a data file is known by, or nothing for one kept only in memory.
+fn path_of(s: &Session, store: usize) -> String {
+    s.stores.get(store).and_then(|st| st.path()).map(|p| p.display().to_string()).unwrap_or_default()
+}
+
+/// The data file a draft is kept in: the one of the account it goes from, as Outlook keeps a
+/// Drafts folder for each account, or the one new mail goes to.
+fn drafts_store(s: &mut Session, draft: &Draft) -> Result<Option<usize>, EngineError> {
+    let at = s.accounts.iter().position(|a| a.id == draft.account).or_else(|| (!s.accounts.is_empty()).then_some(0));
+    if let Some(at) = at
+        && let Some(store) = super::account::account_store(s, at)?
+        && s.stores.get(store).is_some_and(|st| st.writable())
+    {
+        return Ok(Some(store));
+    }
+    Ok(s.writable_store())
+}
+
+/// File what is being written in the Drafts folder or the Outbox. The draft it was opened from,
+/// or saved as before, makes way for it once it is kept: taken out for good, and from the IMAP
+/// server too at the next Send/Receive. Saved to Drafts, it stays open to be written on.
 fn file_draft(s: &mut Session, kind: FolderKind, sent: bool) -> Result<(), EngineError> {
     let draft = s.compose.clone().ok_or_else(|| EngineError::Disabled("Send".into()))?;
-    let store = s.writable_store().ok_or_else(|| EngineError::Format("there is no writable data file to keep the message in".into()))?;
+    let store = match kind {
+        FolderKind::Drafts => drafts_store(s, &draft)?,
+        _ => s.writable_store(),
+    }
+    .ok_or_else(|| EngineError::Format("there is no writable data file to keep the message in".into()))?;
     let folder = s.find_folder(store, kind).ok_or_else(|| EngineError::Format(format!("this data file has no {kind:?} folder")))?;
     let item = build(s, &draft, sent);
-    s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?;
-    s.compose = None;
+    let id = s.stores.get_mut(store).ok_or(StoreError::NoFolder)?.add(folder, item)?;
+    if let Some(was) = &draft.filed
+        && !(was.store == store && was.folder == folder && was.item == id)
+    {
+        take_out(s, was);
+    }
+    if kind == FolderKind::Drafts {
+        let path = path_of(s, store);
+        if let Some(d) = s.compose.as_mut() {
+            d.filed = Some(Filed { path, store, folder, item: id });
+            d.touched = false;
+        }
+    } else {
+        s.compose = None;
+    }
     s.refresh_folders(store);
+    if let Some(was) = draft.filed.as_ref().filter(|w| w.store != store) {
+        s.refresh_folders(was.store);
+    }
     s.reload_rows()
+}
+
+/// A draft kept before, taken out for good where it still is and still a draft: never another
+/// message that came to have its place.
+fn take_out(s: &mut Session, was: &Filed) {
+    if path_of(s, was.store) != was.path {
+        return;
+    }
+    let Some(st) = s.stores.get_mut(was.store) else { return };
+    if !st.load(was.folder, was.item).is_ok_and(|i| i.is_unsent()) {
+        return;
+    }
+    if let Ok(item) = st.remove(was.folder, was.item) {
+        super::imap_sync::forget(s, was.store, &item);
+        if s.current == Some((was.store, was.folder)) && s.selected == Some(was.item.0) {
+            s.selected = None;
+            s.open = None;
+        }
+    }
+}
+
+/// Open the selected draft to be written on, as a double-click on it does.
+fn edit_draft(s: &mut Session, _: &Value) -> CmdResult {
+    let item = s.open.clone().filter(Item::is_unsent).ok_or_else(|| EngineError::Disabled("Edit Draft".into()))?;
+    let ((store, folder), id) = s.current.zip(s.selected).ok_or(StoreError::NoItem)?;
+    let path = path_of(s, store);
+    // The account it goes from: the one it is written from, or the one whose data file has it.
+    let sender = item.sender_email().trim().to_lowercase();
+    let account = s
+        .accounts
+        .iter()
+        .find(|a| !sender.is_empty() && a.email.trim().eq_ignore_ascii_case(&sender))
+        .or_else(|| s.accounts.iter().find(|a| !path.is_empty() && a.received.into == path))
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
+    let line = |kind: i32| {
+        let mut seen = HashSet::new();
+        recipients_of(&item, kind, &mut seen).join("; ")
+    };
+    let text = |id: u16| item.props.str(id).map(|t| clamp(t, MAX_LINE)).unwrap_or_default();
+    let time = |id: u16| item.props.time(id).filter(|t| *t > 0).unwrap_or(0);
+    let (to, cc, bcc) = (line(RECIP_TO), line(RECIP_CC), line(RECIP_BCC));
+    let draft = Draft {
+        show_bcc: !bcc.is_empty(),
+        to,
+        cc,
+        bcc,
+        subject: clamp(&item.subject(), MAX_LINE),
+        body: clamp(&item.body_text(), MAX_BODY),
+        attachments: item.attachments.iter().take(MAX_ATTACHMENTS).cloned().collect(),
+        kind: "Draft",
+        account,
+        in_reply_to: text(pid::IN_REPLY_TO_ID),
+        references: text(pid::INTERNET_REFERENCES),
+        deliver_after: time(pid::DEFERRED_DELIVERY_TIME),
+        expires: time(pid::EXPIRY_TIME),
+        filed: Some(Filed { path, store, folder, item: openmailclient_model::ItemId(id) }),
+        ..Draft::default()
+    };
+    set_aside(s);
+    s.compose = Some(draft);
+    ok()
 }
 
 fn check(s: &mut Session, _: &Value) -> CmdResult {

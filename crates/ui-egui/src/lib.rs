@@ -110,6 +110,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     },
     UiCommand { id: "ui.attachDialog", label: "Attach File…", params: "" },
     UiCommand {
+        id: "ui.openSelected",
+        label: "Open",
+        params: "opens the selected message as a double-click does: a draft opens to be written on (compose.editDraft)",
+    },
+    UiCommand {
         id: "ui.linkDialog",
         label: "Open Link…",
         params: r#"{"index": link number from mail.links} or {"address": as the message writes it}; shows where the link goes and asks; nothing is opened until the person answers"#,
@@ -697,6 +702,11 @@ impl MailUi {
                 });
             }
             "ui.attachDialog" => self.requests.push(UiRequest::Attach),
+            "ui.openSelected" => {
+                if self.session.is_enabled("compose.editDraft") {
+                    return self.execute("compose.editDraft", &Value::Null);
+                }
+            }
             "ui.linkDialog" => {
                 let item = self.session.open.as_ref().ok_or("No message is open")?;
                 let found = openmailclient_engine::links::of(item);

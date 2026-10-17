@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 98 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 99 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -14,7 +14,7 @@
    every folder of an IMAP server is taken down into the account's own data file, a copy of what
    is sent is put in the server's Sent folder, and read, flagged, moved and deleted messages go
    both ways (M4.8); only what changed is fetched where the server keeps mod-sequences (CONDSTORE,
-   QRESYNC, M4.12); new mail is told of as it comes (IDLE, M4.12); folders renamed, moved and deleted are followed both ways (M4.12); Drafts on the server is a do-later item (M4.12);
+   QRESYNC, M4.12); new mail is told of as it comes (IDLE, M4.12); folders renamed, moved and deleted are followed both ways (M4.12); drafts are kept on the server as they are written (M4.12);
    accounts are set up in the window's Account Settings (M4.6), and each keeps its mail in a
    data file of its own (M4.7).
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 99 · 2026-10-17 — M4.12: Drafts on the server.
 - 98 · 2026-10-17 — M4.12: IMAP folders renamed, moved and deleted followed both ways.
 - 97 · 2026-10-17 — M1.8: shown as Outlook shows it; third-party sign-in (OAuth 2.0) is the last milestone, M7.
 - 96 · 2026-10-15 — M4.12: new mail told of as it comes (IDLE).

@@ -169,6 +169,19 @@ pub struct Draft {
     pub deliver_after: i64,
     /// Expires After: when it stops being of use (store time); 0 when it does not.
     pub expires: i64,
+    /// Where it is kept in Drafts, once saved or when it was opened from there: the next save
+    /// takes that one's place, and sending it takes it out of Drafts.
+    pub filed: Option<Filed>,
+}
+
+/// A draft kept in a data file's Drafts folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Filed {
+    /// The data file by its path, so that another opened in its place since is never touched.
+    pub path: String,
+    pub store: usize,
+    pub folder: FolderId,
+    pub item: ItemId,
 }
 
 /// A save of a data file that is being done on a thread of its own.

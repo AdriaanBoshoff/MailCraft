@@ -848,3 +848,93 @@ fn what_is_kept_of_folders_round_trips_and_nonsense_is_dropped() {
     let raws: Vec<&str> = r.folders.iter().map(|m| m.raw.as_str()).collect();
     assert_eq!(raws, ["Z", "Z/B", "AB"]);
 }
+
+fn write(s: &mut Session, fields: &[(&str, &str)]) {
+    for (field, value) in fields {
+        s.run("compose.setField", &json!({ "field": field, "value": value })).unwrap();
+    }
+}
+
+fn is_draft(fake: &Fake, subject: &str) -> bool {
+    flags(fake, "Drafts", subject).iter().any(|f| f == "\\Draft")
+}
+
+#[test]
+fn a_draft_is_kept_on_the_server_as_it_is_written_and_goes_from_there_when_sent() {
+    let fake = Fake::default();
+    let (mut s, dir) = account(&fake, "drafts");
+    receive(&mut s);
+    s.run("mail.new", &Value::Null).unwrap();
+    write(&mut s, &[("to", "june@example.test"), ("subject", "Plan"), ("body", "First go.")]);
+    s.run("compose.saveDraft", &Value::Null).unwrap();
+    assert!(s.compose.is_some(), "saved, it stays open to be written on");
+    assert_eq!(count(&s, "Drafts"), 1, "in the account's own Drafts");
+    receive(&mut s);
+    assert_eq!(on_server(&fake, "Drafts"), 1, "{}", s.status);
+    assert!(is_draft(&fake, "Plan"), "{:?}", flags(&fake, "Drafts", "Plan"));
+
+    // Written on and saved again: it takes its own place, here and there.
+    write(&mut s, &[("subject", "Plan B")]);
+    s.run("compose.saveDraft", &Value::Null).unwrap();
+    s.run("compose.saveDraft", &Value::Null).unwrap();
+    assert_eq!(count(&s, "Drafts"), 1);
+    receive(&mut s);
+    assert_eq!(on_server(&fake, "Drafts"), 1, "{}", s.status);
+    assert!(is_draft(&fake, "Plan B"));
+
+    // Closed, opened again from Drafts and sent: out of Drafts here and there.
+    s.run("compose.discard", &Value::Null).unwrap();
+    assert!(s.compose.is_none() && s.set_aside.is_empty(), "nothing was written since it was saved");
+    pick(&mut s, "Drafts", "Plan B");
+    s.run("compose.editDraft", &Value::Null).unwrap();
+    let d = s.compose.clone().unwrap();
+    assert_eq!((d.to.as_str(), d.subject.as_str(), d.body.trim()), ("june@example.test", "Plan B", "First go."));
+    s.run("compose.send", &json!({ "anyway": true })).unwrap();
+    settle(&mut s);
+    assert_eq!(count(&s, "Drafts"), 0);
+    assert_eq!(fake.state().submitted.len(), 1);
+    receive(&mut s);
+    assert_eq!(on_server(&fake, "Drafts"), 0, "{}", s.status);
+    done(s, dir);
+}
+
+#[test]
+fn a_draft_written_elsewhere_comes_here_as_a_draft_to_be_written_on() {
+    let fake = Fake::default();
+    fake.state().mailbox("Drafts").unwrap().add(&message("Elsewhere"), &["\\Draft", "\\Seen"]);
+    fake.state().mailbox("INBOX").unwrap().add(&message("Mail"), &[]);
+    let (mut s, dir) = account(&fake, "drafts-there");
+    receive(&mut s);
+    pick(&mut s, "Inbox", "Mail");
+    assert!(!s.is_enabled("compose.editDraft"), "only a draft opens to be written on");
+    pick(&mut s, "Drafts", "Elsewhere");
+    assert!(s.open.as_ref().unwrap().is_unsent());
+    s.run("compose.editDraft", &Value::Null).unwrap();
+    write(&mut s, &[("body", "Finished here.")]);
+    s.run("compose.saveDraft", &Value::Null).unwrap();
+    assert_eq!(count(&s, "Drafts"), 1);
+    receive(&mut s);
+    assert_eq!(on_server(&fake, "Drafts"), 1, "{}", s.status);
+    let there = fake.state().mailbox("Drafts").unwrap().messages[0].clone();
+    assert!(String::from_utf8_lossy(&there.data).contains("Finished here."));
+    assert!(there.flags.iter().any(|f| f == "\\Draft"));
+    // Nothing comes back twice.
+    receive(&mut s);
+    assert_eq!(count(&s, "Drafts"), 1);
+    done(s, dir);
+}
+
+#[test]
+fn a_server_without_a_drafts_folder_is_given_one() {
+    let fake = Fake::default();
+    fake.state().mailboxes.retain(|m| m.name != "Drafts");
+    let (mut s, dir) = account(&fake, "no-drafts");
+    receive(&mut s);
+    s.run("mail.new", &Value::Null).unwrap();
+    write(&mut s, &[("subject", "Note")]);
+    s.run("compose.saveDraft", &Value::Null).unwrap();
+    let got = receive(&mut s);
+    assert_eq!(got["accounts"][0]["inStep"]["created"], json!(["Drafts"]), "{got}");
+    assert!(is_draft(&fake, "Note"));
+    done(s, dir);
+}

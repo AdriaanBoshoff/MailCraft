@@ -9,6 +9,9 @@
 //!   marked deleted and expunged), to a folder made on the server when it has none yet;
 //! - a message deleted here for good (`Received::gone`) is deleted there;
 //! - a message put here into a folder of the account from elsewhere is put on the server;
+//! - a draft saved here is put in the server's Drafts folder, marked `\Draft` ([RFC 9051]
+//!   2.3.2), and one saved again or sent goes from there, so that the server holds each draft as
+//!   it is now; one written elsewhere comes here as a draft, to be written on and sent;
 //! - a message the server no longer has goes from here too.
 //!
 //! Nothing is taken off the server that was not deleted or moved here by the owner, and a message
@@ -165,6 +168,8 @@ pub(super) struct LocalItem {
     pub message_id: String,
     /// The message as it goes on the server, when it is to be put there.
     pub upload: Option<Vec<u8>>,
+    /// It is a draft, not sent yet: it goes up marked `\Draft`.
+    pub draft: bool,
 }
 
 /// The account's data file as a receive began.
@@ -255,12 +260,19 @@ fn holds_mail(kind: FolderKind) -> bool {
     )
 }
 
-/// Folders whose mail goes on the server: not the Outbox, whose mail is not sent yet, nor Drafts,
-/// which are still being written.
+/// Folders whose mail goes on the server: not the Outbox, whose mail is not sent yet. Drafts go
+/// too, as they are when saved.
 fn goes_up(kind: FolderKind) -> bool {
     matches!(
         kind,
-        FolderKind::Inbox | FolderKind::Sent | FolderKind::Deleted | FolderKind::Junk | FolderKind::Archive | FolderKind::Mail | FolderKind::Other
+        FolderKind::Inbox
+            | FolderKind::Sent
+            | FolderKind::Deleted
+            | FolderKind::Junk
+            | FolderKind::Archive
+            | FolderKind::Mail
+            | FolderKind::Other
+            | FolderKind::Drafts
     )
 }
 
@@ -300,20 +312,22 @@ pub(super) fn local(s: &mut Session, store: usize, received: &Received) -> Local
                     k
                 }
             };
-            let mut upload = None;
+            let (mut upload, mut draft) = (None, false);
             if known.place.is_none()
                 && received.matched
                 && goes_up(f.kind)
                 && uploads < MAX_UPLOADS
                 && bytes < MAX_UPLOAD_BYTES
                 && let Ok(item) = st.load(f.id, ItemId(r.id))
-                && !item.is_unsent()
+                // A message not sent yet goes up only as a draft, from Drafts.
+                && (!item.is_unsent() || f.kind == FolderKind::Drafts)
                 && item.message_class().to_ascii_uppercase().starts_with("IPM.")
             {
                 let data = openmailclient_mime::write(&item);
                 uploads += 1;
                 bytes = bytes.saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
                 upload = Some(data);
+                draft = item.is_unsent();
             }
             items.push(LocalItem {
                 folder: f.id,
@@ -323,6 +337,7 @@ pub(super) fn local(s: &mut Session, store: usize, received: &Received) -> Local
                 flagged: flagged(r.flag),
                 message_id: known.message_id,
                 upload,
+                draft,
             });
         }
     }
@@ -864,6 +879,9 @@ pub(super) fn push(
             }
             if i.flagged {
                 flags.push("\\Flagged");
+            }
+            if i.draft {
+                flags.push("\\Draft");
             }
             let Some(put) = tolerate(imap.append(raw, &flags, data))? else { continue };
             let place = match put {

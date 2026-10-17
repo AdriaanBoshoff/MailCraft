@@ -397,6 +397,7 @@ impl MailUi {
         let rows = &s.rows;
         let mut unread_previews: Vec<u64> = Vec::new();
         let mut clicked: Option<u64> = None;
+        let mut opened = false;
         ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             ScrollArea::vertical().id_salt("messages").auto_shrink(false).show_viewport(ui, |ui, viewport| {
@@ -455,6 +456,10 @@ impl MailUi {
                             if resp.clicked() {
                                 clicked = Some(row.id);
                             }
+                            if resp.double_clicked() {
+                                clicked = Some(row.id);
+                                opened = true;
+                            }
                         }
                     }
                 }
@@ -467,6 +472,9 @@ impl MailUi {
         }
         if let Some(id) = clicked {
             self.act("mail.select", json!({ "id": id }));
+            if opened {
+                self.act("ui.openSelected", Value::Null);
+            }
         }
     }
 
@@ -579,6 +587,7 @@ impl MailUi {
         let mut link: Option<std::sync::Arc<str>> = None;
         let mut save_all = false;
         let mut download = false;
+        let mut write_on = false;
         if !files.is_empty() {
             let mut ax = left;
             for (index, name, size, caution) in &files {
@@ -688,6 +697,21 @@ impl MailUi {
             }
             None => None,
         };
+        // A draft says so, and opens to be written on from here as from a double-click.
+        if item.is_unsent() {
+            let bar = Rect::from_min_size(pos2(rect.left() + 1.0, y), vec2(rect.width() - 1.0, 24.0));
+            p.rect_filled(bar, 0.0, t.info_bar);
+            let resp = ui.interact(bar, egui::Id::new("edit-draft-bar"), Sense::click());
+            if resp.hovered() {
+                p.rect_filled(bar, 0.0, t.hover);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            write_on |= resp.clicked();
+            icons::paint(&p, Rect::from_center_size(pos2(bar.left() + pad, bar.center().y), vec2(13.0, 13.0)), Icon::Info, t.text_dim);
+            let words = "A draft: it has not been sent. Click here, or double-click it in the list, to go on writing it.";
+            clip_text(&p, pos2(bar.left() + pad + 12.0, bar.center().y - 8.0), bar.width() - 40.0, words, font(11.5), t.text_dim);
+            y += 30.0;
+        }
         if let Some(notice) = notice {
             let bar = Rect::from_min_size(pos2(rect.left() + 1.0, y), vec2(rect.width() - 1.0, 24.0));
             p.rect_filled(bar, 0.0, t.info_bar);
@@ -772,6 +796,9 @@ impl MailUi {
         }
         if download {
             self.act("mail.downloadPictures", json!({ "wait": false }));
+        }
+        if write_on {
+            self.act("ui.openSelected", Value::Null);
         }
     }
 

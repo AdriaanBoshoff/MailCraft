@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M4%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-48%20of%20118%20%C2%B7%2040%25-yellow)
-![tests](https://img.shields.io/badge/tests-466%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-469%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -66,7 +66,7 @@ read, a reader we can try without driving a window, a printer we may use).
 | `.msg`, `.oft` | yes | yes |
 | `.eml` | yes | yes |
 | `.pdf` | | yes, a message (Memo Style) or a folder's list (Table Style), printed |
-| IMAP, POP3, SMTP | accounts are set up and tested in Account Settings, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down, what is sent is put in the server's Sent folder, and read, flagged, moved and deleted messages go both ways (M4) | the same |
+| IMAP, POP3, SMTP | accounts are set up and tested in Account Settings, mail is sent and received into each account's own data file, checked against a real server; every IMAP folder is taken down, what is sent is put in the server's Sent folder, read, flagged, moved and deleted messages go both ways, folders renamed, moved and deleted are followed both ways, and drafts are kept on the server as they are written (M4) | the same |
 
 ## What works today
 
@@ -104,9 +104,6 @@ read, a reader we can try without driving a window, a printer we may use).
 
 ## What does not work yet
 
-- **Drafts on the server.** Messages and folders are kept in step with an IMAP server both ways
-  (a folder renamed, moved or deleted on one side is followed on the other), but Drafts stay
-  here (M4.12).
 - **Proof against Outlook.** `.pst` files written here open in Outlook Classic with every folder
   and message as written, whole, ANSI and saved into in place; a file written before M3c.1 is written
   whole on its next save, keeping its ids, and then opens too; an `.ost` is exported with its
