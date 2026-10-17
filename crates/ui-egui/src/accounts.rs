@@ -401,13 +401,12 @@ impl MailUi {
         let t = self.tokens.clone();
         let mut ask: Option<Ask> = None;
         let busy = window.testing.is_some() || window.finding.is_some();
-        let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18));
         // A certificate shown scrolls in what room the window leaves, rather than run off it.
-        let room = (ctx.content_rect().height() - 720.0).clamp(130.0, 420.0);
-        egui::Window::new("Account Settings").frame(frame).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(
+        let room = (ctx.content_rect().height() - 760.0).clamp(130.0, 420.0);
+        let shown = crate::dialog::Dialog::new("accounts", "Account Settings", crate::icons::Icon::People).width(LIST_W + 18.0 + FORM_W).show(
             ctx,
+            &t,
             |ui| {
-                ui.label(egui::RichText::new("Email accounts").font(bold(16.0)).color(t.text));
                 ui.label(
                     egui::RichText::new("Mail is sent and received through these accounts, each with a data file of its own.")
                         .font(font(12.0))
@@ -440,12 +439,11 @@ impl MailUi {
                             });
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.add_enabled(!busy, egui::Button::new("+ New")).on_hover_text("Add another account").clicked() {
+                            if ui.add_enabled(!busy, crate::dialog::plain("+ New")).on_hover_text("Add another account").clicked() {
                                 ask = Some(Ask::New);
                             }
                             let remove = if window.removing { "Remove it" } else { "Remove…" };
-                            let button = egui::Button::new(egui::RichText::new(remove).color(if window.removing { t.on_accent } else { t.text }));
-                            let button = if window.removing { button.fill(t.danger) } else { button };
+                            let button = if window.removing { crate::dialog::danger(&t, remove) } else { crate::dialog::plain(remove) };
                             if ui.add_enabled(window.form.id.is_some() && !busy, button).clicked() {
                                 ask = Some(Ask::Remove);
                             }
@@ -667,27 +665,21 @@ impl MailUi {
                     });
                 }
 
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
+                crate::dialog::foot(ui, &t, |ui| {
                     ui.label(egui::RichText::new("A test signs in to both servers; nothing is sent.").font(font(11.5)).color(t.text_faint));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
+                        if ui.add(crate::dialog::plain("Close")).clicked() {
                             ask = Some(Ask::Close);
                         }
                         let can_test = self.session.connector.is_some();
                         if ui
-                            .add_enabled(!busy && can_test, egui::Button::new("Test Account Settings…"))
+                            .add_enabled(!busy && can_test, crate::dialog::plain("Test Account Settings…"))
                             .on_disabled_hover_text(if can_test { "A test is under way" } else { "This build cannot reach mail servers" })
                             .clicked()
                         {
                             ask = Some(Ask::Test);
                         }
-                        let save = egui::Button::new(egui::RichText::new("Save").color(t.on_accent).font(bold(13.0)))
-                            .fill(t.accent)
-                            .min_size(vec2(88.0, 0.0));
-                        if ui.add_enabled(!busy, save).clicked() {
+                        if ui.add_enabled(!busy, crate::dialog::primary(&t, "Save")).clicked() {
                             ask = Some(Ask::Save);
                         }
                     });
@@ -697,6 +689,9 @@ impl MailUi {
                 }
             },
         );
+        if shown.closed {
+            ask = Some(Ask::Close);
+        }
         if !matches!(ask, Some(Ask::Remove) | None) {
             window.removing = false;
         }
@@ -851,7 +846,7 @@ fn account_card(ui: &mut egui::Ui, t: &Tokens, name: &str, detail: &str, on: boo
 /// A part of the form: its heading over a line, and its fields in a grid whose label column is
 /// as wide as every other part's, so the fields line up down the window.
 fn section(ui: &mut egui::Ui, t: &Tokens, heading: &str, id: &str, body: impl FnOnce(&mut egui::Ui)) {
-    ui.label(egui::RichText::new(heading).font(bold(12.5)).color(t.accent));
+    ui.label(egui::RichText::new(heading).font(bold(12.5)).color(if t.dark { t.accent } else { t.accent_dark }));
     let (y, left) = (ui.cursor().top() + 1.0, ui.min_rect().left());
     ui.painter().hline(left..=left + FORM_W, y, egui::Stroke::new(1.0, t.line));
     ui.add_space(6.0);

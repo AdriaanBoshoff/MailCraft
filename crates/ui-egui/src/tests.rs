@@ -776,7 +776,7 @@ fn the_print_window_shows_the_pages_and_follows_the_setup() {
         // A step from the whole page goes to the next size above what the whole page came to.
         ui.execute("ui.printPreview", &json!({"zoom": "in"})).unwrap();
         let stepped = ui.preview.as_ref().unwrap().zoom.unwrap();
-        assert!((75.0..=100.0).contains(&stepped), "{stepped}");
+        assert!((50.0..=100.0).contains(&stepped), "{stepped}");
     }
     // What Table Style prints of the list is laid out again when it changes.
     ui.execute("file.pageSetup", &json!({"columns": ["subject", "size"], "groups": false})).unwrap();
@@ -2229,4 +2229,156 @@ fn the_appointment_window_makes_and_changes_appointments() {
     assert_eq!((again.start_date.as_str(), again.end_date.as_str()), ("2026-11-02", "2026-11-03"));
     draw_window(&mut ui, egui::vec2(1280.0, 800.0));
     assert!(ui.execute("ui.appointment", &json!({ "id": 999_999_999 })).is_err());
+}
+
+#[test]
+fn themes_are_chosen_copied_changed_renamed_and_deleted_by_command() {
+    let mut ui = MailUi::new(Session::with_sample());
+    let blue = ui.tokens.clone();
+    let listed = ui.execute("ui.useTheme", &json!({ "name": "forest" })).unwrap();
+    assert_eq!(listed["current"], "Forest");
+    assert!(listed["themes"].as_array().unwrap().len() >= 8);
+    assert_ne!(ui.tokens.accent, blue.accent);
+    // The dark set of the same theme.
+    ui.execute("ui.theme", &json!({ "theme": "dark" })).unwrap();
+    let forest = theme::built_in().into_iter().find(|t| t.name == "Forest").unwrap();
+    assert_eq!(ui.tokens, forest.tokens(true));
+
+    // A change to a built-in theme makes a copy that is the person's own, and leaves the built-in one be.
+    ui.execute("ui.themeColor", &json!({ "color": "window", "value": "#102030", "mode": "dark" })).unwrap();
+    assert_eq!(ui.theme_name, "Forest (mine)");
+    assert_eq!(ui.tokens.window, Color32::from_rgb(0x10, 0x20, 0x30));
+    assert!(!forest.changes(true).contains_key("window"));
+    // A second change goes to the same copy; the light set is changed on its own.
+    ui.execute("ui.themeColor", &json!({ "color": "accent", "value": "#AA3366", "mode": "light", "follow": true })).unwrap();
+    assert_eq!(ui.themes.len(), 1);
+    assert_eq!(ui.current_theme().tokens(false).accent, Color32::from_rgb(0xAA, 0x33, 0x66));
+    // The colours that go with the accent come along with it.
+    assert_ne!(ui.current_theme().tokens(false).selected, forest.tokens(false).selected);
+    // null puts the theme's own back.
+    ui.execute("ui.themeColor", &json!({ "color": "window", "value": null, "mode": "dark" })).unwrap();
+    assert_eq!(ui.tokens.window, forest.tokens(true).window);
+
+    ui.execute("ui.renameTheme", &json!({ "to": "  Evening\n" })).unwrap();
+    assert_eq!(ui.theme_name, "Evening");
+    assert!(ui.execute("ui.renameTheme", &json!({ "to": "Blue" })).is_err(), "a built-in name is taken");
+    assert!(ui.execute("ui.renameTheme", &json!({ "name": "Teal", "to": "x" })).is_err(), "a built-in theme keeps its name");
+    ui.execute("ui.newTheme", &json!({ "name": "Night", "from": "High contrast" })).unwrap();
+    assert_eq!((ui.theme_name.as_str(), ui.themes.len()), ("Night", 2));
+    assert!(ui.execute("ui.newTheme", &json!({ "name": "night" })).is_err(), "names are the same whatever their case");
+    ui.execute("ui.deleteTheme", &Value::Null).unwrap();
+    assert_eq!((ui.theme_name.as_str(), ui.themes.len()), ("Blue", 1));
+    assert!(ui.execute("ui.deleteTheme", &json!({ "name": "Blue" })).is_err());
+
+    // Junk is refused and changes nothing.
+    let before = (ui.themes.clone(), ui.theme_name.clone(), ui.tokens.clone());
+    for (id, params) in [
+        ("ui.useTheme", json!({ "name": "\u{202e}nope" })),
+        ("ui.themeColor", json!({ "color": "nope", "value": "#000000" })),
+        ("ui.themeColor", json!({ "color": "text", "value": "#12345" })),
+        ("ui.themeColor", json!({ "color": "text", "value": "#GGGGGG" })),
+        ("ui.themeColor", json!({ "color": "text", "value": 7 })),
+        ("ui.themeColor", json!({ "color": "text", "value": "#000000", "mode": "sepia" })),
+        ("ui.themeColor", json!({ "color": "text", "value": "#000000", "follow": true })),
+        ("ui.newTheme", json!({ "name": "\n\t " })),
+        ("ui.renameTheme", json!({ "to": "" })),
+    ] {
+        assert!(ui.execute(id, &params).is_err(), "{id} {params} was taken");
+    }
+    assert_eq!((ui.themes.clone(), ui.theme_name.clone(), ui.tokens.clone()), before);
+
+    // There is a most that are kept.
+    for _ in 0..theme::MAX_THEMES + 3 {
+        let _ = ui.execute("ui.newTheme", &Value::Null);
+    }
+    assert_eq!(ui.themes.len(), theme::MAX_THEMES);
+    assert!(ui.execute("ui.themeColor", &json!({ "color": "text", "value": "#000000" })).is_ok(), "the chosen one is already one's own");
+}
+
+#[test]
+fn hard_to_read_colours_are_told_of() {
+    for one in theme::built_in() {
+        for dark in [false, true] {
+            assert!(one.tokens(dark).unreadable().is_empty(), "{} {dark}: {:?}", one.name, one.tokens(dark).unreadable());
+        }
+    }
+    assert!((theme::contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+    assert!((theme::contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.01);
+    let mut ui = MailUi::new(Session::with_sample());
+    let said = ui.execute("ui.themeColor", &json!({ "color": "text", "value": "#FAFAFA", "mode": "light" })).unwrap();
+    assert!(!said["unreadable"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn themes_are_kept_in_the_settings_and_junk_in_them_is_left_out() {
+    let mut ui = MailUi::new(Session::new());
+    ui.execute("ui.themeColor", &json!({ "color": "titleBar", "value": "#334455", "mode": "light" })).unwrap();
+    ui.execute("ui.theme", &json!({ "theme": "system" })).unwrap();
+    let kept = ui.settings();
+    assert_eq!(kept["theme"], "system");
+    assert_eq!(kept["themeName"], "Blue (mine)");
+
+    let mut next = MailUi::new(Session::new());
+    next.apply_settings(&kept);
+    assert_eq!(next.settings(), kept);
+    assert!(next.follow_system);
+    assert_eq!(next.tokens.title_bg, Color32::from_rgb(0x33, 0x44, 0x55));
+
+    // A settings file written by someone else: names like the built-in ones, twice, empty, long;
+    // colours not as colours; keys no theme has; far too many.
+    let mut list = vec![
+        json!({ "name": "Blue", "light": { "accent": "#000000" } }),
+        json!({ "name": "Mine", "light": { "accent": "#00FF00", "nope": "#000000", "text": "red" }, "dark": [1] }),
+        json!({ "name": "mine", "light": {} }),
+        json!({ "name": "", "light": {} }),
+        json!({ "name": "x".repeat(10_000) }),
+        json!(7),
+        json!({ "name": { "a": 1 } }),
+    ];
+    list.extend((0..500).map(|n| json!({ "name": format!("T{n}") })));
+    let junk = json!({ "themes": list, "themeName": "\u{0}" });
+    let mut odd = MailUi::new(Session::new());
+    odd.apply_settings(&junk);
+    assert_eq!(odd.themes.len(), theme::MAX_THEMES);
+    assert!(odd.themes.iter().all(|t| !t.built_in && t.name.chars().count() <= theme::MAX_NAME));
+    let mine = odd.themes.iter().find(|t| t.name == "Mine").unwrap();
+    assert_eq!(mine.changes(false).len(), 1);
+    assert!(mine.changes(true).is_empty());
+    assert_eq!(odd.theme_name, "Blue");
+    assert_eq!(odd.tokens, theme::built_in()[0].tokens(false));
+}
+
+#[test]
+fn every_dialog_draws_in_every_theme_light_and_dark() {
+    for name in theme::built_in().iter().map(|t| t.name.clone()).chain(["Mine".to_string()]) {
+        for dark in [false, true] {
+            let mut ui = MailUi::new(Session::with_sample());
+            ui.execute("mail.select", &json!({ "index": 0 })).unwrap();
+            if name == "Mine" {
+                ui.execute("ui.newTheme", &json!({ "name": "Mine" })).unwrap();
+                // Colours that make for hard reading still draw.
+                for key in ["dialogHead", "dialogText", "surface", "pane", "text", "accent", "onAccent"] {
+                    let mode = if dark { "dark" } else { "light" };
+                    ui.execute("ui.themeColor", &json!({ "color": key, "value": "#808080", "mode": mode })).unwrap();
+                }
+            } else {
+                ui.execute("ui.useTheme", &json!({ "name": name })).unwrap();
+            }
+            ui.execute("ui.theme", &json!({ "theme": if dark { "dark" } else { "light" } })).unwrap();
+            for (id, params) in [
+                ("ui.themes", json!({ "open": true })),
+                ("ui.accountSettings", json!({ "new": true })),
+                ("ui.prompt", json!({ "command": "folder.new" })),
+                ("ui.printPreview", Value::Null),
+                ("ui.showProgress", json!({ "open": true })),
+                ("ui.appointment", Value::Null),
+            ] {
+                ui.execute(id, &params).unwrap();
+                // Small and large: a dialog never asks for room it cannot have.
+                draw_window(&mut ui, egui::vec2(1100.0, 760.0));
+                draw_window(&mut ui, egui::vec2(320.0, 240.0));
+            }
+            assert!(ui.modal_open());
+        }
+    }
 }

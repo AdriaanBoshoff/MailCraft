@@ -98,7 +98,14 @@ const VIEW: &[Group] = &[
     ("Arrangement", &[small(Icon::Sort, "Arrange By", "menu:arrange"), small(Icon::Swap, "Reverse Sort", "view.reverseSort")]),
     ("Layout", &[small(Icon::Sidebar, "Folder Pane", "view.folderPane"), small(Icon::Panes, "Reading Pane", "menu:reading")]),
     ("Message", &[small(Icon::Info, "Properties", "mail.properties"), small(Icon::MailOpen, "Plain Text", "ui.bodyFormat")]),
-    ("Window", &[small(Icon::Panes, "Simplified Ribbon", "ui.ribbonMode"), small(Icon::Swap, "Dark Mode", "ui.theme")]),
+    (
+        "Window",
+        &[
+            small(Icon::Panes, "Simplified Ribbon", "ui.ribbonMode"),
+            small(Icon::Swap, "Dark Mode", "ui.theme"),
+            small(Icon::Palette, "Themes", "ui.themes"),
+        ],
+    ),
 ];
 
 /// Commands the single-line ribbon shows as an icon alone; the label is the hover text.
@@ -439,8 +446,8 @@ impl MailUi {
         // What to do: open (true), or only close (false).
         let mut done: Option<bool> = None;
         let title = if ask.mailbox { "Write to this mailbox?" } else { "Open this link?" };
-        egui::Window::new(title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-            ui.set_max_width(460.0);
+        let icon = if ask.mailbox { Icon::Mail } else { Icon::Link };
+        let shown = crate::dialog::Dialog::new("link", title, icon).width(460.0).show(ctx, &t, |ui| {
             // What a message says of itself is put in the order it is read, like every line taken from one.
             let words = |text: &str, size: f32, color: Color32| egui::Label::new(crate::seen_line(text, font(size), color)).wrap();
             if !ask.text.is_empty() {
@@ -453,38 +460,49 @@ impl MailUi {
                 ui.add_space(4.0);
             }
             if let Some(concern) = &ask.concern {
-                ui.add(words(concern, 13.0, t.danger));
+                crate::dialog::callout(ui, &t, t.danger, |ui| {
+                    ui.add(words(concern, 13.0, t.text));
+                });
                 ui.add_space(4.0);
             }
+            // The whole address, in a box of its own so where it starts and ends is plain.
             let shown: String = ask.address.chars().take(600).collect();
-            ui.add(egui::Label::new(egui::RichText::new(shown).font(egui::FontId::monospace(12.0)).color(t.text_dim)).wrap());
+            crate::dialog::card(ui, &t, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(shown).font(egui::FontId::monospace(12.0)).color(t.text_dim)).wrap());
+            });
             if let Some(refused) = &ask.refused {
                 ui.add_space(4.0);
-                ui.add(words(refused, 13.0, t.text));
+                crate::dialog::callout(ui, &t, t.flag, |ui| {
+                    ui.add(words(refused, 13.0, t.text));
+                });
             }
-            ui.add_space(8.0);
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 done = Some(false);
             }
-            ui.horizontal(|ui| {
-                let open = if ask.mailbox { "Write a message" } else { "Open in browser" };
-                if ui.add_enabled(ask.refused.is_none(), egui::Button::new(open)).clicked() {
-                    done = Some(true);
-                }
-                if ui.button("Copy address").clicked() {
-                    ui.ctx().copy_text(ask.address.clone());
-                    done = Some(false);
-                }
-                // The safe answer is the one a key press gives.
-                let cancel = ui.button("Cancel");
-                if !cancel.has_focus() && ui.memory(|m| m.focused().is_none()) {
-                    cancel.request_focus();
-                }
-                if cancel.clicked() {
-                    done = Some(false);
-                }
+            crate::dialog::foot(ui, &t, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // The safe answer is the one a key press gives.
+                    let cancel = ui.add(crate::dialog::plain("Cancel"));
+                    if !cancel.has_focus() && ui.memory(|m| m.focused().is_none()) {
+                        cancel.request_focus();
+                    }
+                    if cancel.clicked() {
+                        done = Some(false);
+                    }
+                    if ui.add(crate::dialog::plain("Copy address")).clicked() {
+                        ui.ctx().copy_text(ask.address.clone());
+                        done = Some(false);
+                    }
+                    let open = if ask.mailbox { "Write a message" } else { "Open in browser" };
+                    if ui.add_enabled(ask.refused.is_none(), crate::dialog::primary(&t, open)).clicked() {
+                        done = Some(true);
+                    }
+                });
             });
         });
+        if shown.closed {
+            done = Some(false);
+        }
         let Some(open) = done else { return };
         let Some(ask) = self.link_ask.take().filter(|_| open) else { return };
         // The engine checks the address again; the person has seen the concern and said yes.
@@ -511,16 +529,27 @@ impl MailUi {
             Cancel,
         }
         let mut done: Option<Answer> = None;
-        egui::Window::new("Opening an attachment").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-            ui.set_max_width(440.0);
+        let shown = crate::dialog::Dialog::new("attachment", "Opening an attachment", Icon::Clip).width(440.0).show(ctx, &t, |ui| {
             let words = |text: &str, size: f32, color: Color32| egui::Label::new(crate::seen_line(text, font(size), color)).wrap();
             ui.add(words("Do you want to open this file or save it?", 12.5, t.text_dim));
             ui.add_space(4.0);
-            ui.add(egui::Label::new(crate::seen_line(&ask.name, bold(16.0), t.text)).wrap());
-            ui.add(words(&openmailclient_engine::attachments::size_words(ask.size), 12.0, t.text_dim));
+            // The file, as a card: its mark, its name and its size.
+            crate::dialog::card(ui, &t, |ui| {
+                ui.horizontal(|ui| {
+                    let (mark, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
+                    ui.painter().rect_filled(mark, 6.0, t.accent_soft);
+                    icons::paint(ui.painter(), mark.shrink(7.0), Icon::Clip, t.accent);
+                    ui.vertical(|ui| {
+                        ui.add(egui::Label::new(crate::seen_line(&ask.name, bold(15.0), t.text)).wrap());
+                        ui.add(words(&openmailclient_engine::attachments::size_words(ask.size), 12.0, t.text_dim));
+                    });
+                });
+            });
             ui.add_space(4.0);
             if let Some(caution) = &ask.caution {
-                ui.add(words(caution, 13.0, t.danger));
+                crate::dialog::callout(ui, &t, t.danger, |ui| {
+                    ui.add(words(caution, 13.0, t.text));
+                });
                 ui.add_space(4.0);
             }
             match &ask.refused {
@@ -532,26 +561,30 @@ impl MailUi {
                     t.text_dim,
                 )),
             };
-            ui.add_space(8.0);
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 done = Some(Answer::Cancel);
             }
-            ui.horizontal(|ui| {
-                if ui.add_enabled(ask.refused.is_none(), egui::Button::new("Open")).clicked() {
-                    done = Some(Answer::Open);
-                }
-                if ui.button("Save As…").clicked() {
-                    done = Some(Answer::Save);
-                }
-                let cancel = ui.button("Cancel");
-                if !cancel.has_focus() && ui.memory(|m| m.focused().is_none()) {
-                    cancel.request_focus();
-                }
-                if cancel.clicked() {
-                    done = Some(Answer::Cancel);
-                }
+            crate::dialog::foot(ui, &t, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let cancel = ui.add(crate::dialog::plain("Cancel"));
+                    if !cancel.has_focus() && ui.memory(|m| m.focused().is_none()) {
+                        cancel.request_focus();
+                    }
+                    if cancel.clicked() {
+                        done = Some(Answer::Cancel);
+                    }
+                    if ui.add(crate::dialog::plain("Save As…")).clicked() {
+                        done = Some(Answer::Save);
+                    }
+                    if ui.add_enabled(ask.refused.is_none(), crate::dialog::primary(&t, "Open")).clicked() {
+                        done = Some(Answer::Open);
+                    }
+                });
             });
         });
+        if shown.closed {
+            done = Some(Answer::Cancel);
+        }
         let Some(answer) = done else { return };
         let Some(ask) = self.attachment_ask.take() else { return };
         match answer {
@@ -577,11 +610,16 @@ impl MailUi {
     }
 
     pub(crate) fn prompt_window(&mut self, ctx: &egui::Context) {
+        let t = self.tokens.clone();
         let Some(prompt) = self.prompt.as_mut() else { return };
         let mut done: Option<bool> = None;
-        egui::Window::new(prompt.title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0)).show(ctx, |ui| {
-            let edit = ui
-                .add(crate::line_edit::LineEdit::new(&mut prompt.value, egui::Id::new("openmailclient-prompt")).desired_width(280.0).char_limit(255));
+        let shown = crate::dialog::Dialog::new("prompt", prompt.title, Icon::Folder).width(320.0).show(ctx, &t, |ui| {
+            ui.label(egui::RichText::new("Name").font(font(12.0)).color(t.text_dim));
+            let edit = ui.add(
+                crate::line_edit::LineEdit::new(&mut prompt.value, egui::Id::new("openmailclient-prompt"))
+                    .desired_width(f32::INFINITY)
+                    .char_limit(255),
+            );
             if prompt.focus {
                 edit.request_focus();
                 prompt.focus = false;
@@ -592,16 +630,21 @@ impl MailUi {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 done = Some(false);
             }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
-                    done = Some(true);
-                }
-                if ui.button("Cancel").clicked() {
-                    done = Some(false);
-                }
+            let named = !prompt.value.trim().is_empty();
+            crate::dialog::foot(ui, &t, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(crate::dialog::plain("Cancel")).clicked() {
+                        done = Some(false);
+                    }
+                    if ui.add_enabled(named, crate::dialog::primary(&t, "OK")).clicked() {
+                        done = Some(true);
+                    }
+                });
             });
         });
+        if shown.closed {
+            done = Some(false);
+        }
         if let Some(accept) = done
             && let Some(p) = self.prompt.take().filter(|p| accept && !p.value.trim().is_empty())
         {

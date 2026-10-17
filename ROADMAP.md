@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 115 · 2026-10-17
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 116 · 2026-10-17
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 56 of 120 (46%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 503, all passing |
+| Tests | 507, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -151,7 +151,8 @@
 98. Done: An account's servers found from its address: from what is known of large providers, the settings its domain publishes for mail programs, or the usual server names greeted without signing in; the address itself is sent to no one (M4.14, `crates/net/src/find.rs`, `account.find`, Find settings in Account Settings).
 99. Done: An account's servers found from the DNS too: the servers its domain's RFC 6186 SRV records name, implicit TLS first, and the provider its mail exchangers (MX) belong to, given that provider's own servers; read with a DNS client of our own that takes hostile answers apart safely (M4.15, `crates/net/src/dns.rs`); M4 closed.
 100. Done: The Calendar: day, work week, week and month views of the data file's Calendar, a month to pick days from, appointments side by side when they overlap, all-day events in a band of their own, Show As drawn on each, a line at the time now; appointments made, opened, changed and deleted in a window of their own that names what clashes, every change undone (M5.1, `crates/model/src/calendar.rs`, `crates/engine/src/cmd/calendar.rs`, `crates/ui-egui/src/calendar.rs`).
-101. Next: M5.2: Import from Outlook: accounts read from the Outlook profile's settings (servers, names, ports; never passwords, which are asked of the owner), and mail, calendar, contacts and tasks from the profile's data files, which we already read.
+101. Done: Dialogs in the theme's colours, and themes of your own: every dialog has a coloured head with its own mark and a close button, a foot that holds its buttons with the one that does the work in the accent, warnings in tinted boxes, and the window behind dimmed; nine built-in themes and any number of one's own, each with its own light and dark colours, changed in a Themes window that shows the change at once and checks that text can be read, or following the system's light or dark setting (M1.9, `crates/ui-egui/src/dialog.rs`, `crates/ui-egui/src/themes.rs`, `crates/ui-egui/src/theme.rs`).
+102. Next: M5.2: Import from Outlook: accounts read from the Outlook profile's settings (servers, names, ports; never passwords, which are asked of the owner), and mail, calendar, contacts and tasks from the profile's data files, which we already read.
 
 ## M5 plan
 
@@ -273,6 +274,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Delay Delivery and Expires After on a message being sent, and a send held until a time | done: M4.9 |
 | Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles (after M5.10) |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
+| Themes saved to a file of their own and read from one, to share them | with M5.4's files, after the Calendar's `.ics` |
 
 The ranked work list is [docs/gaps.md](docs/gaps.md).
 
@@ -2067,3 +2069,31 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   20 000 items are read, times outside 1601 to 9999 and reminders over a year are refused.
   Scheduled in M5: Import from Outlook (M5.2), recurrence (M5.3), iCalendar files (M5.4),
   CalDAV sync with Nextcloud and other servers (M5.5), then People and Tasks. 12 tests.
+- **2026-10-17** - M1.9: dialogs in the theme's colours; themes of your own for light and dark.
+  The dialogs were egui's own: a grey title bar on a white body, while the window around them
+  had colour. Every dialog (Account Settings, Themes, the appointment window, Print, Send/Receive
+  Progress, Open this link, Opening an attachment, the folder name prompt) now has a head in the
+  theme's dialog colour with its own mark drawn in code, its name and a close button (the same as
+  Cancel; Escape still is), a body on the surface colour with headings in the accent, and a foot
+  on the pane colour that holds its buttons: the one that does the work filled with the accent,
+  one that throws something away in the warning colour. Warnings and clashes stand in tinted
+  boxes; a link's address and an attachment's name in cards of their own. While a modal dialog
+  is open the window behind it is dimmed and takes no clicks. egui's own widgets (fields,
+  selections, menus, links) take the theme's colours too.
+  Themes: Blue, Teal, Forest, Plum, Rose, Amber, Graphite and High contrast are built in, each
+  with a light set and a dark set; View > Themes opens a window that chooses one, shows both sets
+  of each as small windows, and changes any of 25 colours of either set (accent, window, panes,
+  text, title bar, status bar, dialog head, flag, warning…) by picker or by #RRGGBB, with a
+  preview that shows each colour where it goes. A change to a built-in theme makes a copy that is
+  yours; your themes are named, renamed, copied and deleted (at most 40), and kept in the
+  settings file with the rest of the window. The window can follow the system's light or dark
+  setting. Commands: `ui.themes`, `ui.useTheme`, `ui.themeColor`, `ui.newTheme`,
+  `ui.renameTheme`, `ui.deleteTheme`, and `ui.theme` takes "system"; `ui.accountSettings` takes
+  `"close": true`.
+  Better than Outlook, which offers four fixed Office themes: any colour of either set can be
+  changed; one accent brings the colours that go with it along; every pair of text and what is
+  behind it is checked for contrast (WCAG 2) as it changes, and what is hard to read is named.
+  Hostile input: a settings file's themes are read key by key, with only known colour keys and
+  strict #RRGGBB taken, names cleaned and capped at 60 characters, built-in and repeated names
+  left out, and at most 40 kept. Every dialog is drawn in every theme, light and dark, in a large
+  window and a tiny one. Do later: themes saved to and read from a file of their own. 4 tests.

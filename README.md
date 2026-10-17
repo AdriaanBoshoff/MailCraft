@@ -2,7 +2,7 @@
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
 ![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-48%20of%20118%20%C2%B7%2040%25-yellow)
-![tests](https://img.shields.io/badge/tests-503%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-507%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -83,7 +83,9 @@ read, a reader we can try without driving a window, a printer we may use).
   progress and a way to stop it, and a structure check (`inspect --check`) reads a data file
   through without changing it.
 - An Outlook-Classic-style window: ribbon (simplified and classic), folder pane, message list with
-  date groups, reading pane, light and dark themes.
+  date groups, reading pane; dialogs in the theme's colours; nine built-in themes and themes of
+  your own, each with its own light and dark colours, any of 25 colours changed with a live
+  preview and a contrast check, or following the system's light or dark setting.
 - Read, flag, categorise, move, delete, archive, search, sort and filter in writable (in-memory) stores.
 - Reply, reply all, forward and new mail as drafts; saving messages as `.msg`, `.oft` or `.eml`.
 - **Formatted bodies.** HTML and RTF mail is laid out and drawn: fonts the message names (installed

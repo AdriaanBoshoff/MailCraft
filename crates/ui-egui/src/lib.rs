@@ -10,6 +10,7 @@ mod accounts;
 mod alert;
 mod body;
 mod calendar;
+mod dialog;
 mod faces;
 pub mod icons;
 mod line_edit;
@@ -19,6 +20,7 @@ mod preview;
 mod progress;
 mod ribbon;
 pub mod theme;
+mod themes;
 
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Key, Modifiers, Painter, Pos2, Rect, Sense, Ui, pos2, vec2};
@@ -124,7 +126,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.accountSettings",
         label: "Account Settings…",
-        params: r#"{"id": the account to show (the first when not given), "new": true for a new one}; the window adds, changes, tests and removes accounts through the account.* commands"#,
+        params: r#"{"id": the account to show (the first when not given), "new": true for a new one, "close": true to close it}; the window adds, changes, tests and removes accounts through the account.* commands"#,
     },
     UiCommand {
         id: "ui.showProgress",
@@ -143,7 +145,37 @@ pub const UI_COMMANDS: &[UiCommand] = &[
         label: "Pane Sizes",
         params: r#"{"folders": px, "list": px, "listShare": 0.15 to 0.85 of the height with the reading pane at the bottom, "reset": true for the sizes it started with and the window where it started}; each is optional; returns the sizes now"#,
     },
-    UiCommand { id: "ui.theme", label: "Dark Mode", params: r#"{"theme": "light" | "dark"}; none switches"# },
+    UiCommand {
+        id: "ui.theme",
+        label: "Dark Mode",
+        params: r#"{"theme": "light" | "dark" | "system" to follow the system's setting}; none switches between light and dark"#,
+    },
+    UiCommand {
+        id: "ui.themes",
+        label: "Themes…",
+        params: r#"{"open": true or false (default: the other way)}; the window that chooses, makes and changes themes"#,
+    },
+    UiCommand {
+        id: "ui.useTheme",
+        label: "Use Theme",
+        params: r#"{"name": a theme's name}; returns the themes, the one in use and any text that is hard to read"#,
+    },
+    UiCommand {
+        id: "ui.themeColor",
+        label: "Change Theme Colour",
+        params: r##"{"color": a colour's key (accent, window, pane, surface, text, titleBar, dialogHead, …), "value": "#RRGGBB" or null for the theme's own, "mode": "light" | "dark" (default: the set shown), "follow": true to bring the accent's family along}; a built-in theme is copied to one of your own first"##,
+    },
+    UiCommand { id: "ui.newTheme", label: "New Theme", params: r#"{"name": optional, "from": a theme to copy (default: the one in use)}"# },
+    UiCommand {
+        id: "ui.renameTheme",
+        label: "Rename Theme",
+        params: r#"{"to": the new name, "name": one of your themes (default: the one in use)}"#,
+    },
+    UiCommand {
+        id: "ui.deleteTheme",
+        label: "Delete Theme",
+        params: r#"{"name": one of your themes (default: the one in use)}; the built-in Blue is used after"#,
+    },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
     UiCommand { id: "ui.appointment", label: "New Appointment", params: r#"{"id": an appointment's id to open it; none for a new one}"# },
@@ -239,7 +271,12 @@ pub struct MailUi {
     pub tokens: Tokens,
     pub(crate) tab: Tab,
     pub(crate) ribbon_mode: RibbonMode,
-    theme_applied: Option<bool>,
+    theme_applied: Option<Tokens>,
+    /// The person's own themes, the one in use, and whether light or dark follows the system.
+    pub(crate) themes: Vec<theme::Theme>,
+    pub(crate) theme_name: String,
+    pub(crate) follow_system: bool,
+    pub(crate) themes_window: Option<themes::ThemesWindow>,
     /// Exit was asked for once while changes were unsaved.
     quit_asked: bool,
     /// Messages are read as plain text even when they have a formatted body.
@@ -463,6 +500,10 @@ impl MailUi {
             tab: Tab::Home,
             ribbon_mode: RibbonMode::Simplified,
             theme_applied: None,
+            themes: Vec::new(),
+            theme_name: "Blue".to_string(),
+            follow_system: false,
+            themes_window: None,
             quit_asked: false,
             plain_bodies: false,
             body_doc: None,
@@ -513,7 +554,9 @@ impl MailUi {
     /// What the window keeps between runs.
     pub fn settings(&self) -> Value {
         json!({
-            "theme": if self.tokens.dark { "dark" } else { "light" },
+            "theme": if self.follow_system { "system" } else if self.tokens.dark { "dark" } else { "light" },
+            "themeName": self.themes_settings().0,
+            "themes": self.themes_settings().1,
             "ribbon": if self.ribbon_mode == RibbonMode::Classic { "classic" } else { "simplified" },
             "bodyFormat": if self.plain_bodies { "plain" } else { "formatted" },
             "folderWidth": self.folder_w.round(),
@@ -585,6 +628,7 @@ impl MailUi {
 
     /// Take what a settings file says of the window; what makes no sense in it is left out.
     fn apply_settings(&mut self, ui: &Value) {
+        self.apply_theme_settings(ui);
         for (key, id, param) in [("theme", "ui.theme", "theme"), ("ribbon", "ui.ribbonMode", "mode"), ("bodyFormat", "ui.bodyFormat", "format")] {
             if let Some(v) = ui.get(key).and_then(Value::as_str) {
                 let _ = self.ui_command(id, &json!({ param: v }));
@@ -765,6 +809,11 @@ impl MailUi {
                 };
             }
             "ui.accountSettings" => {
+                // Closed, the window's Drop wipes any password typed in it.
+                if params.get("close").and_then(Value::as_bool) == Some(true) {
+                    self.account_window = None;
+                    return Ok(Value::Null);
+                }
                 let new = params.get("new").and_then(Value::as_bool) == Some(true);
                 self.open_accounts(text("id"), new)?;
             }
@@ -823,9 +872,18 @@ impl MailUi {
                     (None, _) => !self.tokens.dark,
                     (_, Some("light")) => false,
                     (_, Some("dark")) => true,
-                    _ => return Err("\"theme\" must be light or dark".to_string()),
+                    // The set the system asks for is taken as the next frame sees it.
+                    (_, Some("system")) => {
+                        self.follow_system = true;
+                        return Ok(Value::Null);
+                    }
+                    _ => return Err("\"theme\" must be light, dark or system".to_string()),
                 };
-                self.tokens = Tokens::named(dark);
+                self.follow_system = false;
+                self.set_dark(dark);
+            }
+            "ui.themes" | "ui.useTheme" | "ui.themeColor" | "ui.newTheme" | "ui.renameTheme" | "ui.deleteTheme" => {
+                return self.theme_command(id, params);
             }
             "ui.bodyFormat" => {
                 self.plain_bodies = match (params.get("format"), text("format")) {
@@ -916,11 +974,17 @@ impl MailUi {
         if self.session.working().is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        if self.follow_system
+            && let Some(system) = ctx.system_theme()
+            && (system == egui::Theme::Dark) != self.tokens.dark
+        {
+            self.set_dark(system == egui::Theme::Dark);
+        }
         let t = self.tokens.clone();
-        if self.theme_applied != Some(t.dark) {
-            // egui's own widgets (text fields, the name prompt) follow the same light or dark set.
+        if self.theme_applied.as_ref() != Some(&t) {
+            // egui's own widgets (text fields, the name prompt) follow the same colours.
             t.apply(&ctx);
-            self.theme_applied = Some(t.dark);
+            self.theme_applied = Some(t.clone());
         }
         ui.painter().rect_filled(full, 0.0, t.window);
         self.note_window(&ctx);
@@ -954,6 +1018,10 @@ impl MailUi {
             self.status_bar(ui, status);
         }
         self.menu_popup(&ctx);
+        if self.modal_open() {
+            dialog::scrim(ui, &t, full);
+        }
+        self.themes_window(&ctx);
         self.prompt_window(&ctx);
         self.accounts_window(&ctx);
         self.link_window(&ctx);
@@ -970,14 +1038,19 @@ impl MailUi {
         }
     }
 
-    fn shortcuts(&mut self, ui: &mut Ui) {
-        if self.prompt.is_some()
+    /// A dialog is open that the rest of the window waits for.
+    pub(crate) fn modal_open(&self) -> bool {
+        self.prompt.is_some()
             || self.link_ask.is_some()
             || self.attachment_ask.is_some()
             || self.preview.is_some()
             || self.account_window.is_some()
             || self.appointment.is_some()
-        {
+            || self.themes_window.is_some()
+    }
+
+    fn shortcuts(&mut self, ui: &mut Ui) {
+        if self.modal_open() {
             return;
         }
         let typing = ui.ctx().memory(|m| m.focused().is_some());

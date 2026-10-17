@@ -787,25 +787,12 @@ impl MailUi {
             })
             .unwrap_or_default();
         let title = if form.id.is_some() { "Appointment" } else { "New Appointment" };
-        let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(18));
-        egui::Window::new(title).frame(frame).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                for (label, what) in [("Save & Close", Ask::Save), ("Delete", Ask::Delete)] {
-                    if matches!(what, Ask::Delete) && form.id.is_none() {
-                        continue;
-                    }
-                    if ui.add(egui::Button::new(egui::RichText::new(label).font(font(12.5))).min_size(vec2(96.0, 28.0))).clicked() {
-                        ask = Some(what);
-                    }
-                }
-                if ui.add(egui::Button::new(egui::RichText::new("Cancel").font(font(12.5))).min_size(vec2(80.0, 28.0))).clicked() {
-                    ask = Some(Ask::Close);
-                }
-            });
-            ui.add_space(10.0);
+        let shown = crate::dialog::Dialog::new("appointment", title, Icon::NewAppointment).show(ctx, &t, |ui| {
             if !clashes.is_empty() {
                 let words = format!("At the same time: {}", clashes.join(", "));
-                ui.label(egui::RichText::new(words).font(font(12.0)).color(t.flag));
+                crate::dialog::callout(ui, &t, t.flag, |ui| {
+                    ui.label(egui::RichText::new(words).font(font(12.0)).color(t.text));
+                });
                 ui.add_space(6.0);
             }
             egui::Grid::new("appointment-form").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
@@ -861,10 +848,25 @@ impl MailUi {
                 }
             }
             if let Some(said) = &form.said {
-                ui.label(egui::RichText::new(one_line(said)).font(font(12.0)).color(t.danger));
+                crate::dialog::callout(ui, &t, t.danger, |ui| {
+                    ui.label(egui::RichText::new(one_line(said)).font(font(12.0)).color(t.text));
+                });
             }
+            crate::dialog::foot(ui, &t, |ui| {
+                if form.id.is_some() && ui.add(crate::dialog::danger(&t, "Delete")).on_hover_text("Moves it to Deleted Items").clicked() {
+                    ask = Some(Ask::Delete);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(crate::dialog::plain("Cancel")).clicked() {
+                        ask = Some(Ask::Close);
+                    }
+                    if ui.add(crate::dialog::primary(&t, "Save & Close")).clicked() {
+                        ask = Some(Ask::Save);
+                    }
+                });
+            });
         });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if shown.closed || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ask = Some(Ask::Close);
         }
         let result = match ask {

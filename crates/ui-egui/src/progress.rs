@@ -25,15 +25,10 @@ impl MailUi {
         let ended: Vec<Value> = self.session.finished.iter().rev().take(MAX_ENDED).cloned().collect();
         let mut cancel: Option<Option<String>> = None;
         let mut close = false;
-        let mut open = true;
-        egui::Window::new("Send/Receive Progress")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_width(460.0)
+        let shown = crate::dialog::Dialog::new("progress", "Send/Receive Progress", Icon::Sync)
+            .width(460.0)
             .anchor(Align2::RIGHT_BOTTOM, vec2(-24.0, -(t.status_h + 24.0)))
-            .show(ctx, |ui| {
-                ui.set_width(460.0);
+            .show(ctx, &t, |ui| {
                 let when = match next {
                     _ if every == 0 => "Mail is sent and received only when asked (F9).".to_string(),
                     Some(ms) if ms < 60_000 => format!("Send/Receive comes on its own in {} seconds.", ms.div_ceil(1000)),
@@ -59,7 +54,7 @@ impl MailUi {
                             ui.label(egui::RichText::new(one_line(&r.what)).font(bold(13.0)).color(t.text));
                             bar(ui, r.done, r.stopping, &t);
                         });
-                        if ui.add_enabled(!r.stopping, egui::Button::new("Cancel Task")).clicked() {
+                        if ui.add_enabled(!r.stopping, crate::dialog::plain("Cancel Task")).clicked() {
                             cancel = Some(Some(r.id.clone()));
                         }
                     });
@@ -67,8 +62,7 @@ impl MailUi {
                 }
                 ui.add_space(4.0);
                 if !ended.is_empty() {
-                    ui.separator();
-                    ui.label(egui::RichText::new("Ended").font(bold(12.5)).color(t.text_dim));
+                    crate::dialog::heading(ui, &t, "Ended");
                     for e in &ended {
                         let ok = e.get("ok").and_then(Value::as_bool);
                         let stopped = e.get("stopped").and_then(Value::as_bool) == Some(true);
@@ -97,17 +91,18 @@ impl MailUi {
                         });
                     }
                 }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(running.iter().any(|r| !r.stopping), egui::Button::new("Cancel All")).clicked() {
+                crate::dialog::foot(ui, &t, |ui| {
+                    if ui.add_enabled(running.iter().any(|r| !r.stopping), crate::dialog::plain("Cancel All")).clicked() {
                         cancel = Some(None);
                     }
-                    if ui.button("Close").clicked() {
-                        close = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(crate::dialog::primary(&t, "Close")).clicked() {
+                            close = true;
+                        }
+                    });
                 });
             });
-        if !open || close {
+        if shown.closed || close {
             self.progress_open = false;
         }
         if let Some(id) = cancel {
