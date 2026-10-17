@@ -1,14 +1,14 @@
 # Gaps
 
-**Status:** revision 103 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 104 · 2026-10-17 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
 0. **No sign-in to Gmail, Outlook.com, Microsoft 365 or Yahoo.** They refuse a password over IMAP
    and SMTP (or ask for an app password); they want OAuth 2.0 (SASL XOAUTH2 or OAUTHBEARER,
-   RFC 7628). This is the last milestone, M7: sign-in through the system's browser with PKCE,
-   tokens kept and renewed in the system's credential store, a provider's servers filled in from
-   the address.
+   RFC 7628). This is M7, put after the first release by the owner's choice: sign-in through the
+   system's browser with PKCE, tokens kept and renewed in the system's credential store. Until
+   then such accounts sign in with an app password, and Find settings says so.
 1. **IMAP is kept in step by message, not by folder, and there is no Exchange.** Accounts are kept
    and tested (M4.3), mail is sent (M4.4) and received by POP3 and from the IMAP Inbox (M4.5);
    every folder of an IMAP server is taken down into the account's own data file, a copy of what
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 104 · 2026-10-17 — M7 (OAuth sign-in) put after the first release; M5 next.
 - 103 · 2026-10-17 — M4.15: an account's servers found from its domain's DNS records; M4 closed.
 - 102 · 2026-10-17 — M4.14: an account's servers found from its address.
 - 101 · 2026-10-17 — M4.13: pictures decoded off the thread that draws the window.

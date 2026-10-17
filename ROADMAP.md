@@ -1,6 +1,6 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in is the last milestone (M7) · revision 113 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 114 · 2026-10-17
 
 ## Headline numbers
 
@@ -24,7 +24,7 @@
 | M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | closed: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6); each account in a data file of its own, the live check passed (M4.7); every IMAP folder kept in step both ways (M4.8); certificates trusted on the owner's word, new mail told of, Show Progress, Delay Delivery (M4.9); pictures on command (M4.10); attachments opened (M4.11); CONDSTORE, QRESYNC, IDLE, folders and drafts on the server (M4.12); pictures off the window's thread (M4.13); servers found from the address (M4.14) and its DNS records (M4.15). OAuth sign-in is M7 |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
-| M7 | Third-party sign-in: Gmail, Outlook.com and Microsoft 365, Yahoo and other providers through OAuth 2.0 (SASL XOAUTH2 and OAUTHBEARER, RFC 7628), signed in through the system's browser with PKCE, tokens kept and renewed in the system's credential store, a provider's servers filled in from its address | not started |
+| M7 | Third-party sign-in: Gmail, Outlook.com and Microsoft 365, Yahoo and other providers through OAuth 2.0 (SASL XOAUTH2 and OAUTHBEARER, RFC 7628), signed in through the system's browser with PKCE, tokens kept and renewed in the system's credential store, a provider's servers filled in from its address | after the first release, by the owner's choice: until then such accounts sign in with an app password |
 
 ## Current focus (M1)
 
@@ -150,7 +150,7 @@
 97. Done: Pictures decoded off the thread that draws the window: a message's pictures are decoded on a thread of their own; drawing waits only a moment for them, and a picture not ready yet stands as an empty frame until it is (M4.13, `pictures::Pictures`).
 98. Done: An account's servers found from its address: from what is known of large providers, the settings its domain publishes for mail programs, or the usual server names greeted without signing in; the address itself is sent to no one (M4.14, `crates/net/src/find.rs`, `account.find`, Find settings in Account Settings).
 99. Done: An account's servers found from the DNS too: the servers its domain's RFC 6186 SRV records name, implicit TLS first, and the provider its mail exchangers (MX) belong to, given that provider's own servers; read with a DNS client of our own that takes hostile answers apart safely (M4.15, `crates/net/src/dns.rs`); M4 closed.
-100. Next: M7: third-party sign-in through OAuth 2.0 (Gmail, Microsoft 365, Yahoo), signed in through the system's browser with PKCE, SASL XOAUTH2 and OAUTHBEARER, tokens kept in the system's credential store.
+100. Next: M5: the Calendar, People and Tasks modules, the Calendar first (M5.1). Third-party sign-in (M7) comes after the first release.
 
 ## Do later (from M2)
 
@@ -243,7 +243,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~An account's servers found from its address (the provider's published settings, the usual names tried)~~ | done: M4.14 |
 | ~~A domain's provider found from its mail exchangers (MX), and RFC 6186 SRV records (a DNS client is needed)~~ | done: M4.15 |
 | A server's own certificate trusted on the owner's word, and kept for that server only | done: M4.9 |
-| Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M7 |
+| Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M7, after the first release |
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
 | The IMAP server's other folders taken down into the account's own data file, as the server has them | done: M4.8 |
 | IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | done: M4.8 |
@@ -2025,3 +2025,7 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   servers, so a changed answer cannot send the password to a server of its choosing.
   OAuth sign-in, the one M4 row left, is M7's. 12 tests (a 20 000-try bounded fuzz of answers
   among them).
+- **2026-10-17** - M7 put after the first release, by the owner's choice.
+  Third-party sign-in through OAuth 2.0 waits until after the first release; until then Gmail,
+  Microsoft 365, Yahoo and the like are signed in to with an app password, as Find settings
+  says. Next: M5, the Calendar, People and Tasks modules.

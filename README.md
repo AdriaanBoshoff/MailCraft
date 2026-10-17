@@ -38,11 +38,11 @@ catalog, and [docs/gaps.md](docs/gaps.md) ranks what is missing.
 | M4 | **Accounts**: IMAP, POP3 and SMTP; protocol clients tested against a fake server (done); TLS with checked certificates, passwords in the system's credential store (done); a server's own certificate trusted on the owner's word, for that server only (done); accounts added, tested and kept (done); mail sent and kept in Sent Items (done); mail received by POP3 and IMAP, F9 (done); new mail told of at the corner of the screen and with a sound of our own, Send/Receive on a timer, its progress in a window of its own with a way to stop it (done); Delay Delivery and Expires After, a held message going at its minute (done); Account Settings in the window, the servers found from the address and its domain's DNS records (done); each account in a data file of its own (done); pictures on a server downloaded when asked for, over HTTPS only (done); attachments opened or saved on a double-click, a program or script only saved (done); checked against a real server (done). OAuth sign-in is M7 | ![closed](https://img.shields.io/badge/-closed-brightgreen) |
 | M5 | **Calendar, People and Tasks** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
 | M6 | **MCP server, control channel, web build** | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
-| M7 | **Third-party sign-in**: Gmail, Outlook.com and Microsoft 365, Yahoo and others through OAuth 2.0 (XOAUTH2, OAUTHBEARER), signed in through the system's browser, tokens in the system's credential store | ![not started](https://img.shields.io/badge/-not%20started-lightgrey) |
+| M7 | **Third-party sign-in**: Gmail, Outlook.com and Microsoft 365, Yahoo and others through OAuth 2.0 (XOAUTH2, OAUTHBEARER), signed in through the system's browser, tokens in the system's credential store; until then such accounts sign in with an app password | ![after release](https://img.shields.io/badge/-after%20release-lightgrey) |
 
 Closed milestones still have work left over: it is not dropped. Each piece is a row in
 [Do later](ROADMAP.md#do-later-from-m2) with the slot it lands in, and is struck when it lands.
-67 rows are done; 29 are open: 17 in M5, 1 in M6, 1 in M7, 1 with M1's checks against
+67 rows are done; 29 are open: 17 in M5, 1 in M6, 1 in M7 (after the first release), 1 with M1's checks against
 Outlook, and 9 that wait on something we do not have yet (an Outlook-written file of a kind we may
 read, a reader we can try without driving a window, a printer we may use).
 
