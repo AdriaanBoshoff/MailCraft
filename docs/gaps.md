@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 107 · 2026-10-17 · ranked: the top of the list is what hurts most.
+**Status:** revision 108 · 2026-10-17 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -54,7 +54,7 @@
    (a placeholder). List numbers follow what an override changes (`\lfolevel`) and a highlight is one of the sixteen marker colours (M3b.27). OpenMailClient never writes compressed RTF
    (only the uncompressed stored form). Printing (`file.print`) writes a PDF file in Memo Style, with
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
-   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, sending pages to a printer,
+   right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, a printer's own settings (trays, two-sided; it prints on any printer the system has, with copies and pages, M1.10),
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
 4. **People and Tasks** modules show a placeholder. The Calendar has its views and single appointments (M5.1); recurrence, `.ics`, CalDAV sync, meetings and time zones are scheduled in ROADMAP's M5 plan.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 108 · 2026-10-17 — M1.10: printing on a printer with copies and pages; the message body alone.
 - 107 · 2026-10-17 — M5.2: Import from Outlook: accounts and their data files.
 - 106 · 2026-10-17 — M1.9: dialogs in the theme's colours; themes of your own for light and dark.
 - 105 · 2026-10-17 — M5.1: the Calendar: views and appointments made, changed and deleted.

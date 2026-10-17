@@ -1,7 +1,8 @@
 //! The print window: the pages as they will be printed, beside how they are set up.
 //!
 //! The pages are drawn from what `file.print` writes, so what is seen here is what the file
-//! holds. Every control runs `file.pageSetup`; printing itself is asked of the host.
+//! holds. Every control runs `file.pageSetup`; a print on a printer is `file.print` with the
+//! printer `file.printers` chose, and a PDF file is asked of the host.
 
 use egui::{Align2, Color32, ColorImage, Key, Rect, Sense, TextureHandle, TextureOptions, pos2, vec2};
 use openmailclient_engine::print::{self, Field, Laid, Links, Listing, Rows, Style};
@@ -37,6 +38,14 @@ pub(crate) struct Preview {
     pub zoom: Option<f32>,
     /// What that came to when the page was last drawn to fit, in the same measure.
     fit: f32,
+    /// This system's printers and the one printed on, as `file.printers` says; looked for when
+    /// the window opens.
+    printers: Option<Value>,
+    /// Copies printed, 1 to 99 (0 is 1), and the pages printed, from 1: all of them when not set.
+    copies: u32,
+    range: Option<(usize, usize)>,
+    /// The Print button was pressed by a command: the pages go when next laid out.
+    print: bool,
 }
 
 type Of = (Option<u64>, Option<(usize, FolderId)>, (usize, usize), Style, Setup, Listing);
@@ -58,6 +67,28 @@ impl Preview {
             Value::Number(n) => Some(n.as_f64().filter(|z| (f64::from(least)..=f64::from(most)).contains(z)).ok_or_else(bad)? as f32),
             _ => return Err(bad()),
         };
+        Ok(())
+    }
+
+    /// Take the copies, the pages and whether to print from `ui.printPreview`'s parameters.
+    pub(crate) fn ask(&mut self, p: &Value) -> Result<(), String> {
+        if let Some(copies) = p.get("copies") {
+            let most = u64::from(openmailclient_engine::printers::MAX_COPIES);
+            self.copies = copies.as_u64().filter(|n| (1..=most).contains(n)).ok_or(format!("\"copies\" is from 1 to {most}"))? as u32;
+        }
+        match p.get("pages") {
+            None => {}
+            Some(Value::String(all)) if all == "all" => self.range = None,
+            Some(Value::Array(two)) => {
+                let page = |at: usize| two.get(at).and_then(Value::as_u64).filter(|n| *n >= 1).and_then(|n| usize::try_from(n).ok());
+                let (from, to) = page(0).zip(page(1)).ok_or("\"pages\" is [from, to], from 1")?;
+                self.range = Some((from, to.max(from)));
+            }
+            Some(_) => return Err("\"pages\" is [from, to] or \"all\"".into()),
+        }
+        if p.get("print").and_then(Value::as_bool) == Some(true) {
+            self.print = true;
+        }
         Ok(())
     }
 
@@ -112,10 +143,24 @@ impl MailUi {
         let pages = pv.pages();
         pv.page = pv.page.min(pages.saturating_sub(1));
 
+        if pv.printers.is_none() {
+            pv.printers = Some(self.execute("file.printers", &Value::Null).unwrap_or(Value::Null));
+        }
+        let listed: Vec<String> = pv
+            .printers
+            .as_ref()
+            .and_then(|p| p["printers"].as_array())
+            .map(|all| all.iter().filter_map(|p| p["name"].as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let printer = pv.printers.as_ref().and_then(|p| p["printer"].as_str()).map(str::to_string);
+        pv.copies = pv.copies.clamp(1, openmailclient_engine::printers::MAX_COPIES);
+        let most = pages.max(1);
+        pv.range = pv.range.map(|(from, to)| (from.clamp(1, most), to.clamp(1, most))).map(|(from, to)| (from, to.max(from)));
+
         let setup = self.session.page_setup.clone();
         // What the person asked for this frame: changes to the setup, then print or close.
         let mut changes: Vec<Value> = Vec::new();
-        let (mut print_now, mut close) = (false, false);
+        let (mut print_now, mut close, mut choose, mut on_paper) = (false, false, None::<String>, false);
         let shown = crate::dialog::Dialog::new("print", "Print", crate::icons::Icon::Print).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
             ctx,
             &t,
@@ -124,6 +169,54 @@ impl MailUi {
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(236.0);
+                        crate::dialog::heading(ui, &t, "Printer");
+                        if listed.is_empty() {
+                            ui.add(dim("No printer was found; the pages can be saved as a PDF file.").wrap());
+                        } else {
+                            let now = printer.clone().unwrap_or_default();
+                            egui::ComboBox::from_id_salt("print-printer").selected_text(&now).width(226.0).show_ui(ui, |ui| {
+                                for name in &listed {
+                                    if ui.selectable_label(*name == now, name).clicked() && *name != now {
+                                        choose = Some(name.clone());
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add(dim("Copies"));
+                                ui.add(egui::DragValue::new(&mut pv.copies).range(1..=openmailclient_engine::printers::MAX_COPIES).speed(0.1));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add(dim("Pages"));
+                                if ui.selectable_label(pv.range.is_none(), "All").clicked() {
+                                    pv.range = None;
+                                }
+                                if ui.selectable_label(pv.range.is_some(), "From").clicked() && pv.range.is_none() {
+                                    pv.range = Some((pv.page + 1, pv.page + 1));
+                                }
+                                if let Some((from, to)) = pv.range.as_mut() {
+                                    ui.add(egui::DragValue::new(from).range(1..=most).speed(0.1));
+                                    ui.add(dim("to"));
+                                    ui.add(egui::DragValue::new(to).range(1..=most).speed(0.1));
+                                }
+                            });
+                        }
+                        ui.add_space(6.0);
+                        crate::dialog::heading(ui, &t, "Include");
+                        let mut details = setup.details;
+                        let about = "The owner's name and From, Sent, To and Subject over a message; the folder's name over a list";
+                        if ui.checkbox(&mut details, "Name and message details").on_hover_text(about).changed() {
+                            changes.push(json!({ "details": details }));
+                        }
+                        let mut edges = setup.edges;
+                        if ui.checkbox(&mut edges, "Page header and footer").changed() {
+                            changes.push(json!({ "headerFooter": edges }));
+                        }
+                        let alone = !setup.details && !setup.edges;
+                        let only = egui::Button::new("Message body only");
+                        if ui.add_enabled(!alone, only).on_hover_text("Neither of the two: what the message says, and nothing more").clicked() {
+                            changes.push(json!({ "bodyOnly": true }));
+                        }
+                        ui.add_space(6.0);
                         crate::dialog::heading(ui, &t, "What to print");
                         ui.horizontal(|ui| {
                             for one in Style::ALL {
@@ -181,7 +274,10 @@ impl MailUi {
                                 }
                             }
                         });
-                        ui.add_space(8.0);
+                    });
+                    ui.add_space(14.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(236.0);
                         crate::dialog::heading(ui, &t, "Margins (mm)");
                         egui::Grid::new("print-margins").num_columns(4).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
                             for (row, edges) in [[("Top", 0usize), ("Bottom", 2)], [("Left", 3), ("Right", 1)]].into_iter().enumerate() {
@@ -201,18 +297,21 @@ impl MailUi {
                         });
                         ui.add_space(8.0);
                         for (label, key, parts) in [("Header", "header", &setup.header), ("Footer", "footer", &setup.footer)] {
-                            ui.add(dim(label));
-                            for (part, hint) in parts.iter().zip(["left", "center", "right"]) {
-                                let mut text = part.clone();
-                                let field = crate::line_edit::LineEdit::new(&mut text, egui::Id::new(("page-setup", key, hint)))
-                                    .hint(hint, None)
-                                    .desired_width(226.0)
-                                    .font(font(12.5));
-                                if ui.add(field).changed() {
-                                    changes.push(json!({ key: { hint: text } }));
+                            // Kept while they are not printed, and changed only where they are.
+                            ui.add_enabled_ui(setup.edges, |ui| {
+                                ui.add(dim(label));
+                                for (part, hint) in parts.iter().zip(["left", "center", "right"]) {
+                                    let mut text = part.clone();
+                                    let field = crate::line_edit::LineEdit::new(&mut text, egui::Id::new(("page-setup", key, hint)))
+                                        .hint(hint, None)
+                                        .desired_width(226.0)
+                                        .font(font(12.5));
+                                    if ui.add(field).changed() {
+                                        changes.push(json!({ key: { hint: text } }));
+                                    }
                                 }
-                            }
-                            ui.add_space(4.0);
+                                ui.add_space(4.0);
+                            });
                         }
                         ui.add(
                             egui::Label::new(
@@ -338,7 +437,14 @@ impl MailUi {
                         if ui.add(crate::dialog::plain("Close")).clicked() {
                             close = true;
                         }
-                        if ui.add_enabled(pages > 0, crate::dialog::primary(&t, "Print to PDF…")).clicked() {
+                        if printer.is_some() {
+                            if ui.add_enabled(pages > 0, crate::dialog::primary(&t, "Print")).clicked() {
+                                on_paper = true;
+                            }
+                            if ui.add_enabled(pages > 0, crate::dialog::plain("Save as PDF…")).clicked() {
+                                print_now = true;
+                            }
+                        } else if ui.add_enabled(pages > 0, crate::dialog::primary(&t, "Save as PDF…")).clicked() {
                             print_now = true;
                         }
                     });
@@ -353,10 +459,33 @@ impl MailUi {
                 self.session.status = e;
             }
         }
+        if let Some(name) = choose {
+            match self.execute("file.printers", &json!({ "choose": name })) {
+                Ok(now) => pv.printers = Some(now),
+                Err(e) => self.session.status = e,
+            }
+        }
         if print_now {
             self.requests.push(UiRequest::Print);
         }
-        if !close && !print_now {
+        // Asked for by a command: only once there are pages, and only on a printer there is.
+        if std::mem::take(&mut pv.print) {
+            if pages > 0 && printer.is_some() {
+                on_paper = true;
+            } else {
+                self.session.status = "There is no printer to print on".to_string();
+            }
+        }
+        if on_paper && let Some(name) = printer {
+            let (from, to) = pv.range.unwrap_or((1, most));
+            // On a thread of its own: it is seen in Show Progress and the window goes on.
+            let asked = json!({ "printer": name, "copies": pv.copies, "from": from, "to": to, "wait": false });
+            if let Err(e) = self.execute("file.print", &asked) {
+                self.session.status = e;
+                on_paper = false;
+            }
+        }
+        if !close && !print_now && !on_paper {
             self.preview = Some(pv);
         }
     }

@@ -139,9 +139,19 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "Ctrl+P",
-            params: r#"{"path": target ending in .pdf, "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page, and with "columns", "groups" and "rows" as file.pageSetup takes them); returns {"path", "pages", "truncated", "links", "style"}"#,
+            params: r#"{"path": target ending in .pdf, or "printer": the name of a printer file.printers lists, to print on it, with "copies" (1 to 99, default 1), "from" and "to" (the pages printed, from 1; default all of them) and "wait": false to print on a thread of its own (the window does); "links": which links are numbered and listed after the body: "concerns" (default: those that are not what their text says), "all" or "none"; and, for this print only, anything file.pageSetup takes: "style", "paper", "orientation", "margins", "header", "footer", "details", "headerFooter", "bodyOnly"}; "style" is "memo" (the open message) or "table" (the folder's list as it is shown, a message to a row, with the names of the columns on every page, and with "columns", "groups" and "rows" as file.pageSetup takes them); returns {"path", "pages", "truncated", "links", "style"}, or with a printer {"printer", "pages", "copies", ...} once it is sent, or {"started"} when it does not wait"#,
             enabled: printable,
             run: print,
+        },
+        CommandSpec {
+            id: "file.printers",
+            label: "Printer",
+            tab: "File",
+            group: "Print",
+            shortcut: "",
+            params: r#"{"choose": the name of a listed printer to print on from now, or null for the system's default}; looks again for this system's printers; returns {"printers": [{"name", "default"}], "printer": the one printed on (the chosen one while it is there, otherwise the default), "chosen"}"#,
+            enabled: always,
+            run: printers,
         },
         CommandSpec {
             id: "file.printPreview",
@@ -159,7 +169,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             tab: "File",
             group: "Print",
             shortcut: "",
-            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "style": "memo" or "table"; for Table Style "columns": "default" or the columns from the left, of who (From, or To in a folder of outgoing mail), from, to, subject, date, size, notes, categories, importance, flag, attachment, preview; "groups": false to leave out the heading over each group of the list as it is arranged; "rows": "all" or "selected" for the selected message alone (not kept between runs); "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
+            params: r#"{"paper": "a4", "letter", "legal", "a3", "a5", "b5", "executive" or "tabloid", "orientation": "portrait" or "landscape", "margins": millimetres, one number for every edge or {"top", "right", "bottom", "left"}, "header" and "footer": a text for the middle, or {"left", "center", "right"}; in them [Page], [Pages], [Page of Pages], [Date], [Time], [User] and [Subject] are filled in, "details": false to leave out the owner's name and the message's From, Sent, To and Subject at the head (in Table Style the folder's name), "headerFooter": false to print no header or footer (what they say is kept), "bodyOnly": true for both, "style": "memo" or "table"; for Table Style "columns": "default" or the columns from the left, of who (From, or To in a folder of outgoing mail), from, to, subject, date, size, notes, categories, importance, flag, attachment, preview; "groups": false to leave out the heading over each group of the list as it is arranged; "rows": "all" or "selected" for the selected message alone (not kept between runs); "reset": true to start from the default}; nothing asked for changes nothing; returns the setup"#,
             enabled: always,
             run: page_setup,
         },
@@ -649,6 +659,9 @@ fn print_preview(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Print the open message, in Memo Style, to a PDF file.
 fn print(s: &mut Session, p: &Value) -> CmdResult {
+    if p.get("printer").is_some() {
+        return print_on(s, p);
+    }
     let path = Path::new(need_str(p, "path")?);
     if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return Err(EngineError::BadParams("printing writes a PDF file: the path must end in .pdf".into()));
@@ -663,6 +676,112 @@ fn print(s: &mut Session, p: &Value) -> CmdResult {
     Ok(
         json!({"path": path.display().to_string(), "pages": printed.pages, "truncated": printed.truncated, "links": printed.links, "style": style.name()}),
     )
+}
+
+/// Look for the system's printers again, and keep them.
+fn find_printers(s: &mut Session) -> Result<(), EngineError> {
+    s.printers = s.spooler.printers().map_err(EngineError::Format)?;
+    s.printers.truncate(crate::printers::MAX_PRINTERS);
+    Ok(())
+}
+
+/// The printer printed on: the chosen one while it is listed, otherwise the default.
+fn printer_now(s: &Session) -> Option<&crate::printers::Printer> {
+    let chosen = s.printer.as_deref().and_then(|name| s.printers.iter().find(|p| p.name == name));
+    chosen.or_else(|| s.printers.iter().find(|p| p.default)).or_else(|| s.printers.first())
+}
+
+fn printers_json(s: &Session) -> Value {
+    json!({
+        "printers": s.printers.iter().map(|p| json!({"name": p.name, "default": p.default})).collect::<Vec<_>>(),
+        "printer": printer_now(s).map(|p| p.name.clone()),
+        "chosen": s.printer,
+    })
+}
+
+/// Look for this system's printers, and choose the one to print on.
+fn printers(s: &mut Session, p: &Value) -> CmdResult {
+    find_printers(s)?;
+    if let Some(choose) = p.get("choose") {
+        if choose.is_null() {
+            s.printer = None;
+        } else {
+            let name = choose.as_str().ok_or_else(|| EngineError::BadParams("\"choose\" is a printer's name, or null".into()))?;
+            let found =
+                s.printers.iter().find(|p| p.name == name).ok_or_else(|| EngineError::BadParams(format!("there is no printer {name:?} here")))?;
+            s.printer = Some(found.name.clone());
+        }
+    }
+    Ok(printers_json(s))
+}
+
+/// A page number of the parameters, from 1, as an index from 0.
+fn page_param(p: &Value, key: &str) -> Result<Option<usize>, EngineError> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| *n >= 1)
+            .map(|n| Some(usize::try_from(n - 1).unwrap_or(usize::MAX)))
+            .ok_or_else(|| EngineError::BadParams(format!("\"{key}\" is a page's number, from 1"))),
+    }
+}
+
+/// Print what the session shows on a printer of this system.
+fn print_on(s: &mut Session, p: &Value) -> CmdResult {
+    let name = p.get("printer").and_then(Value::as_str).ok_or_else(|| EngineError::BadParams("\"printer\" is a printer's name".into()))?;
+    // Only a printer the system lists is printed on: nothing else reaches its commands.
+    if !s.printers.iter().any(|known| known.name == name) {
+        find_printers(s)?;
+    }
+    let printer = s.printers.iter().find(|known| known.name == name).map(|known| known.name.clone());
+    let printer = printer.ok_or_else(|| EngineError::BadParams(format!("there is no printer {name:?} here")))?;
+    let copies = match p.get("copies") {
+        None | Some(Value::Null) => 1,
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (1..=u64::from(crate::printers::MAX_COPIES)).contains(n))
+            .ok_or_else(|| EngineError::BadParams(format!("\"copies\" is from 1 to {}", crate::printers::MAX_COPIES)))? as u32,
+    };
+    let (from, to) = (page_param(p, "from")?, page_param(p, "to")?);
+    let wait = p_bool(p, "wait") != Some(false);
+    let setup = crate::print::setup_with(&s.page_setup, p)?;
+    let style = crate::print::style_with(s.print_style, p)?;
+    let listing = crate::print::listing_with(&s.print_list, p)?;
+    let links = print_links(p)?;
+    let laid = crate::print::laid_as(s, style, &setup, &listing, links)?;
+    let pages = laid.printed.pages.len();
+    let last = pages.checked_sub(1).ok_or_else(|| EngineError::Format("there is nothing to print".into()))?;
+    let (from, to) = (from.unwrap_or(0), to.unwrap_or(last).min(last));
+    if from > to {
+        return Err(EngineError::BadParams(format!(
+            "there {} {pages} page{}: \"from\" is past \"to\" or the last",
+            if pages == 1 { "is" } else { "are" },
+            if pages == 1 { "" } else { "s" }
+        )));
+    }
+    let title = crate::print::title(s, style);
+    let pdf = crate::print::write(&laid.printed, &laid.pictures, &title)?;
+    let truncated = laid.printed.truncated;
+    s.printer = Some(printer.clone());
+    let spooler = std::sync::Arc::clone(&s.spooler);
+    let count = to - from + 1;
+    let what = format!("Printing {title:?} on {printer}");
+    let sheets = crate::printers::Sheets { printer: printer.clone(), title, copies, from, to, laid, pdf };
+    s.begin(what, wait, move |progress| {
+        let sent = spooler.send(sheets, progress);
+        Box::new(move |_s: &mut Session| match sent {
+            Ok(()) => (
+                format!(
+                    "Sent {count} page{} to {printer}{}",
+                    if count == 1 { "" } else { "s" },
+                    if copies > 1 { format!(", {copies} copies") } else { String::new() }
+                ),
+                json!({"printer": printer, "pages": count, "copies": copies, "truncated": truncated, "style": style.name()}),
+            ),
+            Err(why) => (format!("{printer} did not take the print: {why}"), json!({"ok": false, "printer": printer, "error": why})),
+        })
+    })
 }
 
 /// Change how pages are set up for printing, and say how they are.

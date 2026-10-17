@@ -77,11 +77,15 @@ pub fn list(list: &Listed, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result
     let whole: f32 = parts.iter().sum::<f32>().max(0.01);
     let shares: Vec<u8> = parts.iter().map(|part| (part / whole * 100.0).round().clamp(1.0, 100.0) as u8).collect();
     let share = |n: usize| shares.get(n).copied().unwrap_or(1);
-    let mut blocks = vec![Block::Para(owner(list.owner)), Block::Para(Para::default()), Block::Para(text(list.title, true, Some(11.0)))];
-    if !list.note.trim().is_empty() {
-        blocks.push(Block::Para(text(list.note, false, None)));
+    let mut blocks = Vec::new();
+    // The table alone, when the details are not asked for.
+    if setup.details {
+        blocks.extend([Block::Para(owner(list.owner)), Block::Para(Para::default()), Block::Para(text(list.title, true, Some(11.0)))]);
+        if !list.note.trim().is_empty() {
+            blocks.push(Block::Para(text(list.note, false, None)));
+        }
+        blocks.push(Block::Para(Para::default()));
     }
-    blocks.push(Block::Para(Para::default()));
     if !columns.is_empty() {
         let dark = Edge { width: 1, color: Some([0, 0, 0]), line: Line::Solid };
         let light = Edge { width: 1, color: Some([200, 200, 200]), line: Line::Solid };

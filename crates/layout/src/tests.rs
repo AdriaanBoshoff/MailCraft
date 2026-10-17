@@ -859,6 +859,8 @@ fn pages_are_set_up_as_asked() {
             margins: [36.0; 4],
             header: Default::default(),
             footer: [String::new(), part("[Page of Pages]"), String::new()],
+            details: true,
+            edges: true,
             words: vec![]
         }
     );
@@ -899,6 +901,8 @@ fn pages_are_set_up_as_asked() {
                 margins: [*a, b, b, *a],
                 header: [brackets.clone(), "[n0][n4999][Page]".repeat(4000), "\u{0}\n\t[Pages]".into()],
                 footer: ["[n1]".repeat(9000), brackets.clone(), "x".repeat(100_000)],
+                details: i % 3 == 0,
+                edges: i % 2 == 1,
                 words: many.clone(),
             };
             let printed = set(&setup, &doc(vec![Block::Para(para(&words(60)))]));
@@ -1957,4 +1961,34 @@ fn text_within_a_line_is_printed_in_its_border_and_boxes_have_rounded_corners() 
             assert!(page.rules.iter().all(|r| r.width.is_finite() && r.from.0.is_finite() && r.to.1.is_finite()));
         }
     }
+}
+
+#[test]
+fn the_body_alone_is_printed_without_details_header_or_footer() {
+    let body = doc(vec![Block::Para(para("Only this"))]);
+    let fields = [("From".to_string(), "Sam".to_string()), ("Subject".to_string(), "Hello".to_string())];
+    let fields: Vec<(&str, String)> = fields.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
+    let memo_ = Memo { owner: "Owner", fields: &fields, body: &body, plain: false, sizes: &|_| None };
+    let setup = Setup { header: [String::new(), "Head".into(), String::new()], ..Setup::from(Paper::A4) };
+    let all = print_on(&Library::empty(), &memo_, setup.clone()).unwrap().pages[0].text();
+    for word in ["Owner", "From:", "Sam", "Subject:", "Head", "Only this", "1"] {
+        assert!(all.contains(word), "{word} in {all:?}");
+    }
+    // Neither the details nor the edges: the body, from the top margin.
+    let bare = Setup { details: false, edges: false, ..setup.clone() };
+    let printed = print_on(&Library::empty(), &memo_, bare.clone()).unwrap();
+    assert_eq!(printed.pages[0].text().trim(), "Only this");
+    let top = printed.pages[0].texts.iter().map(|t| t.y).fold(f32::MAX, f32::min);
+    assert!(top < 36.0 + 16.0, "{top}");
+    // Each by itself.
+    let edges_only = print_on(&Library::empty(), &memo_, Setup { details: false, ..setup.clone() }).unwrap().pages[0].text();
+    assert!(edges_only.contains("Head") && !edges_only.contains("Owner") && !edges_only.contains("Sam"));
+    let details_only = print_on(&Library::empty(), &memo_, Setup { edges: false, ..setup.clone() }).unwrap().pages[0].text();
+    assert!(details_only.contains("Owner") && details_only.contains("Sam") && !details_only.contains("Head"));
+    // A list without its details is the table alone.
+    let columns = [Column { name: "Subject", share: 100, right: false }];
+    let rows = [Row { cells: vec!["Row one".into()], bold: false, heading: false }];
+    let listed = Listed { owner: "Owner", title: "Inbox", note: "1 item", columns: &columns, rows: &rows };
+    let table = list_on(&listed, bare).unwrap().pages[0].text();
+    assert!(!table.contains("Owner") && !table.contains("Inbox") && table.contains("Row one"), "{table:?}");
 }

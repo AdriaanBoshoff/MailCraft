@@ -531,7 +531,8 @@ fn edge(now: &[String; 3], value: &Value, key: &str) -> Result<[String; 3], Engi
 
 /// `setup` with what the parameters ask for changed: `"paper"`, `"orientation"`,
 /// `"margins"` (millimetres: one number for every edge, or `{"top", "right", "bottom",
-/// "left"}`), `"header"` and `"footer"`.
+/// "left"}`), `"header"`, `"footer"`, `"details"` (false for no name and fields at the head)
+/// and `"headerFooter"` (false for no header or footer), or `"bodyOnly": true` for both off.
 pub fn setup_with(setup: &Setup, p: &Value) -> Result<Setup, EngineError> {
     let mut out = setup.clone();
     if let Some(name) = p.get("paper").and_then(Value::as_str) {
@@ -576,6 +577,20 @@ pub fn setup_with(setup: &Setup, p: &Value) -> Result<Setup, EngineError> {
     if let Some(value) = p.get("footer") {
         out.footer = edge(&out.footer, value, "footer")?;
     }
+    let switch = |key: &str| match p.get(key) {
+        None => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| EngineError::BadParams(format!("\"{key}\" is true or false"))),
+    };
+    if let Some(only) = switch("bodyOnly")? {
+        out.details = !only;
+        out.edges = !only;
+    }
+    if let Some(on) = switch("details")? {
+        out.details = on;
+    }
+    if let Some(on) = switch("headerFooter")? {
+        out.edges = on;
+    }
     Ok(out)
 }
 
@@ -592,6 +607,9 @@ pub fn setup_json(setup: &Setup) -> Value {
         "margins": {"top": mm(top), "right": mm(right), "bottom": mm(bottom), "left": mm(left)},
         "header": parts(&setup.header),
         "footer": parts(&setup.footer),
+        "details": setup.details,
+        "headerFooter": setup.edges,
+        "bodyOnly": !setup.details && !setup.edges,
     })
 }
 

@@ -2477,3 +2477,56 @@ fn outlook_is_shown_before_it_is_imported_and_the_passwords_are_asked_for_after(
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_print_window_prints_on_the_printer_chosen() {
+    use openmailclient_engine::printers::{Printer, Recorder};
+    let recorder = std::sync::Arc::new(Recorder {
+        listed: vec![Printer { name: "Hall Laser".into(), default: true }, Printer { name: "Desk Inkjet".into(), default: false }],
+        ..Recorder::default()
+    });
+    let mut session = Session::with_sample();
+    session.spooler = std::sync::Arc::new(std::sync::Arc::clone(&recorder));
+    let mut ui = MailUi::new(session);
+    ui.execute("mail.select", &json!({"folder": "Receipts", "index": 0})).unwrap();
+    ui.execute("file.printers", &json!({"choose": "Desk Inkjet"})).unwrap();
+    ui.execute("ui.printPreview", &json!({"copies": 2})).unwrap();
+    for bad in [json!({"copies": 0}), json!({"pages": [0, 1]}), json!({"pages": "some"})] {
+        assert!(ui.execute("ui.printPreview", &bad).is_err(), "{bad}");
+    }
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let frame = |ui: &mut MailUi| {
+        let input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))), ..egui::RawInput::default() };
+        let mut output = ctx.run_ui(input, |u| ui.ui(u));
+        output.textures_delta.clear();
+    };
+    for _ in 0..3 {
+        frame(&mut ui);
+    }
+    // Where no font is installed nothing is laid out, and nothing can be printed.
+    let pages = ui.preview.as_ref().unwrap().pages();
+    assert!(recorder.sent.lock().unwrap().is_empty(), "nothing is printed by looking");
+    ui.execute("ui.printPreview", &json!({"print": true, "pages": "all"})).unwrap();
+    for _ in 0..3 {
+        frame(&mut ui);
+    }
+    let mut waited = 0;
+    while !ui.session.jobs.is_empty() {
+        ui.session.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 1;
+        assert!(waited < 1000, "the print never ended");
+    }
+    let sent = recorder.sent.lock().unwrap().clone();
+    if pages == 0 {
+        assert!(sent.is_empty());
+        return;
+    }
+    // The printer chosen, the copies asked for, every page; and the window closed.
+    assert_eq!(sent.len(), 1);
+    assert_eq!((sent[0].0.as_str(), sent[0].2, sent[0].3, sent[0].4), ("Desk Inkjet", 2, 0, pages - 1));
+    assert!(ui.preview.is_none());
+    assert!(ui.requests.is_empty(), "no PDF file was asked for");
+}

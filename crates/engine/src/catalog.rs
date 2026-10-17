@@ -106,6 +106,7 @@ pub const FEATURES: &[Feature] = &[
     f("File", "Save Attachments", "", "Save Attachments", "file.saveAllAttachments"),
     f("File", "Print", "", "Print", "file.print"),
     f("File", "Print", "", "Page Setup", "file.pageSetup"),
+    f("File", "Print", "", "Printer", "file.printers"),
     f("File", "Options", "", "Options", ""),
     f("File", "Info", "", "Close Data File", "file.closeStore"),
     // Message window

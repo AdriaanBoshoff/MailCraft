@@ -141,7 +141,8 @@ pub fn memo(memo: &Memo, setup: impl Into<Setup>, fonts: &mut Fonts) -> Result<P
     let mut flow = Flow::new(fonts, &setup, Base { family: HEAD_FONT.into(), size: 8.0 }, memo.sizes);
     let (x, width) = (flow.left(), flow.width());
     let start = flow.start();
-    let at = flow.blocks(&head(memo), x, width, start, 0);
+    // The body alone, when the details are not asked for.
+    let at = if setup.details { flow.blocks(&head(memo), x, width, start, 0) } else { start };
     flow.base = if memo.plain { Base { family: PLAIN_FONT.into(), size: 11.0 } } else { Base { family: BODY_FONT.into(), size: 12.0 } };
     let end = flow.blocks(&memo.body.blocks, x, width, at, 0);
     // A body that asks for a colour behind it has it behind all of it, on every page it is on:

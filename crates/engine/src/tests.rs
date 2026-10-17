@@ -1793,7 +1793,8 @@ fn page_setup_is_kept_and_printed_with() {
         json!({"style": "memo", "columns": ["who", "subject", "date", "size", "notes"], "groups": true, "rows": "all",
             "paper": "a4", "width_mm": 210.0, "height_mm": 297.0, "orientation": "portrait",
             "margins": {"top": 12.7, "right": 12.7, "bottom": 12.7, "left": 12.7},
-            "header": {"left": "", "center": "", "right": ""}, "footer": {"left": "", "center": "[Page of Pages]", "right": ""}})
+            "header": {"left": "", "center": "", "right": ""}, "footer": {"left": "", "center": "[Page of Pages]", "right": ""},
+            "details": true, "headerFooter": true, "bodyOnly": false})
     );
     assert_eq!(s.page_setup, Setup::default());
 
@@ -1834,6 +1835,9 @@ fn page_setup_is_kept_and_printed_with() {
         json!({"header": {"left": 7}}),
         json!({"footer": {"under": "x"}}),
         json!({"paper": "a5", "footer": []}),
+        json!({"details": "no"}),
+        json!({"headerFooter": 0}),
+        json!({"bodyOnly": null}),
     ] {
         assert!(matches!(s.run("file.pageSetup", &bad), Err(EngineError::BadParams(_))), "{bad}");
         assert_eq!(s.page_setup, kept, "{bad}");
@@ -2487,7 +2491,11 @@ fn settings_are_kept_between_runs() {
     let pst = dir.join("kept.pst");
     run(&mut session(), "file.export", json!({"path": pst}));
     run(&mut s, "file.open", json!({"path": pst}));
-    run(&mut s, "file.pageSetup", json!({"paper": "letter", "orientation": "landscape", "margins": {"top": 12.5, "left": 30}, "footer": "[Page]"}));
+    run(
+        &mut s,
+        "file.pageSetup",
+        json!({"paper": "letter", "orientation": "landscape", "margins": {"top": 12.5, "left": 30}, "footer": "[Page]", "details": false}),
+    );
     run(&mut s, "view.readingPane", json!({"position": "bottom"}));
     run(&mut s, "view.folderPane", json!({"show": false}));
     assert_eq!(run(&mut s, "file.keepOriginal", Value::Null)["on"], false);
@@ -3036,4 +3044,40 @@ fn a_data_files_rows_get_their_preview_from_the_message_and_sent_mail_its_recipi
     let sent = s.folders[0].iter().find(|f| f.kind == openmailclient_model::FolderKind::Sent).unwrap().id;
     s.select_folder(0, sent).unwrap();
     assert!(!s.rows.is_empty() && s.rows.iter().all(|r| !r.to.is_empty()));
+}
+
+/// A message is printed as its body alone when asked: no name and fields at its head, no
+/// header or footer; and each can be left out by itself.
+#[test]
+fn a_message_is_printed_as_its_body_alone() {
+    use crate::print::{Links, laid_as};
+    let mut s = session();
+    run(&mut s, "mail.select", json!({"folder": "Receipts", "index": 0}));
+    let text = |s: &Session| {
+        let laid = laid_as(s, s.print_style, &s.page_setup, &s.print_list, Links::default()).unwrap();
+        laid.printed.pages.iter().map(|page| page.text()).collect::<Vec<_>>().join(
+            "
+",
+        )
+    };
+    let all = text(&s);
+    assert!(all.contains("From:") && all.contains("Subject:") && all.contains("Riverside Car Park"), "{all}");
+    let now = run(&mut s, "file.pageSetup", json!({"bodyOnly": true}));
+    assert_eq!((&now["details"], &now["headerFooter"], &now["bodyOnly"]), (&json!(false), &json!(false), &json!(true)));
+    let body = text(&s);
+    assert!(!body.contains("From:") && !body.contains("Subject:") && body.contains("Riverside Car Park"), "{body}");
+    // What the footer says is kept, only not printed; it comes back with it.
+    assert_eq!(now["footer"]["center"], "[Page of Pages]");
+    let now = run(&mut s, "file.pageSetup", json!({"headerFooter": true}));
+    assert_eq!((&now["details"], &now["headerFooter"], &now["bodyOnly"]), (&json!(false), &json!(true), &json!(false)));
+    assert!(!text(&s).contains("From:"));
+    // A print asked for once with it does not change the setup.
+    run(&mut s, "file.pageSetup", json!({"reset": true}));
+    let dir = std::env::temp_dir().join(format!("openmailclient-body-only-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("body.pdf");
+    run(&mut s, "file.print", json!({"path": pdf, "bodyOnly": true}));
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    assert!(s.page_setup.details && s.page_setup.edges);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

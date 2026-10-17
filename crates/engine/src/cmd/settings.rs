@@ -58,6 +58,7 @@ pub fn current(s: &Session, ui: Option<&Value>) -> Value {
     // Which rows are printed is of the moment, and is not kept.
     setup["columns"] = json!(s.print_list.columns.iter().map(|f| f.name()).collect::<Vec<_>>());
     setup["groups"] = json!(s.print_list.groups);
+    setup["printer"] = json!(s.printer);
     let files: Vec<String> = s.stores.iter().filter_map(|st| st.path()).take(MAX_DATA_FILES).map(|p| p.display().to_string()).collect();
     let mut out = json!({
         "version": VERSION,
@@ -126,7 +127,7 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
 
     if let Some(setup) = all.get("pageSetup") {
         // Each part by itself: one that makes no sense does not cost the others.
-        for key in ["paper", "orientation", "margins", "header", "footer"] {
+        for key in ["paper", "orientation", "margins", "header", "footer", "details", "headerFooter"] {
             if let Some(v) = setup.get(key) {
                 let part = crate::print::setup_with(&s.page_setup, &json!({ key: v }));
                 took(part.is_ok());
@@ -140,6 +141,14 @@ fn load(s: &mut Session, p: &Value) -> CmdResult {
             took(style.is_ok());
             if let Ok(style) = style {
                 s.print_style = style;
+            }
+        }
+        // The printer chosen last; whether it is still there is seen when printing.
+        if let Some(v) = setup.get("printer") {
+            let name = if v.is_null() { Some(None) } else { v.as_str().and_then(crate::printers::clean_name).map(Some) };
+            took(name.is_some());
+            if let Some(name) = name {
+                s.printer = name;
             }
         }
         for key in ["columns", "groups"] {

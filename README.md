@@ -1,8 +1,8 @@
 # OpenMailClient
 
 ![stage](https://img.shields.io/badge/stage-early%20%C2%B7%20M5%20in%20progress-orange)
-![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-48%20of%20118%20%C2%B7%2040%25-yellow)
-![tests](https://img.shields.io/badge/tests-514%20passing-brightgreen)
+![parity](https://img.shields.io/badge/Outlook%20Classic%20parity-57%20of%20121%20%C2%B7%2047%25-yellow)
+![tests](https://img.shields.io/badge/tests-530%20passing-brightgreen)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)
 ![rust](https://img.shields.io/badge/rust-1.90%2B%20%C2%B7%20edition%202024-b7410e)
 ![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)
@@ -19,6 +19,22 @@ conventions of [`storytold/wordcraft`](https://github.com/storytold/wordcraft).
 ![The OpenMailClient window with the sample mailbox: folder pane, message list, and an RTF receipt with tables, a bordered note, an attachment card and a picture in the reading pane](docs/images/openmailclient-reading-pane.png)
 
 *The sample mailbox (invented content), drawn by `ui_shot`. The receipt is stored only as RTF.*
+
+## Screenshots
+
+Every picture is the app drawing its own invented sample mailbox, headless, with `ui_shot`
+(`cargo run --release -p openmailclient-ui-egui --example ui_shot -- script.jsonl`).
+
+| | |
+|---|---|
+| ![The Inbox in the dark theme: unread, flagged and high-importance mail grouped by date, and a message with a category, a follow-up flag and an attachment in the reading pane](docs/images/openmailclient-dark.png) | ![A reply written in the reading pane, with a warning that the text speaks of an attachment but nothing is attached](docs/images/openmailclient-compose.png) |
+| **Dark theme.** Unread, flagged and important mail, date groups, categories. | **Replying in place.** It notices a mentioned attachment that is missing. |
+| ![The Calendar's week view with appointments, all-day events, reminders and a line at the current time](docs/images/openmailclient-calendar.png) | ![The Calendar's month view in the dark theme](docs/images/openmailclient-calendar-month-dark.png) |
+| **Calendar, week.** All-day events, side-by-side overlaps, the time now. | **Calendar, month,** in the dark theme. |
+| ![The New Appointment dialog over the work week view](docs/images/openmailclient-appointment.png) | ![The Themes dialog: built-in themes, the light and dark sets, a live preview, accent colours and a contrast check](docs/images/openmailclient-themes.png) |
+| **New appointment.** Dialogs take the theme's colours. | **Themes of your own,** each with a light and a dark set and a contrast check. |
+| ![Account Settings with an IMAP account, its servers and how it signs in](docs/images/openmailclient-accounts.png) | ![The Print dialog with a printer, copies and pages, the message body alone on the page, paper and margins](docs/images/openmailclient-print-preview.png) |
+| **Account Settings.** IMAP or POP3 over TLS, servers found from the address. | **Print** on a printer or to PDF, the message body alone if you like. |
 
 ## Progress
 
@@ -51,12 +67,12 @@ read, a reader we can try without driving a window, a printer we may use).
 | Area | Done | | |
 |---|---|---|---|
 | Mail | 36 of 68 | `██████████░░░░░░░░░░` | 52% |
-| File | 10 of 15 | `█████████████░░░░░░░` | 66% |
+| File | 11 of 16 | `█████████████░░░░░░░` | 68% |
 | Message window | 6 of 18 | `██████░░░░░░░░░░░░░░` | 33% |
 | Calendar | 4 of 9 | `█████████░░░░░░░░░░░` | 44% |
 | People | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
 | Tasks | 0 of 5 | `░░░░░░░░░░░░░░░░░░░░` | 0% |
-| **All** | **56 of 120** | `█████████░░░░░░░░░░░` | **46%** |
+| **All** | **57 of 121** | `█████████░░░░░░░░░░░` | **47%** |
 
 ### File formats and protocols
 
@@ -101,7 +117,9 @@ read, a reader we can try without driving a window, a printer we may use).
 - **Printing.** A message (Memo Style) or a folder's list (Table Style) prints to a PDF file, with
   tables, borders and pictures; a print window shows the pages beside the page setup (paper,
   direction, margins, header and footer) and has a zoom; Table Style prints the columns chosen,
-  group headings and the selected row. Nothing is sent to a printer yet.
+  group headings and the selected row. It prints on any printer the system has, with copies and a
+  page range, on a thread of its own, or saves the pages as a PDF file; the name and message
+  details and the page header and footer can each be left off, down to the message body alone.
 - **Import from Outlook.** Every IMAP and POP3 account of the Outlook profiles, with its servers and
   without its password, and the profiles' data files: shown first, then copied without changing
   Outlook's own files, an `.ost` made a `.pst` of our own.
@@ -115,8 +133,8 @@ read, a reader we can try without driving a window, a printer we may use).
   hidden items as a `.pst` Outlook opens. No Outlook-written `.pst` has been saved into yet. A 4K-page file is
   written whole on every save (M3c.2), its larger blocks deflated as Outlook stores them (M3c.7).
 - **Parts of formatted bodies.** Right-to-left text while it is typed; complex scripts
-  on screen beyond what egui shapes; metafiles that copy with a mask or see-through; printing to a
-  printer. Each is scheduled in
+  on screen beyond what egui shapes; metafiles that copy with a mask or see-through; the
+  printer's own settings (trays, two-sided). Each is scheduled in
   [ROADMAP.md](ROADMAP.md#do-later-from-m2).
 - Recurring appointments, `.ics`, CalDAV sync and meetings in the Calendar; People and Tasks.
 - The MCP server, the control channel and the web build.

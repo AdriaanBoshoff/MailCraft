@@ -103,7 +103,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand {
         id: "ui.printPreview",
         label: "Print…",
-        params: r#"{"page": which page to show, from 1 (default 1, or the page that is shown), "zoom": "fit" for the whole page (as it is at first), "in" or "out" for a step, or hundredths of the page's size on paper from 25 to 400, "close": true to close the window}; shows the pages as they will be printed, with the page setup"#,
+        params: r#"{"page": which page to show, from 1 (default 1, or the page that is shown), "zoom": "fit" for the whole page (as it is at first), "in" or "out" for a step, or hundredths of the page's size on paper from 25 to 400, "copies": 1 to 99, "pages": [from, to] from 1 or "all", "print": true to print them on the printer chosen as the Print button does, "close": true to close the window}; shows the pages as they will be printed, with the page setup and the printer"#,
     },
     UiCommand { id: "ui.saveAttachmentDialog", label: "Save Attachment…", params: r#"{"index": attachment number}"# },
     UiCommand { id: "ui.saveAllAttachmentsDialog", label: "Save All Attachments…", params: "" },
@@ -744,8 +744,10 @@ impl MailUi {
                         preview.page = page.unwrap_or(0);
                     }
                     let sized = params.get("zoom").map_or(Ok(()), |zoom| preview.zoom_to(zoom));
+                    let asked = preview.ask(params);
                     self.preview = Some(preview);
                     sized?;
+                    asked?;
                 }
             }
             "ui.saveAttachmentDialog" => {

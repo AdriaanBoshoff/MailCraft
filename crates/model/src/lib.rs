@@ -10,6 +10,7 @@ pub mod codepage;
 pub mod html;
 pub mod memstore;
 pub mod props;
+pub mod recur;
 pub mod rtf;
 pub mod time;
 

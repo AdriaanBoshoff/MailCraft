@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 117 · 2026-10-17
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in (M7) comes after the first release · revision 118 · 2026-10-17
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
-| Catalogued Outlook Classic features with a command | 56 of 120 (46%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 514, all passing |
+| Catalogued Outlook Classic features with a command | 57 of 121 (47%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Tests | 530, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -273,7 +273,8 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | New mail told of on the desktop and with a sound of our own, and Send/Receive on a timer | done: M4.9 |
 | Send/Receive's progress shown in a window of its own (Show Progress) | done: M4.9 |
 | Delay Delivery and Expires After on a message being sent, and a send held until a time | done: M4.9 |
-| Sending pages to a printer; print styles other than Memo and Table | M5, with the calendar's print styles (after M5.10) |
+| Sending pages to a printer | done: M1.10 |
+| A printer's own settings (trays, two-sided, colour) from its driver's dialog; print styles other than Memo and Table | M5, with the calendar's print styles (after M5.10) |
 | Comparing what is printed with what Outlook prints | when its print pane can be driven without touching the shared machine's printer; until then nothing is claimed |
 | Themes saved to a file of their own and read from one, to share them | with M5.4's files, after the Calendar's `.ics` |
 | Signatures, rules and the AutoComplete list brought from Outlook; a POP3 account's own "leave a copy on the server" setting read (kept on until then); Outlook 2010's profile place | with M5.10, after People (the AutoComplete list) and rules |
@@ -2130,3 +2131,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   checks them. Do later: signatures, rules and the AutoComplete list from Outlook; a POP3
   account's own "leave a copy on the server" setting (kept on, the safe way, until then); and
   Outlook 2010's profile place. 7 tests.
+- **2026-10-17** — M1.10: printing on a printer, and the message body alone. `file.printers` lists
+  the system's printers and chooses one (kept in the settings); `file.print` with `"printer"`
+  prints there with copies (1 to 99) and a page range, on a thread of its own seen in Show
+  Progress. Windows: the printers from the registry, the pages drawn at 300 dpi and given to the
+  system's print spooler through Windows PowerShell and .NET (no `unsafe`, no shell, names
+  passed apart from the script); elsewhere CUPS's `lp` takes the PDF file. Only a printer the
+  system lists is printed on. Page setup gains `details` (the owner's name and the message's
+  fields, or a list's folder name) and `headerFooter`, and `bodyOnly` turns both off; what the
+  header and footer say is kept while they are not printed. The Print window has Printer,
+  Copies, Pages and Include, Print and Save as PDF…; `ui.printPreview` takes `copies`, `pages`
+  and `print`. Improved on Outlook: one click for the body alone, with the preview showing it.
+  More screenshots in the README. Tests use a printer that keeps what it is sent; nothing was
+  put on paper (the Windows path was tried with the spooler's preview, which prints nothing).

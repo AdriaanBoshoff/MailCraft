@@ -110,6 +110,11 @@ pub struct Setup {
     pub margins: [f32; 4],
     pub header: [String; 3],
     pub footer: [String; 3],
+    /// The owner's name over a thick line and the message's fields (From, Sent, To…) head the
+    /// first page, or the folder's name heads a list; off, the body or the table alone.
+    pub details: bool,
+    /// The header and footer are printed; off, neither is, though what they say is kept.
+    pub edges: bool,
     /// Names a header or footer may ask for, each with what it gives.
     pub words: Vec<(String, String)>,
 }
@@ -123,6 +128,8 @@ impl From<Paper> for Setup {
             margins: [paper.margin; 4],
             header: Default::default(),
             footer: [String::new(), "[Page of Pages]".into(), String::new()],
+            details: true,
+            edges: true,
             words: Vec::new(),
         }
     }

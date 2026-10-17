@@ -350,7 +350,7 @@ impl<'f, 'l> Flow<'f, 'l> {
         // A third of the sheet is the most an edge keeps free, so that a third is left.
         let [top, right, bottom, left] = setup.margins;
         let margins = [sane(top, 0.0, height / 3.0), sane(right, 0.0, width / 3.0), sane(bottom, 0.0, height / 3.0), sane(left, 0.0, width / 3.0)];
-        let asked = |parts: &[String; 3]| parts.iter().any(|part| !part.trim().is_empty());
+        let asked = |parts: &[String; 3]| setup.edges && parts.iter().any(|part| !part.trim().is_empty());
         let foot = if asked(&setup.footer) { FOOT } else { 0.0 };
         let room = height - margins[0] - margins[2] - foot;
         let head = if asked(&setup.header) && room - HEAD >= MIN_BODY { HEAD } else { 0.0 };

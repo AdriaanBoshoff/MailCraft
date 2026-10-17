@@ -28,6 +28,9 @@
 //!                                            date, time, and the first day of the week
 //!                                            (0 Sunday)
 //! {"now": [2026, 10, 16, 12, 0]}             the time it is, in UTC
+//! {"printers": ["Hall Laser", "Desk Inkjet"]}
+//!                                            printers made up, the first the default, that
+//!                                            keep what they are sent: nothing is printed
 //! ```
 //!
 //! Without a script it opens the sample mailbox and writes `plan/shots/ui_shot.png`.
@@ -102,6 +105,15 @@ fn run() -> Result<(), String> {
             harness.drag_at(at);
             harness.run_steps(1);
             harness.drop_at(at);
+        } else if let Some(names) = step.get("printers").and_then(Value::as_array) {
+            let listed = names
+                .iter()
+                .filter_map(Value::as_str)
+                .enumerate()
+                .map(|(at, name)| openmailclient_engine::printers::Printer { name: name.to_string(), default: at == 0 })
+                .collect();
+            let recorder = openmailclient_engine::printers::Recorder { listed, ..Default::default() };
+            harness.state_mut().session.spooler = std::sync::Arc::new(std::sync::Arc::new(recorder));
         } else if let Some(fake) = step.get("fake") {
             let server = openmailclient_net::fake::Fake::default();
             server.state().own_certificate = fake.get("ownCertificate").and_then(Value::as_str).and_then(openmailclient_net::Fingerprint::parse);

@@ -19,6 +19,7 @@ pub mod outgoing;
 pub mod outlook;
 pub mod pictures;
 pub mod print;
+pub mod printers;
 pub mod remote;
 pub mod sample;
 pub mod search;
@@ -35,6 +36,8 @@ mod tests_calendar;
 mod tests_import;
 #[cfg(test)]
 mod tests_pictures;
+#[cfg(test)]
+mod tests_print;
 #[cfg(test)]
 mod tests_receive;
 #[cfg(test)]
@@ -368,6 +371,12 @@ pub struct Session {
     pub print_style: print::Style,
     /// What Table Style prints of a list: its columns, its headings, which rows.
     pub print_list: print::Listing,
+    /// How printers are found and printed on; none until the host gives this system's.
+    pub spooler: std::sync::Arc<dyn printers::Spooler>,
+    /// The printers as `file.printers` last found them.
+    pub printers: Vec<printers::Printer>,
+    /// The printer chosen to print on; `None` is the system's default.
+    pub printer: Option<String>,
     /// A folder of the program's own where the journal of a data file's unsaved changes is
     /// kept when it cannot be kept beside the file. Set by the host; `None` keeps none there.
     pub journal_dir: Option<std::path::PathBuf>,
@@ -457,6 +466,9 @@ impl Session {
             undo: Vec::new(),
             set_aside: Vec::new(),
             page_setup: openmailclient_layout::Setup::default(),
+            spooler: std::sync::Arc::new(printers::NoPrinters),
+            printers: Vec::new(),
+            printer: None,
             journal_dir: None,
             account_dir: None,
             outlook: None,
@@ -474,6 +486,7 @@ impl Session {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn use_this_system(&mut self) -> Result<(), String> {
         self.vault = std::sync::Arc::new(openmailclient_net::SystemVault);
+        self.spooler = std::sync::Arc::new(printers::System);
         let connector = openmailclient_net::TcpConnector::new().map_err(|e| e.to_string())?;
         self.connector = Some(std::sync::Arc::new(connector));
         Ok(())
