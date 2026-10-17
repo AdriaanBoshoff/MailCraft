@@ -35,6 +35,8 @@ Every picture is the app drawing its own invented sample mailbox, headless, with
 | **New appointment.** Dialogs take the theme's colours. | **Themes of your own,** each with a light and a dark set and a contrast check. |
 | ![Account Settings with an IMAP account, its servers and how it signs in](docs/images/openmailclient-accounts.png) | ![The Print dialog with a printer, copies and pages, the message body alone on the page, paper and margins](docs/images/openmailclient-print-preview.png) |
 | **Account Settings.** IMAP or POP3 over TLS, servers found from the address. | **Print** on a printer or to PDF, the message body alone if you like. |
+| ![Opening an attachment whose name reads as a PDF but is a web page: it can be saved, not opened](docs/images/openmailclient-attachment.png) | |
+| **Opening an attachment.** A file passing for another kind is only saved. | |
 
 ## Progress
 
