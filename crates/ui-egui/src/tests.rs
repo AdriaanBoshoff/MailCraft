@@ -141,7 +141,7 @@ fn hostile_bodies_draw_without_panicking() {
             for width in [0.0, 30.0, 800.0] {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     ui.set_max_width(width);
-                    body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+                    body::draw(ui, &doc, &tokens, &pictures::Pictures::patient(), &faces::Faces::default());
                 });
                 // No renderer here: the font texture updates have nowhere to go.
                 output.textures_delta.clear();
@@ -162,7 +162,7 @@ fn an_rtf_body_is_read_formatted_and_drawn() {
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-        body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default(), &faces::Faces::default());
+        body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::patient(), &faces::Faces::default());
     });
     output.textures_delta.clear();
     ui.execute("ui.bodyFormat", &json!({ "format": "plain" })).unwrap();
@@ -183,7 +183,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
     let doc = ui.body_doc().unwrap();
     let ctx = egui::Context::default();
     install_fonts(&ctx);
-    let mut shown = pictures::Pictures::default();
+    let mut shown = pictures::Pictures::patient();
     shown.load(&ctx, 7, &doc, ui.session.open.as_ref().unwrap(), &Default::default());
     let proof = shown.get("proof-48213@printdepot.example.com").expect("the banner proof is decoded");
     assert_eq!(proof.size, egui::vec2(240.0, 96.0));
@@ -211,7 +211,7 @@ fn a_picture_attached_to_the_message_is_decoded_and_drawn() {
     let html = "<p>a<img src=\"cid:logo@example\"> <img src=\"cid:logo@example\" width=5000><br>b</p><table><tr><td><img src=cid:notes alt=N>\
                 <td><img src=cid:drawing><img src=cid:missing><img src=\"https://x.example/r.png\"></table>";
     let doc = openmailclient_formats::html::parse(html);
-    let mut shown = pictures::Pictures::default();
+    let mut shown = pictures::Pictures::patient();
     shown.load(&ctx, 1, &doc, &item, &Default::default());
     assert!(shown.get("logo@example").is_some());
     assert!(["notes", "drawing", "missing", "https://x.example/r.png"].iter().all(|id| shown.get(id).is_none()));
@@ -295,7 +295,7 @@ fn pictures_written_into_the_body_and_at_its_sides_are_decoded_and_drawn() {
     assert_eq!(doc.written.len(), 2);
     let ctx = egui::Context::default();
     install_fonts(&ctx);
-    let mut shown = pictures::Pictures::default();
+    let mut shown = pictures::Pictures::patient();
     shown.load(&ctx, 3, &doc, &openmailclient_model::Item::new_mail(), &Default::default());
     assert_eq!(shown.written(0).map(|p| p.size), Some(egui::vec2(240.0, 96.0)));
     assert!(shown.written(1).is_none() && shown.written(usize::MAX).is_none());
@@ -319,7 +319,7 @@ fn a_picture_on_a_server_is_shown_once_it_was_downloaded_and_a_frame_till_then()
     let ctx = egui::Context::default();
     install_fonts(&ctx);
     let mut downloaded = openmailclient_engine::remote::Downloaded::default();
-    let mut shown = pictures::Pictures::default();
+    let mut shown = pictures::Pictures::patient();
     let item = openmailclient_model::Item::new_mail();
     shown.load(&ctx, 5, &doc, &item, &downloaded);
     assert!(shown.remote("https://pictures.example.com/a.png").is_none());
@@ -376,7 +376,7 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
     for _ in 0..3 {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             shown.load(ui.ctx(), 1, &doc);
-            body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &shown);
+            body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::patient(), &shown);
         });
         output.textures_delta.clear();
     }
@@ -395,8 +395,8 @@ fn fonts_a_message_names_are_looked_up_and_hostile_names_draw_in_the_readers_own
     for _ in 0..2 {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             shown.load(ui.ctx(), 2, &other);
-            body::draw(ui, &other, &theme::Tokens::named(true), &pictures::Pictures::default(), &shown);
-            body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::default(), &shown);
+            body::draw(ui, &other, &theme::Tokens::named(true), &pictures::Pictures::patient(), &shown);
+            body::draw(ui, &doc, &theme::Tokens::named(true), &pictures::Pictures::patient(), &shown);
         });
         output.textures_delta.clear();
     }
@@ -412,7 +412,7 @@ fn drawn_height(html: &str, width: f32) -> f32 {
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         ui.set_max_width(width);
         let top = ui.cursor().top();
-        body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+        body::draw(ui, &doc, &tokens, &pictures::Pictures::patient(), &faces::Faces::default());
         height = ui.cursor().top() - top;
     });
     output.textures_delta.clear();
@@ -482,7 +482,7 @@ fn hostile_rtf_bodies_draw_without_panicking() {
         let doc = openmailclient_formats::rtf::parse(rtf.as_bytes());
         let ctx = egui::Context::default();
         install_fonts(&ctx);
-        let mut shown = pictures::Pictures::default();
+        let mut shown = pictures::Pictures::patient();
         shown.load(&ctx, 1, &doc, &openmailclient_model::Item::new_mail(), &Default::default());
         assert!(shown.written(0).is_none_or(|p| p.size.x > 0.0));
         for width in [0.0, 30.0, 800.0] {
@@ -506,7 +506,7 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
         let mut picked = None;
         let input = egui::RawInput { events, ..egui::RawInput::default() };
         let mut output = ctx.run_ui(input, |ui| {
-            picked = body::draw(ui, doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &faces::Faces::default()).file;
+            picked = body::draw(ui, doc, &theme::Tokens::named(false), &pictures::Pictures::patient(), &faces::Faces::default()).file;
         });
         output.textures_delta.clear();
         picked
@@ -551,7 +551,7 @@ fn an_attachment_in_the_text_is_a_card_that_asks_to_be_saved() {
             install_fonts(&ctx);
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ui.set_max_width(width);
-                body::draw(ui, &hostile, &theme::Tokens::named(dark), &pictures::Pictures::default(), &faces::Faces::default());
+                body::draw(ui, &hostile, &theme::Tokens::named(dark), &pictures::Pictures::patient(), &faces::Faces::default());
             });
             output.textures_delta.clear();
         }
@@ -601,7 +601,7 @@ fn a_click_on_a_link_asks_and_only_the_answer_opens_it() {
         let mut picked = None;
         let input = egui::RawInput { events, ..egui::RawInput::default() };
         let mut output = ctx.run_ui(input, |ui| {
-            picked = body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::default(), &faces::Faces::default()).link;
+            picked = body::draw(ui, &doc, &theme::Tokens::named(false), &pictures::Pictures::patient(), &faces::Faces::default()).link;
         });
         output.textures_delta.clear();
         picked
@@ -879,7 +879,7 @@ fn hostile_right_to_left_bodies_draw_without_panicking() {
         for width in [0.0, 30.0, 800.0] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ui.set_max_width(width);
-                body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+                body::draw(ui, &doc, &tokens, &pictures::Pictures::patient(), &faces::Faces::default());
             });
             output.textures_delta.clear();
         }
@@ -928,7 +928,7 @@ fn text_at_the_right_of_a_narrow_cell_stays_inside_it() {
     install_fonts(&ctx);
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         ui.set_max_width(600.0);
-        body::draw(ui, &doc, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+        body::draw(ui, &doc, &tokens, &pictures::Pictures::patient(), &faces::Faces::default());
     });
     // Where each text was drawn, from its left to its right.
     let mut spans: Vec<(String, f32, f32)> = Vec::new();
@@ -1421,7 +1421,7 @@ fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
     let doc = openmailclient_formats::html::parse("<p><img src=cid:moves> <img src=cid:still></p>");
     let ctx = egui::Context::default();
     install_fonts(&ctx);
-    let mut shown = pictures::Pictures::default();
+    let mut shown = pictures::Pictures::patient();
     shown.load(&ctx, 1, &doc, &item, &Default::default());
     assert!(shown.get("still").unwrap().film.is_none());
     let moves = shown.get("moves").unwrap();
@@ -1471,7 +1471,7 @@ fn a_picture_that_moves_is_played_frame_by_frame_or_stands_still() {
             let mut a = openmailclient_model::Attachment::file("m.gif", "image/gif", data);
             a.props.set_str(pid::ATTACH_CONTENT_ID, "moves");
             item.attachments.push(a);
-            let mut shown = pictures::Pictures::default();
+            let mut shown = pictures::Pictures::patient();
             shown.load(&ctx, 2, &doc, &item, &Default::default());
             if let Some(reel) = shown.get("moves").and_then(|s| s.film.as_ref()) {
                 assert!(reel.frames() >= 2 && reel.at(0.0).0 == 0);
@@ -1581,7 +1581,7 @@ fn a_dark_picture_seen_through_is_given_paper_behind_it_on_the_dark_pane() {
     install_fonts(&ctx);
     let backed = |html: &str, dark: bool| {
         let doc = openmailclient_formats::html::parse(html);
-        let mut shown = pictures::Pictures::default();
+        let mut shown = pictures::Pictures::patient();
         shown.load(&ctx, 1, &doc, &item, &Default::default());
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_max_width(500.0);
@@ -1665,7 +1665,7 @@ fn a_body_with_a_colour_behind_it_is_read_on_that_colour() {
         let tokens = theme::Tokens::named(named);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.set_max_width(400.0);
-            body::draw(ui, &dark, &tokens, &pictures::Pictures::default(), &faces::Faces::default());
+            body::draw(ui, &dark, &tokens, &pictures::Pictures::patient(), &faces::Faces::default());
         });
         output.textures_delta.clear();
         let mut seen = Vec::new();
@@ -2067,4 +2067,44 @@ fn a_held_message_says_when_it_goes_and_an_expired_one_is_struck_through() {
         }
         frame(&mut ui, &ctx, Vec::new(), None);
     }
+}
+
+#[test]
+fn pictures_are_decoded_off_the_thread_that_draws_the_window() {
+    use openmailclient_model::pid;
+    let ctx = egui::Context::default();
+    let mut item = openmailclient_model::Item::new_mail();
+    let mut a = openmailclient_model::Attachment::file("a.png", "image/png", sample_picture());
+    a.props.set_str(pid::ATTACH_CONTENT_ID, "logo");
+    item.attachments.push(a);
+    let doc = openmailclient_formats::html::parse("<p><img src=cid:logo width=60 height=40></p>");
+
+    // Drawing does not wait: the picture is not there yet, and its place is a frame.
+    let mut shown = pictures::Pictures::hasty();
+    shown.load(&ctx, 1, &doc, &item, &Default::default());
+    assert!(shown.get("logo").is_none());
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        body::draw(ui, &doc, &theme::Tokens::named(false), &shown, &faces::Faces::default());
+    });
+    output.textures_delta.clear();
+    // It comes once decoded, and only once.
+    let mut tries = 0;
+    while shown.get("logo").is_none() {
+        tries += 1;
+        assert!(tries < 400, "never decoded");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        shown.load(&ctx, 1, &doc, &item, &Default::default());
+    }
+    let size = shown.get("logo").map(|p| p.size);
+    shown.load(&ctx, 1, &doc, &item, &Default::default());
+    assert_eq!(shown.get("logo").map(|p| p.size), size);
+
+    // Another message read before the last one's pictures came: none of them is shown there.
+    let mut shown = pictures::Pictures::hasty();
+    shown.load(&ctx, 1, &doc, &item, &Default::default());
+    let other = openmailclient_formats::html::parse("<p><img src=cid:logo></p>");
+    shown.load(&ctx, 2, &other, &openmailclient_model::Item::new_mail(), &Default::default());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    shown.load(&ctx, 2, &other, &openmailclient_model::Item::new_mail(), &Default::default());
+    assert!(shown.get("logo").is_none());
 }

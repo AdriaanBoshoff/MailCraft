@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); third-party sign-in is the last milestone (M7) · revision 110 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); third-party sign-in is the last milestone (M7) · revision 111 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 48 of 118 (40%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 471, all passing |
+| Tests | 472, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | none |
@@ -147,7 +147,8 @@
 94. Done: IMAP folders renamed, moved and deleted followed both ways: a folder renamed or moved on the server is renamed or moved here, known again by the server's id for it (OBJECTID, RFC 8474) or its UIDVALIDITY, without its mail taken down twice; one renamed, moved or put with the deleted mail here is renamed or moved there; one deleted here for good is deleted there; one the server no longer has is kept here with the deleted mail; a folder made here is made there (M4.12, `imap_sync::follow`, `Imap::rename`, `Imap::delete`, `Imap::status`, `Received::folders_gone`).
 95. Done: Drafts on the server: a draft saved in an IMAP account goes into the account's own Drafts and onto the server's Drafts folder marked `\Draft`; saved again or sent, it takes its own place there and goes from Drafts on both sides; a draft written elsewhere comes here as a draft and opens to be written on with a double-click or the reading pane's bar; Save keeps the message open, as Outlook does (M4.12, `compose.editDraft`, `Draft::filed`, `ui.openSelected`).
 96. Done: The account's data file read apart: the first receive of a run reads each message's place on the server on the receive's own thread, from the mailbox as it stands (`Store::apart`), not on the window's; what it learns is remembered when the receive ends (M4.12, `imap_sync::Gather`).
-97. Next: M4.13: pictures decoded off the thread that draws the window.
+97. Done: Pictures decoded off the thread that draws the window: a message's pictures are decoded on a thread of their own; drawing waits only a moment for them, and a picture not ready yet stands as an empty frame until it is (M4.13, `pictures::Pictures`).
+98. Next: M4.14: an account's servers found from its address (RFC 6186 records, the provider's published settings).
 
 ## Do later (from M2)
 
@@ -227,7 +228,7 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | ~~A zoom in the print preview~~ | done: M3b.22 |
 | ~~SVG, WebP and TIFF pictures; GIF animation~~ | done: M3b.23 |
 | SVG drawings in the web build (one thread, a small stack); bitmaps inside a drawing, under the limits of other pictures; `.svgz` | M6, with the web app |
-| Pictures decoded off the thread that draws the window | M4, with pictures loaded from a server on command |
+| Pictures decoded off the thread that draws the window | done: M4.13 |
 | ~~A backing for see-through pictures on the dark pane; several pictures at the sides of one paragraph~~ | done: M3b.24 |
 | On paper, a table or a bordered block beside a picture at the side (in the window it stands beside it) | M5, with the other print styles |
 | ~~Boxes inside one another; a fill behind a table in a block and behind the whole body~~ | done: M3b.25 |
@@ -1966,3 +1967,16 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   opened, say), the account is not kept in step this time and says so, rather than being taken for
   a file without those messages; nothing goes from the server for it.
   2 tests.
+- **2026-10-17** - M4.13: pictures decoded off the thread that draws the window.
+  A message's pictures (its own attachments, pictures written into the body, and those downloaded
+  from a server on command) were decoded on the thread that draws the window, so a large or slow
+  one held it. They are now decoded on a thread of their own and made into textures there. Drawing
+  waits a moment (20 ms) for them, so a small picture is there in the first frame as before, and
+  a large one stands as an empty frame until it is ready; the window is asked to draw again as
+  each comes. A thread still decoding for a message no longer read stops when no one is
+  listening, and none of its pictures is shown on another message. The limits on how many
+  pictures and how much memory a message may take are kept as before, counted again as each
+  picture arrives. Where there are no threads (the web build) they are decoded where they are.
+  Headless window pictures wait for every picture (`MailUi::wait_for_pictures`).
+  Better than Outlook: a picture never holds the window, however large or damaged.
+  1 test.

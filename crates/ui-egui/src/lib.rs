@@ -860,6 +860,12 @@ impl MailUi {
         (!doc.is_empty()).then_some(doc)
     }
 
+    /// Whether drawing waits until every picture of the message read is decoded, as a picture
+    /// of the window taken without a screen wants; else they come as they are ready.
+    pub fn wait_for_pictures(&mut self, all: bool) {
+        self.pictures.wait_for_all(all);
+    }
+
     pub fn plain_bodies(&self) -> bool {
         self.plain_bodies
     }

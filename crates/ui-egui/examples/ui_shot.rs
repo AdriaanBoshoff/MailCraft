@@ -70,6 +70,8 @@ fn run() -> Result<(), String> {
         .with_pixels_per_point(scale)
         .wgpu()
         .build_ui_state(|ui, app: &mut MailUi| app.ui(ui), MailUi::new(Session::new()));
+    // A picture is taken with every picture of the message in it.
+    harness.state_mut().wait_for_pictures(true);
     harness.run_steps(3);
     for step in &steps {
         if step.get("sample").and_then(Value::as_bool) == Some(true) {

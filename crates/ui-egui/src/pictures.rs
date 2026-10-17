@@ -5,9 +5,13 @@
 //! nothing is fetched, written to disk or handed to another program. A picture is hostile input
 //! like the rest of the message, so its file size, its dimensions and the memory it may take are
 //! capped before anything is decoded (`openmailclient_engine::pictures`); one that cannot be read
-//! stays a labelled placeholder.
+//! stays a labelled placeholder. Pictures are decoded on a thread of their own, never on the one
+//! that draws the window.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
+use std::time::{Duration, Instant};
 
 use openmailclient_engine::remote::Downloaded;
 
@@ -106,23 +110,91 @@ impl Shown {
     }
 }
 
-/// The decoded pictures of the message being read, by content id.
-#[derive(Default)]
+/// How long drawing the window waits for pictures being decoded before it goes on without them:
+/// a small picture is there in the first frame, a large one comes when it is ready.
+const PATIENCE: Duration = Duration::from_millis(20);
+
+/// Where a picture goes among those of the message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Slot {
+    Id(String),
+    Written(usize),
+    Address(String),
+}
+
+/// A picture to be decoded: where it goes, what it is called and its file.
+struct Job {
+    slot: Slot,
+    name: String,
+    data: Arc<[u8]>,
+}
+
+/// What decoding a picture came to, made into textures on the decoding thread.
+struct Made {
+    texture: TextureHandle,
+    size: Vec2,
+    /// The frames of one that moves, with how many times it is played.
+    film: Option<(Vec<(TextureHandle, u64)>, Option<u32>)>,
+    ink: Option<f32>,
+    /// The memory its pixels take.
+    bytes: usize,
+}
+
+type Done = (Slot, Option<Made>);
+
+/// The decoded pictures of the message being read, by content id. Pictures are decoded on a
+/// thread of their own, so that a large or slow one never holds the window; until one is ready
+/// its place is drawn as an empty frame.
 pub(crate) struct Pictures {
     key: u64,
     by_id: HashMap<String, Option<Shown>>,
-    /// Pictures written into the body, in the document's order.
-    written: Vec<Option<Shown>>,
+    /// Pictures written into the body, by their place in the document's order.
+    written: HashMap<usize, Option<Shown>>,
     /// Pictures on a server the reader had downloaded, by the address the message gave.
     by_address: HashMap<String, Option<Shown>>,
+    /// Pictures being decoded, and what is heard from the threads decoding them.
+    pending: HashSet<Slot>,
+    batches: Vec<Receiver<Done>>,
     /// The session's downloads as they were when these were looked for.
     generation: u64,
     kept_bytes: usize,
     /// Whether pictures that move are played; else each stands on its first frame.
     pub moving: bool,
+    /// How long `load` waits for pictures being decoded; `None` until all are.
+    patience: Option<Duration>,
+}
+
+impl Default for Pictures {
+    fn default() -> Self {
+        Pictures {
+            key: 0,
+            by_id: HashMap::new(),
+            written: HashMap::new(),
+            by_address: HashMap::new(),
+            pending: HashSet::new(),
+            batches: Vec::new(),
+            generation: 0,
+            kept_bytes: 0,
+            moving: false,
+            patience: Some(PATIENCE),
+        }
+    }
 }
 
 impl Pictures {
+    /// Pictures that `load` waits for until all are decoded, as a picture of the window taken
+    /// without a screen wants them.
+    #[cfg(test)]
+    pub(crate) fn patient() -> Self {
+        Pictures { patience: None, ..Pictures::default() }
+    }
+
+    /// Pictures that `load` never waits for.
+    #[cfg(test)]
+    pub(crate) fn hasty() -> Self {
+        Pictures { patience: Some(Duration::ZERO), ..Pictures::default() }
+    }
+
     pub(crate) fn get(&self, content_id: &str) -> Option<&Shown> {
         self.by_id.get(content_id)?.as_ref()
     }
@@ -134,78 +206,221 @@ impl Pictures {
 
     /// A picture written into the body, by its place in the document's list.
     pub(crate) fn written(&self, index: usize) -> Option<&Shown> {
-        self.written.get(index)?.as_ref()
+        self.written.get(&index)?.as_ref()
+    }
+
+    /// Whether `load` waits until every picture is decoded, or only a moment.
+    pub(crate) fn wait_for_all(&mut self, all: bool) {
+        self.patience = if all { None } else { Some(PATIENCE) };
+    }
+
+    fn count(&self) -> usize {
+        self.by_id.len() + self.written.len() + self.by_address.len() + self.pending.len()
+    }
+
+    fn known(&self, slot: &Slot) -> bool {
+        self.pending.contains(slot)
+            || match slot {
+                Slot::Id(id) => self.by_id.contains_key(id),
+                Slot::Written(n) => self.written.contains_key(n),
+                Slot::Address(a) => self.by_address.contains_key(a),
+            }
+    }
+
+    fn put(&mut self, slot: Slot, shown: Option<Shown>) {
+        match slot {
+            Slot::Id(id) => {
+                self.by_id.insert(id, shown);
+            }
+            Slot::Written(n) => {
+                self.written.insert(n, shown);
+            }
+            Slot::Address(a) => {
+                self.by_address.insert(a, shown);
+            }
+        }
     }
 
     /// Decode the pictures `doc` refers to, once per message. `key` names the message's body.
     pub(crate) fn load(&mut self, ctx: &Context, key: u64, doc: &Doc, item: &Item, downloaded: &Downloaded) {
         if self.key != key {
-            *self = Pictures { key, ..Pictures::default() };
+            // What is still being decoded for the last message is let go: its threads stop
+            // when they find no one listening.
+            *self = Pictures { key, moving: self.moving, patience: self.patience, ..Pictures::default() };
         }
+        self.take(ctx);
+        let mut jobs = Vec::new();
+        let room = |this: &Self, jobs: &Vec<Job>| this.count() + jobs.len() < MAX_PICTURES && this.kept_bytes < MAX_KEPT_BYTES;
         if self.generation != downloaded.generation {
             self.generation = downloaded.generation;
             self.by_address.retain(|_, shown| shown.is_some());
             for address in openmailclient_engine::remote::addresses(doc) {
-                if self.by_address.contains_key(&address) {
+                let slot = Slot::Address(address);
+                if self.known(&slot) || jobs.iter().any(|j: &Job| j.slot == slot) {
                     continue;
                 }
-                let Some(data) = downloaded.get(&address) else { continue };
-                let count = self.by_id.len() + self.written.len() + self.by_address.len();
-                let within = count < MAX_PICTURES && self.kept_bytes < MAX_KEPT_BYTES;
-                let shown = if within { self.show(ctx, format!("remote-{count}"), data) } else { None };
-                self.by_address.insert(address, shown);
+                let Slot::Address(address) = &slot else { continue };
+                let Some(data) = downloaded.get(address) else { continue };
+                if room(self, &jobs) {
+                    jobs.push(Job { name: format!("remote-{}", self.count() + jobs.len()), data: Arc::from(&data[..]), slot });
+                } else {
+                    self.put(slot, None);
+                }
             }
         }
         let mut wanted = Vec::new();
         content_ids(&doc.blocks, &mut wanted, 0);
         for id in wanted {
-            if self.by_id.len() >= MAX_PICTURES || self.by_id.contains_key(id) {
+            let slot = Slot::Id(id.to_string());
+            if self.known(&slot) || jobs.iter().any(|j| j.slot == slot) {
                 continue;
             }
+            if self.by_id.len() + jobs.len() >= MAX_PICTURES {
+                break;
+            }
             let attachment = openmailclient_engine::pictures::attached(item, id);
-            let data = attachment.filter(|_| self.kept_bytes < MAX_KEPT_BYTES).map(|a| a.data.as_slice());
-            let shown = data.and_then(|data| self.show(ctx, format!("picture-{}", self.by_id.len()), data));
-            self.by_id.insert(id.to_string(), shown);
+            match attachment.filter(|_| room(self, &jobs)) {
+                Some(a) => jobs.push(Job { name: format!("picture-{}", self.count() + jobs.len()), data: Arc::from(a.data.as_slice()), slot }),
+                None => self.put(slot, None),
+            }
         }
-        for data in doc.written.iter().skip(self.written.len()) {
-            let count = self.by_id.len() + self.written.len();
-            let within = count < MAX_PICTURES && self.kept_bytes < MAX_KEPT_BYTES;
-            let shown = if within { self.show(ctx, format!("written-{count}"), data) } else { None };
-            self.written.push(shown);
+        for (n, data) in doc.written.iter().enumerate() {
+            let slot = Slot::Written(n);
+            if self.known(&slot) {
+                continue;
+            }
+            if room(self, &jobs) {
+                jobs.push(Job { name: format!("written-{}", self.count() + jobs.len()), data: data.clone(), slot });
+            } else {
+                self.put(slot, None);
+            }
+        }
+        if !jobs.is_empty() {
+            self.begin(ctx, jobs);
+        }
+        self.wait(ctx);
+    }
+
+    /// Decode `jobs` on a thread of their own; where there are no threads (the web build), or
+    /// one cannot be had, here.
+    fn begin(&mut self, ctx: &Context, jobs: Vec<Job>) {
+        let room = MAX_KEPT_BYTES.saturating_sub(self.kept_bytes);
+        self.pending.extend(jobs.iter().map(|j| j.slot.clone()));
+        let (tx, rx) = channel();
+        self.batches.push(rx);
+        let theirs = ctx.clone();
+        let work = move || {
+            for job in jobs {
+                let made = make(&theirs, &job.name, &job.data, room);
+                if tx.send((job.slot, made)).is_err() {
+                    break;
+                }
+                theirs.request_repaint();
+            }
+        };
+        if cfg!(target_arch = "wasm32") {
+            work();
+        } else {
+            // Should no thread be had, the work goes with it, and what was waiting is drawn
+            // as not read (`take`).
+            let _ = std::thread::Builder::new().name("pictures".into()).spawn(work);
         }
     }
 
-    /// A picture file as textures: every frame of one that moves, while there is room to keep
-    /// them, else the picture standing still.
-    fn show(&mut self, ctx: &Context, name: String, data: &[u8]) -> Option<Shown> {
-        let room = MAX_KEPT_BYTES.saturating_sub(self.kept_bytes);
-        let film = openmailclient_engine::pictures::film(data)
-            .filter(|film| film.frames.len().saturating_mul(film.frames.first().map_or(0, |f| f.rgba.len())) <= room);
-        if let Some(film) = film {
-            let kept = [usize::try_from(film.width).ok()?, usize::try_from(film.height).ok()?];
-            let mut ends = 0u64;
-            let mut frames = Vec::with_capacity(film.frames.len());
-            for (n, frame) in film.frames.iter().enumerate() {
-                if frame.rgba.len() != kept[0].checked_mul(kept[1])?.checked_mul(4)? {
-                    return None;
+    /// Take in the pictures decoded since last asked. A thread that ended without telling of
+    /// all it had leaves those as not read.
+    fn take(&mut self, ctx: &Context) {
+        let mut done = Vec::new();
+        self.batches.retain(|rx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(d) => done.push(d),
+                    Err(TryRecvError::Empty) => break true,
+                    Err(TryRecvError::Disconnected) => break false,
                 }
-                self.kept_bytes = self.kept_bytes.saturating_add(frame.rgba.len());
-                ends = ends.saturating_add(u64::from(frame.millis));
-                let image = ColorImage::from_rgba_unmultiplied(kept, &frame.rgba);
-                frames.push((ctx.load_texture(format!("{name}-{n}"), image, TextureOptions::LINEAR), ends));
             }
-            let texture = frames.first()?.0.clone();
-            let size = vec2(f32::from(film.natural.0), f32::from(film.natural.1));
-            let since = ctx.input(|i| i.time);
-            let ink = film.frames.first().and_then(|frame| ink(&frame.rgba));
-            return Some(Shown { texture, size, film: Some(Reel { frames, loops: film.loops, since }), ink });
+        });
+        for d in done {
+            self.arrive(ctx, d);
         }
-        let pixels = openmailclient_engine::pictures::decode(data)?;
-        let ink = ink(&pixels.rgba);
-        let (image, size) = image_of(&pixels)?;
-        self.kept_bytes = self.kept_bytes.saturating_add(image.pixels.len().saturating_mul(4));
-        Some(Shown { texture: ctx.load_texture(name, image, TextureOptions::LINEAR), size, film: None, ink })
+        if self.batches.is_empty() && !self.pending.is_empty() {
+            for slot in std::mem::take(&mut self.pending) {
+                self.put(slot, None);
+            }
+        }
     }
+
+    fn arrive(&mut self, ctx: &Context, (slot, made): Done) {
+        if !self.pending.remove(&slot) {
+            return;
+        }
+        let shown = made.filter(|m| self.kept_bytes.saturating_add(m.bytes) <= MAX_KEPT_BYTES).map(|m| {
+            self.kept_bytes = self.kept_bytes.saturating_add(m.bytes);
+            let since = ctx.input(|i| i.time);
+            Shown { texture: m.texture, size: m.size, film: m.film.map(|(frames, loops)| Reel { frames, loops, since }), ink: m.ink }
+        });
+        self.put(slot, shown);
+    }
+
+    /// Wait for what is being decoded, as long as `patience` says.
+    fn wait(&mut self, ctx: &Context) {
+        if self.pending.is_empty() || cfg!(target_arch = "wasm32") {
+            return;
+        }
+        let until = self.patience.map(|p| Instant::now() + p);
+        while !self.pending.is_empty() {
+            let Some(rx) = self.batches.first() else { break };
+            let got = match until {
+                Some(until) => {
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    rx.recv_timeout(left).map_err(|e| e == RecvTimeoutError::Disconnected)
+                }
+                None => rx.recv().map_err(|_| true),
+            };
+            match got {
+                Ok(d) => self.arrive(ctx, d),
+                // That thread is done; on to the next, or what it left is not read.
+                Err(true) => {
+                    self.batches.remove(0);
+                    self.take(ctx);
+                }
+                Err(false) => break,
+            }
+        }
+    }
+}
+
+/// A picture file as textures: every frame of one that moves, while there is `room` to keep
+/// them, else the picture standing still.
+fn make(ctx: &Context, name: &str, data: &[u8], room: usize) -> Option<Made> {
+    let film = openmailclient_engine::pictures::film(data)
+        .filter(|film| film.frames.len().saturating_mul(film.frames.first().map_or(0, |f| f.rgba.len())) <= room);
+    if let Some(film) = film {
+        let kept = [usize::try_from(film.width).ok()?, usize::try_from(film.height).ok()?];
+        let (mut ends, mut bytes) = (0u64, 0usize);
+        let mut frames = Vec::with_capacity(film.frames.len());
+        for (n, frame) in film.frames.iter().enumerate() {
+            if frame.rgba.len() != kept[0].checked_mul(kept[1])?.checked_mul(4)? {
+                return None;
+            }
+            bytes = bytes.saturating_add(frame.rgba.len());
+            ends = ends.saturating_add(u64::from(frame.millis));
+            let image = ColorImage::from_rgba_unmultiplied(kept, &frame.rgba);
+            frames.push((ctx.load_texture(format!("{name}-{n}"), image, TextureOptions::LINEAR), ends));
+        }
+        let texture = frames.first()?.0.clone();
+        let size = vec2(f32::from(film.natural.0), f32::from(film.natural.1));
+        let ink = film.frames.first().and_then(|frame| ink(&frame.rgba));
+        return Some(Made { texture, size, film: Some((frames, film.loops)), ink, bytes });
+    }
+    let pixels = openmailclient_engine::pictures::decode(data)?;
+    let ink = ink(&pixels.rgba);
+    let (image, size) = image_of(&pixels)?;
+    let bytes = image.pixels.len().saturating_mul(4);
+    Some(Made { texture: ctx.load_texture(name, image, TextureOptions::LINEAR), size, film: None, ink, bytes })
 }
 
 fn content_ids<'a>(blocks: &'a [Block], out: &mut Vec<&'a str>, depth: usize) {
