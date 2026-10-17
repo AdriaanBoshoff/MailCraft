@@ -62,11 +62,14 @@ impl MailUi {
     pub(crate) fn body(&mut self, ui: &mut Ui, rect: Rect) {
         let t = self.tokens.clone();
         let rest = rect;
+        if self.session.module == Module::Calendar {
+            self.calendar_body(ui, rest);
+            return;
+        }
         if self.session.module != Module::Mail {
             let p = ui.painter_at(rest);
             p.rect_filled(rest, 0.0, t.surface);
             let (icon, name) = match self.session.module {
-                Module::Calendar => (Icon::Calendar, "Calendar"),
                 Module::People => (Icon::People, "People"),
                 _ => (Icon::Tasks, "Tasks"),
             };

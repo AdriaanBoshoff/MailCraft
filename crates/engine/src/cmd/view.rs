@@ -104,6 +104,9 @@ pub(super) fn commands() -> Vec<CommandSpec> {
 fn module(s: &mut Session, p: &Value) -> CmdResult {
     let name = need_str(p, "module")?;
     s.module = Module::parse(name).ok_or_else(|| EngineError::BadParams(format!("\"{name}\" is not mail, calendar, people or tasks")))?;
+    if s.module == Module::Calendar {
+        s.reload_calendar()?;
+    }
     ok()
 }
 

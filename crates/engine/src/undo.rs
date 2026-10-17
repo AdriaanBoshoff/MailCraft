@@ -102,6 +102,9 @@ impl Session {
         } else {
             self.reload_rows()?;
         }
+        if self.module == crate::Module::Calendar {
+            self.reload_calendar()?;
+        }
         // Shown as it is: looking at it again does not mark it read.
         let st = self.stores.get_mut(at_store).ok_or(StoreError::NoFolder)?;
         let item = st.load(at_folder, ItemId(at_id))?;

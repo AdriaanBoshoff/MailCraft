@@ -9,6 +9,7 @@
 mod accounts;
 mod alert;
 mod body;
+mod calendar;
 mod faces;
 pub mod icons;
 mod line_edit;
@@ -145,6 +146,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     UiCommand { id: "ui.theme", label: "Dark Mode", params: r#"{"theme": "light" | "dark"}; none switches"# },
     UiCommand { id: "ui.bodyFormat", label: "Read as Plain Text", params: r#"{"format": "formatted" | "plain"}; none switches"# },
     UiCommand { id: "ui.about", label: "About OpenMailClient", params: "" },
+    UiCommand { id: "ui.appointment", label: "New Appointment", params: r#"{"id": an appointment's id to open it; none for a new one}"# },
     UiCommand { id: "ui.quit", label: "Exit", params: "" },
 ];
 
@@ -279,6 +281,12 @@ pub struct MailUi {
     /// What is typed in the compose window's Delivery menu: a time to go, and to expire.
     pub(crate) go_at_text: String,
     pub(crate) expire_at_text: String,
+    /// The month the Calendar's date navigator shows, when moved off the chosen day's.
+    pub(crate) cal_nav: Option<(i64, u32)>,
+    /// The day views are to scroll to the start of the working day.
+    pub(crate) cal_scroll: bool,
+    /// The appointment window, open.
+    pub(crate) appointment: Option<calendar::AppointmentForm>,
 }
 
 pub(crate) fn font(size: f32) -> FontId {
@@ -484,6 +492,9 @@ impl MailUi {
             progress_open: false,
             go_at_text: String::new(),
             expire_at_text: String::new(),
+            cal_nav: None,
+            cal_scroll: true,
+            appointment: None,
         }
     }
 
@@ -645,6 +656,9 @@ impl MailUi {
         if self.session.selected != before {
             self.scroll_to_selected = true;
         }
+        if id == "calendar.view" || id == "calendar.today" || id == "nav.module" {
+            self.cal_scroll = true;
+        }
         if id.starts_with("search.") || id.starts_with("folder.") {
             self.search = self.session.search.clone();
         }
@@ -733,6 +747,16 @@ impl MailUi {
                     self.collapsed.insert(key);
                 }
             }
+            "ui.appointment" => match number("id") {
+                Some(id) => {
+                    if !self.session.calendar.items.iter().any(|(i, _)| *i == id) {
+                        return Err("That appointment is not among those shown".to_string());
+                    }
+                    self.open_appointment(id);
+                }
+                None if self.session.is_enabled("calendar.new") => self.new_appointment(),
+                None => return Err("No data file open has a calendar that can be written".to_string()),
+            },
             "ui.showProgress" => {
                 self.progress_open = match params.get("open") {
                     None | Some(Value::Null) => !self.progress_open,
@@ -937,6 +961,7 @@ impl MailUi {
         self.preview_window(&ctx);
         self.progress_window(&ctx);
         self.alert_window(&ctx);
+        self.appointment_window(&ctx);
 
         for (id, params) in std::mem::take(&mut self.actions) {
             if let Err(e) = self.execute(&id, &params) {
@@ -951,6 +976,7 @@ impl MailUi {
             || self.attachment_ask.is_some()
             || self.preview.is_some()
             || self.account_window.is_some()
+            || self.appointment.is_some()
         {
             return;
         }
@@ -966,8 +992,40 @@ impl MailUi {
         if hit(ctrl_shift, Key::E) {
             run.push(("ui.prompt", json!({ "command": "folder.new" })));
         }
+        if hit(ctrl_shift, Key::A) {
+            run.push(("ui.appointment", Value::Null));
+        }
+        let calendar = self.session.module == openmailclient_engine::Module::Calendar;
+        if calendar {
+            // The Calendar's own keys: views on Ctrl+Alt+1 to 4, a new appointment on Ctrl+N,
+            // the days before and after on Alt+Up and Alt+Down.
+            let ctrl_alt = Modifiers::COMMAND | Modifiers::ALT;
+            for (key, view) in [(Key::Num1, "day"), (Key::Num2, "workWeek"), (Key::Num3, "week"), (Key::Num4, "month")] {
+                if hit(ctrl_alt, key) {
+                    run.push(("calendar.view", json!({ "view": view })));
+                }
+            }
+            if hit(ctrl, Key::N) {
+                run.push(("ui.appointment", Value::Null));
+            }
+            if hit(Modifiers::ALT, Key::ArrowDown) || hit(Modifiers::ALT, Key::ArrowRight) {
+                run.push(("calendar.next", Value::Null));
+            }
+            if hit(Modifiers::ALT, Key::ArrowUp) || hit(Modifiers::ALT, Key::ArrowLeft) {
+                run.push(("calendar.previous", Value::Null));
+            }
+            if !typing && hit(Modifiers::NONE, Key::Delete) {
+                run.push(("calendar.delete", Value::Null));
+            }
+            if !typing
+                && let Some(id) = self.session.calendar.selected
+                && hit(Modifiers::NONE, Key::Enter)
+            {
+                run.push(("ui.appointment", json!({ "id": id })));
+            }
+        }
         for (key, id) in [
-            (Key::N, "mail.new"),
+            (Key::N, if calendar { "" } else { "mail.new" }),
             (Key::R, "mail.reply"),
             (Key::F, "mail.forward"),
             (Key::O, "ui.openDialog"),
@@ -976,7 +1034,7 @@ impl MailUi {
             (Key::D, "mail.delete"),
             (Key::S, "compose.saveDraft"),
         ] {
-            if hit(ctrl, key) {
+            if !id.is_empty() && hit(ctrl, key) {
                 run.push((id, Value::Null));
             }
         }
@@ -1006,7 +1064,7 @@ impl MailUi {
         if !typing && hit(ctrl, Key::Z) {
             run.push(("edit.undo", Value::Null));
         }
-        if !typing {
+        if !typing && !calendar {
             for (key, id) in [
                 (Key::ArrowDown, "mail.next"),
                 (Key::ArrowUp, "mail.previous"),
@@ -1041,7 +1099,11 @@ impl MailUi {
         let p = ui.painter_at(rect);
         p.rect_filled(rect, 0.0, t.title_bg);
         icons::paint(&p, Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(16.0, 16.0)), Icon::Mail, t.title_text);
-        let place = self.session.current_folder().map(|f| f.name.clone()).unwrap_or_else(|| "No data file".to_string());
+        let place = if self.session.module == openmailclient_engine::Module::Calendar {
+            "Calendar".to_string()
+        } else {
+            self.session.current_folder().map(|f| f.name.clone()).unwrap_or_else(|| "No data file".to_string())
+        };
         let store = self.session.current.and_then(|(s, _)| self.session.stores.get(s)).map(|s| s.display_name()).unwrap_or_default();
         let caption = if store.is_empty() { format!("{place} - OpenMailClient") } else { format!("{place} - {store} - OpenMailClient") };
 

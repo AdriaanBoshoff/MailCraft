@@ -354,7 +354,49 @@ pub fn sample_store(now: i64) -> MemStore {
         lure.props.set(pid::MESSAGE_FLAGS, PropValue::Int32(0x10));
         s.push_item(junk, lure);
     }
+    let calendar = s.push_folder(None, "Calendar", "IPF.Appointment");
+    for item in appointments(now) {
+        s.push_item(calendar, item);
+    }
     s
+}
+
+/// The sample calendar: a few days of our own invented plans around `now`, two of them at the
+/// same time so they stand side by side, and events that last all day.
+fn appointments(now: i64) -> Vec<Item> {
+    use openmailclient_model::calendar::{Appointment, Busy};
+    let today = now.div_euclid(DAY).saturating_mul(DAY);
+    let at = |day: i64, hour: i64, minute: i64| today.saturating_add(day * DAY + hour * HOUR + minute * MINUTE);
+    let plan = |subject: &str, location: &str, start: i64, end: i64, busy: Busy| Appointment {
+        subject: subject.to_string(),
+        location: location.to_string(),
+        start,
+        end,
+        all_day: false,
+        busy,
+        reminder: Some(15),
+        recurring: false,
+        meeting: false,
+    };
+    let mut list = vec![
+        plan("Team stand-up", "Room 2", at(0, 9, 30), at(0, 9, 45), Busy::Busy),
+        plan("Review the spring catalogue", "Studio", at(0, 14, 0), at(0, 15, 30), Busy::Busy),
+        plan("Call with the print shop", "Phone", at(0, 14, 30), at(0, 15, 0), Busy::Tentative),
+        plan("Lunch with Priya", "Harbour Cafe", at(-1, 12, 30), at(-1, 13, 30), Busy::OutOfOffice),
+        plan("Dentist", "Bridge Street Clinic", at(1, 8, 0), at(1, 9, 0), Busy::OutOfOffice),
+        plan("Budget planning", "Room 4", at(2, 10, 0), at(2, 12, 0), Busy::Busy),
+        plan("Working from the north office", "", at(3, 9, 0), at(3, 17, 0), Busy::WorkingElsewhere),
+        plan("Volunteer shift at the library", "Riverside Library", at(5, 10, 0), at(5, 13, 0), Busy::Free),
+    ];
+    let mut fair = plan("Book fair", "Exhibition Hall", at(1, 0, 0), at(4, 0, 0), Busy::Free);
+    fair.all_day = true;
+    fair.reminder = None;
+    let mut birthday = plan("Sam's birthday", "", at(-2, 0, 0), at(-1, 0, 0), Busy::Free);
+    birthday.all_day = true;
+    birthday.reminder = None;
+    list.push(fair);
+    list.push(birthday);
+    list.iter().map(Appointment::item).collect()
 }
 
 /// The banner proof in the print shop's mail: our own drawing, made here pixel by pixel. A dark

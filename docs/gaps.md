@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 104 · 2026-10-17 · ranked: the top of the list is what hurts most.
+**Status:** revision 105 · 2026-10-17 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -56,7 +56,7 @@
    text, lists, borders and tables; pictures the message carries are drawn, in the line or at the side with text beside them; pairs of glyphs are kerned; not yet: pictures on a server (on screen they are downloaded when asked for, M4.10; on paper their place is named),
    right-to-left text in the body of a message being written (its one-line fields are done, M3b.8) (see ROADMAP, Do later), several selected rows in Table Style (it prints chosen columns, group headings and the one selected row, M3b.22), other print styles, sending pages to a printer,
    a zoom in the print preview (`file.printPreview`, and the print window), and any comparison with what Outlook prints.
-4. **Calendar, People, Tasks** modules show a placeholder.
+4. **People and Tasks** modules show a placeholder. The Calendar has its views and single appointments (M5.1); recurrence, `.ics`, CalDAV sync, meetings and time zones are scheduled in ROADMAP's M5 plan.
 5. **MCP server and control channel** (`openmailclient-cli mcp`, `--control`) are not built.
 6. **Web build.** The engine and everything under it compiles for wasm32; there is no web app.
 
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 105 · 2026-10-17 — M5.1: the Calendar: views and appointments made, changed and deleted.
 - 104 · 2026-10-17 — M7 (OAuth sign-in) put after the first release; M5 next.
 - 103 · 2026-10-17 — M4.15: an account's servers found from its domain's DNS records; M4 closed.
 - 102 · 2026-10-17 — M4.14: an account's servers found from its address.

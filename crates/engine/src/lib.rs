@@ -29,6 +29,8 @@ mod tests_accounts;
 #[cfg(test)]
 mod tests_arrival;
 #[cfg(test)]
+mod tests_calendar;
+#[cfg(test)]
 mod tests_pictures;
 #[cfg(test)]
 mod tests_receive;
@@ -372,6 +374,8 @@ pub struct Session {
     pub account_dir: Option<std::path::PathBuf>,
     /// Where the messages of IMAP accounts are on their servers, as read before.
     pub places: cmd::imap_sync::Places,
+    /// What the Calendar module shows.
+    pub calendar: cmd::calendar::Shown,
 }
 
 impl Default for Session {
@@ -450,6 +454,7 @@ impl Session {
             journal_dir: None,
             account_dir: None,
             places: cmd::imap_sync::Places::default(),
+            calendar: cmd::calendar::Shown::default(),
             certificates: accounts::Shown::default(),
             print_style: print::Style::default(),
             print_list: print::Listing::default(),

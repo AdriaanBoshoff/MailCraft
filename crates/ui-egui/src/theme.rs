@@ -23,6 +23,8 @@ pub struct Tokens {
     pub flag: Color32,
     pub danger: Color32,
     pub ok: Color32,
+    /// Time marked out of the office in the calendar.
+    pub away: Color32,
     pub info_bar: Color32,
     /// Title bar: background, text and the search field's fill.
     pub title_bg: Color32,
@@ -108,6 +110,7 @@ impl Tokens {
             flag: Color32::from_rgb(0xF0, 0x6A, 0x6A),
             danger: Color32::from_rgb(0xF0, 0x7C, 0x70),
             ok: Color32::from_rgb(0x6C, 0xC0, 0x70),
+            away: Color32::from_rgb(0xB8, 0x8C, 0xD0),
             info_bar: Color32::from_rgb(0x5A, 0x4E, 0x1E),
             title_bg: Color32::from_rgb(0x22, 0x23, 0x25),
             title_text: Color32::from_rgb(0xF2, 0xF2, 0xF2),
@@ -139,6 +142,7 @@ impl Tokens {
             flag: Color32::from_rgb(0xC8, 0x2A, 0x2A),
             danger: Color32::from_rgb(0xB3, 0x26, 0x1E),
             ok: Color32::from_rgb(0x2E, 0x7D, 0x32),
+            away: Color32::from_rgb(0x80, 0x39, 0x7B),
             info_bar: Color32::from_rgb(0xFF, 0xF4, 0xCE),
             title_bg: Color32::from_rgb(0x12, 0x62, 0xB3),
             title_text: Color32::WHITE,

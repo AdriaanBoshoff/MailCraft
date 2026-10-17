@@ -2158,3 +2158,75 @@ fn pictures_are_decoded_off_the_thread_that_draws_the_window() {
     shown.load(&ctx, 2, &other, &openmailclient_model::Item::new_mail(), &Default::default());
     assert!(shown.get("logo").is_none());
 }
+
+/// Draw the whole window for a few frames at `size`.
+fn draw_window(ui: &mut MailUi, size: egui::Vec2) {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    for _ in 0..3 {
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        let mut output = ctx.run_ui(input, |eui| ui.ui(eui));
+        output.textures_delta.clear();
+    }
+}
+
+#[test]
+fn the_calendar_draws_every_view_with_hostile_appointments() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    let today = ui.session.today();
+    let c = openmailclient_model::time::civil(openmailclient_model::calendar::day_start(today, 0), 0);
+    let date = format!("{:04}-{:02}-{:02}", c.year, c.month, c.day);
+    // Long, written from the right, turned round, lasting no time, lasting years, at midnight.
+    for (subject, start, end) in [
+        ("\u{202e}gnol".repeat(500), format!("{date} 00:00"), format!("{date} 00:00")),
+        ("שלום עולם".to_string(), format!("{date} 23:45"), format!("{date} 23:59")),
+        ("years".to_string(), format!("{date} 10:00"), "2031-01-01 10:00".to_string()),
+        ("\u{0}\u{7}\t".to_string(), format!("{date} 10:00"), format!("{date} 10:05")),
+    ] {
+        ui.execute("calendar.new", &json!({ "subject": subject, "start": start, "end": end, "location": "x".repeat(3000) })).unwrap();
+    }
+    for _ in 0..12 {
+        ui.execute("calendar.new", &json!({ "subject": "same time", "start": format!("{date} 12:00") })).unwrap();
+    }
+    for dark in [false, true] {
+        ui.execute("ui.theme", &json!({ "theme": if dark { "dark" } else { "light" } })).unwrap();
+        for view in ["day", "workWeek", "week", "month"] {
+            ui.execute("calendar.view", &json!({ "view": view })).unwrap();
+            for size in [egui::vec2(1280.0, 800.0), egui::vec2(320.0, 240.0), egui::vec2(1.0, 1.0)] {
+                draw_window(&mut ui, size);
+            }
+        }
+    }
+    ui.execute("view.folderPane", &Value::Null).unwrap();
+    draw_window(&mut ui, egui::vec2(900.0, 600.0));
+}
+
+#[test]
+fn the_appointment_window_makes_and_changes_appointments() {
+    let mut ui = MailUi::new(Session::with_sample());
+    ui.execute("nav.module", &json!({ "module": "calendar" })).unwrap();
+    ui.execute("ui.appointment", &Value::Null).unwrap();
+    let mut form = ui.appointment.clone().unwrap();
+    assert!(form.id.is_none() && !form.all_day && form.reminder == Some(15));
+    form.subject = "Planning".to_string();
+    form.start_date = "2026-11-02".to_string();
+    form.start_time = "09:00".to_string();
+    form.end_date = "2026-11-02".to_string();
+    form.end_time = "10:15".to_string();
+    let id = ui.execute("calendar.new", &form.params()).unwrap()["id"].as_u64().unwrap();
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let opened = ui.appointment.clone().unwrap();
+    assert_eq!((opened.id, opened.subject.as_str(), opened.start_time.as_str(), opened.end_time.as_str()), (Some(id), "Planning", "09:00", "10:15"));
+    // All day, the last day given is the last day it lasts.
+    let mut all_day = opened.clone();
+    all_day.all_day = true;
+    all_day.end_date = "2026-11-03".to_string();
+    ui.execute("calendar.change", &all_day.params()).unwrap();
+    ui.execute("ui.appointment", &json!({ "id": id })).unwrap();
+    let again = ui.appointment.clone().unwrap();
+    assert!(again.all_day);
+    assert_eq!((again.start_date.as_str(), again.end_date.as_str()), ("2026-11-02", "2026-11-03"));
+    draw_window(&mut ui, egui::vec2(1280.0, 800.0));
+    assert!(ui.execute("ui.appointment", &json!({ "id": 999_999_999 })).is_err());
+}

@@ -128,14 +128,14 @@ pub const FEATURES: &[Feature] = &[
     f("Message", "Format Text", "Format", "HTML, Plain Text, Rich Text", ""),
     f("Message", "Review", "Proofing", "Spelling & Grammar", ""),
     // Calendar
-    f("Calendar", "Home", "New", "New Appointment", ""),
+    f("Calendar", "Home", "New", "New Appointment", "calendar.new"),
     f("Calendar", "Home", "New", "New Meeting", ""),
-    f("Calendar", "Home", "Go To", "Today", ""),
-    f("Calendar", "Home", "Arrange", "Day, Work Week, Week, Month", ""),
+    f("Calendar", "Home", "Go To", "Today", "calendar.today"),
+    f("Calendar", "Home", "Arrange", "Day, Work Week, Week, Month", "calendar.view"),
     f("Calendar", "Home", "Arrange", "Schedule View", ""),
     f("Calendar", "Home", "Manage Calendars", "Open Calendar", ""),
     f("Calendar", "Appointment", "Options", "Recurrence", ""),
-    f("Calendar", "Appointment", "Options", "Reminder", ""),
+    f("Calendar", "Appointment", "Options", "Reminder", "calendar.change"),
     f("Calendar", "Meeting", "Respond", "Accept, Tentative, Decline", ""),
     // People
     f("People", "Home", "New", "New Contact", ""),

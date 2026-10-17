@@ -52,6 +52,21 @@ const HOME: &[Group] = &[
     ("Find", &[small(Icon::Filter, "Filter Unread", "view.filterUnread"), small(Icon::People, "Address Book", "")]),
 ];
 
+const CALENDAR_HOME: &[Group] = &[
+    ("New", &[big(Icon::NewAppointment, "New\nAppointment", "ui.appointment")]),
+    ("Go To", &[big(Icon::Today, "Today", "calendar.today")]),
+    (
+        "Arrange",
+        &[
+            with(big(Icon::DayView, "Day", "calendar.view"), r#"{"view":"day"}"#),
+            with(big(Icon::WorkWeekView, "Work\nWeek", "calendar.view"), r#"{"view":"workWeek"}"#),
+            with(big(Icon::WeekView, "Week", "calendar.view"), r#"{"view":"week"}"#),
+            with(big(Icon::MonthView, "Month", "calendar.view"), r#"{"view":"month"}"#),
+        ],
+    ),
+    ("Actions", &[small(Icon::Open, "Open", "ui.openAppointment"), small(Icon::Delete, "Delete", "calendar.delete")]),
+];
+
 const SEND_RECEIVE: &[Group] = &[
     (
         "Send & Receive",
@@ -122,6 +137,8 @@ impl MailUi {
         match cmd {
             "" => false,
             "ui.prompt" => true,
+            "ui.openAppointment" => self.session.calendar.selected.is_some(),
+            "ui.appointment" => self.session.is_enabled("calendar.new"),
             c if c.starts_with("ui.") => true,
             c => match menu_of(c) {
                 Some("categorize" | "followup") => self.session.is_enabled("mail.flag"),
@@ -133,7 +150,18 @@ impl MailUi {
         }
     }
 
+    /// A button that stands for what is shown now, such as the Calendar's view.
+    fn checked(&self, b: &Btn) -> bool {
+        b.cmd == "calendar.view" && b.params.contains(&format!("\"{}\"", self.session.calendar.view.name()))
+    }
+
     fn press(&mut self, b: &Btn, below: egui::Pos2) {
+        if b.cmd == "ui.openAppointment" {
+            if let Some(id) = self.session.calendar.selected {
+                self.act("ui.appointment", json!({ "id": id }));
+            }
+            return;
+        }
         if let Some(menu) = menu_of(b.cmd) {
             self.act("ui.menu", json!({ "menu": menu, "x": below.x, "y": below.y }));
         } else {
@@ -143,6 +171,7 @@ impl MailUi {
 
     fn groups(&self) -> &'static [Group] {
         match self.tab {
+            Tab::Home if self.session.module == openmailclient_engine::Module::Calendar => CALENDAR_HOME,
             Tab::Home => HOME,
             Tab::SendReceive => SEND_RECEIVE,
             Tab::Folder => FOLDER,
@@ -176,6 +205,9 @@ impl MailUi {
                 let r = Rect::from_min_size(pos2(x, top), vec2(w, h));
                 let on = self.available(b.cmd);
                 let resp = ui.interact(r, egui::Id::new(("ribbon1", *name, b.label)), if on { Sense::click() } else { Sense::hover() });
+                if self.checked(b) {
+                    p.rect_filled(r, 4.0, t.selected);
+                }
                 if on && resp.hovered() {
                     p.rect_filled(r, 4.0, t.hover);
                 }
@@ -216,6 +248,9 @@ impl MailUi {
                     let r = Rect::from_min_size(pos2(x, top), vec2(w, 66.0));
                     let on = self.available(b.cmd);
                     let resp = ui.interact(r, egui::Id::new(("ribbon", *name, b.label)), if on { Sense::click() } else { Sense::hover() });
+                    if self.checked(b) {
+                        p.rect_filled(r, 3.0, t.selected);
+                    }
                     if on && resp.hovered() {
                         p.rect_filled(r, 3.0, t.hover);
                     }

@@ -45,6 +45,14 @@ pub enum Icon {
     Back,
     Open,
     Page,
+    NewAppointment,
+    Today,
+    DayView,
+    WorkWeekView,
+    WeekView,
+    MonthView,
+    Bell,
+    Clock,
 }
 
 struct Pen<'a> {
@@ -284,6 +292,68 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.line(&[(9.5, 1.5), (9.5, 4.5), (12.5, 4.5)]);
             pen.line(&[(5.5, 8.0), (10.5, 8.0)]);
             pen.line(&[(5.5, 11.0), (10.5, 11.0)]);
+        }
+        Icon::NewAppointment => {
+            pen.closed(&[(1.5, 4.5), (12.0, 4.5), (12.0, 14.0), (1.5, 14.0)]);
+            pen.line(&[(1.5, 7.5), (12.0, 7.5)]);
+            pen.line(&[(4.5, 3.0), (4.5, 6.0)]);
+            pen.line(&[(13.0, 0.5), (13.0, 4.5)]);
+            pen.line(&[(11.0, 2.5), (15.0, 2.5)]);
+            pen.dot(5.0, 10.5, 0.7);
+            pen.dot(8.0, 10.5, 0.7);
+        }
+        Icon::Today => {
+            pen.closed(&[(2.0, 3.5), (14.0, 3.5), (14.0, 13.5), (2.0, 13.5)]);
+            pen.line(&[(2.0, 6.5), (14.0, 6.5)]);
+            pen.line(&[(5.0, 2.0), (5.0, 5.0)]);
+            pen.line(&[(11.0, 2.0), (11.0, 5.0)]);
+            pen.filled(&[(6.0, 8.5), (10.0, 8.5), (10.0, 12.0), (6.0, 12.0)]);
+        }
+        // The views: a page cut into the columns or squares it shows.
+        Icon::DayView => {
+            pen.closed(&[(3.0, 2.5), (13.0, 2.5), (13.0, 13.5), (3.0, 13.5)]);
+            pen.line(&[(3.0, 5.0), (13.0, 5.0)]);
+            pen.filled(&[(5.0, 7.0), (11.0, 7.0), (11.0, 9.5), (5.0, 9.5)]);
+        }
+        Icon::WorkWeekView | Icon::WeekView => {
+            let n = if icon == Icon::WeekView { 7.0 } else { 5.0 };
+            pen.closed(&[(1.5, 2.5), (14.5, 2.5), (14.5, 13.5), (1.5, 13.5)]);
+            pen.line(&[(1.5, 5.0), (14.5, 5.0)]);
+            let w = 13.0 / n;
+            let mut x = 1.5 + w;
+            while x < 14.4 {
+                pen.line(&[(x, 5.0), (x, 13.5)]);
+                x += w;
+            }
+        }
+        Icon::MonthView => {
+            pen.closed(&[(1.5, 2.5), (14.5, 2.5), (14.5, 13.5), (1.5, 13.5)]);
+            for y in [5.0, 7.8, 10.6] {
+                pen.line(&[(1.5, y), (14.5, y)]);
+            }
+            for x in [4.75, 8.0, 11.25] {
+                pen.line(&[(x, 5.0), (x, 13.5)]);
+            }
+        }
+        Icon::Bell => {
+            pen.line(&[
+                (3.0, 11.5),
+                (4.5, 9.5),
+                (4.5, 6.5),
+                (6.0, 3.8),
+                (8.0, 3.0),
+                (10.0, 3.8),
+                (11.5, 6.5),
+                (11.5, 9.5),
+                (13.0, 11.5),
+                (3.0, 11.5),
+            ]);
+            pen.line(&[(6.5, 13.0), (8.0, 14.0), (9.5, 13.0)]);
+            pen.line(&[(8.0, 1.5), (8.0, 3.0)]);
+        }
+        Icon::Clock => {
+            pen.circle(8.0, 8.0, 6.3);
+            pen.line(&[(8.0, 4.0), (8.0, 8.0), (11.0, 9.5)]);
         }
     }
 }
