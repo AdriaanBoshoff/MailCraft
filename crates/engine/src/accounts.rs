@@ -705,6 +705,10 @@ impl Noting {
 }
 
 impl openmailclient_net::Connector for Noting {
+    fn lookup(&self, name: &str, kind: openmailclient_net::dns::Kind) -> Result<Vec<openmailclient_net::dns::Record>, openmailclient_net::NetError> {
+        self.inner.lookup(name, kind)
+    }
+
     fn connect(&self, to: &Endpoint) -> Result<Box<dyn openmailclient_net::Stream>, openmailclient_net::NetError> {
         self.noted(self.inner.connect(to))
     }

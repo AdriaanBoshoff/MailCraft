@@ -124,6 +124,8 @@ pub struct State {
     /// The mail servers that answer, as `host:port`; any other refuses the connection. All
     /// answer when this is `None`.
     pub answers_only: Option<Vec<String>>,
+    /// What the fake name server has, by name: records of every kind.
+    pub records: Vec<(String, crate::dns::Record)>,
 }
 
 impl Default for State {
@@ -147,6 +149,7 @@ impl Default for State {
             own_certificate: None,
             next_validity: 100,
             answers_only: None,
+            records: Vec::new(),
         }
     }
 }
@@ -248,6 +251,15 @@ impl Connector for Fake {
             };
         });
         Ok(Box::new(client))
+    }
+
+    fn lookup(&self, name: &str, kind: crate::dns::Kind) -> Result<Vec<crate::dns::Record>, NetError> {
+        use crate::dns::{Kind, Record};
+        let mut state = lock(&self.state);
+        state.heard.push(format!("DNS {kind:?} {name}"));
+        let name = name.trim_end_matches('.').to_ascii_lowercase();
+        let of_kind = |r: &Record| matches!((r, kind), (Record::Mx { .. }, Kind::Mx) | (Record::Srv { .. }, Kind::Srv));
+        Ok(state.records.iter().filter(|(at, r)| *at == name && of_kind(r)).map(|(_, r)| r.clone()).collect())
     }
 
     /// The fake has no TLS: the same pipe goes on, and the server counts that it was asked.

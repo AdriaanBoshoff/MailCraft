@@ -291,4 +291,14 @@ fn an_accounts_settings_are_found_from_its_address_and_work_as_found() {
     assert!(none.status.contains("were not found"), "{}", none.status);
     assert!(none.run("account.find", &json!({ "email": "not an address" })).is_err());
     assert!(Session::new().run("account.find", &json!({ "email": "sam@bluebird.example" })).is_err(), "a build that cannot reach servers says so");
+
+    // A domain whose mail goes to Google is given Google's servers, through the connector's
+    // lookup as the window's Noting connector passes it on.
+    let mx = openmailclient_net::dns::Record::Mx { preference: 1, exchange: "aspmx.l.google.com".into() };
+    let mut by_mx =
+        with_fake(Fake::new(State { records: vec![("bluebird.example".into(), mx)], answers_only: Some(Vec::new()), ..State::default() }));
+    let found = by_mx.run("account.find", &json!({ "email": "sam@bluebird.example" })).unwrap();
+    assert_eq!(found["from"], "exchanger", "{found}");
+    assert_eq!(found["found"]["incoming"]["host"], "imap.gmail.com", "{found}");
+    assert!(by_mx.status.contains("for the provider that takes its mail"), "{}", by_mx.status);
 }

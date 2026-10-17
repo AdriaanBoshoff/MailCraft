@@ -7,13 +7,15 @@
 //! taken for its own server only, and only when the server shows exactly that certificate;
 //! the server must still prove it holds the certificate's key, as the handshake always asks.
 
+use crate::dns;
 use crate::{About, Connector, Endpoint, Fingerprint, NetError, Protocol, Security, Seen, Stream, one_line, said};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, SignatureScheme, StreamOwned};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::{Read, Write};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -240,4 +242,115 @@ impl Connector for TcpConnector {
     fn secure(&self, plain: Box<dyn Stream>, to: &Endpoint) -> Result<Box<dyn Stream>, NetError> {
         self.tls(plain, to)
     }
+
+    fn lookup(&self, name: &str, kind: dns::Kind) -> Result<Vec<dns::Record>, NetError> {
+        let servers: Vec<SocketAddr> = name_servers().into_iter().map(|ip| SocketAddr::new(ip, 53)).collect();
+        if servers.is_empty() {
+            return Err(NetError::Unsupported("no name server is known on this system".into()));
+        }
+        look_up(&servers, name, kind, DNS_WAIT)
+    }
+}
+
+/// How long a name server is waited for.
+const DNS_WAIT: Duration = Duration::from_secs(3);
+/// Name servers asked before giving up, and answers to other questions heard from one.
+const MAX_NAME_SERVERS: usize = 3;
+const MAX_STRAY_ANSWERS: usize = 8;
+
+/// Ask the name servers in turn, over UDP and over TCP where an answer was cut short
+/// ([RFC 1035] 4.2). Each question has an id of its own no one can guess, and an answer from
+/// another address, or to another question, is not taken.
+pub(crate) fn look_up(servers: &[SocketAddr], name: &str, kind: dns::Kind, wait: Duration) -> Result<Vec<dns::Record>, NetError> {
+    let mut id = [0u8; 2];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut id)
+        .map_err(|_| NetError::Unsupported("no random number could be had".into()))?;
+    let id = u16::from_be_bytes(id);
+    let question = dns::question(id, name, kind)?;
+    let mut last = None;
+    for server in servers.iter().take(MAX_NAME_SERVERS) {
+        let answer = ask_udp(*server, &question, id, name, kind, wait)
+            .and_then(|a| if a.truncated { ask_tcp(*server, &question, id, name, kind, wait) } else { Ok(a) });
+        match answer {
+            Ok(a) => return Ok(a.records),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| NetError::Unsupported("no name server answered".into())))
+}
+
+fn ask_udp(server: SocketAddr, question: &[u8], id: u16, name: &str, kind: dns::Kind, wait: Duration) -> Result<dns::Answer, NetError> {
+    let here: SocketAddr = if server.is_ipv4() { (std::net::Ipv4Addr::UNSPECIFIED, 0).into() } else { (std::net::Ipv6Addr::UNSPECIFIED, 0).into() };
+    let socket = UdpSocket::bind(here)?;
+    // Only what comes from that server is heard.
+    socket.connect(server)?;
+    socket.set_read_timeout(Some(wait))?;
+    socket.send(question)?;
+    let mut buf = vec![0u8; 4096];
+    let mut last = None;
+    for _ in 0..MAX_STRAY_ANSWERS {
+        let n = socket.recv(&mut buf).map_err(crate::conn::io_error)?;
+        match dns::answer(buf.get(..n).unwrap_or_default(), id, name, kind) {
+            Ok(a) => return Ok(a),
+            // Not the answer to this question: the right one may still come.
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or(NetError::Closed))
+}
+
+fn ask_tcp(server: SocketAddr, question: &[u8], id: u16, name: &str, kind: dns::Kind, wait: Duration) -> Result<dns::Answer, NetError> {
+    let mut stream = TcpStream::connect_timeout(&server, wait)?;
+    stream.set_read_timeout(Some(wait))?;
+    stream.set_write_timeout(Some(wait))?;
+    let len = u16::try_from(question.len()).map_err(|_| NetError::Unsupported("a question too long".into()))?;
+    let mut sent = len.to_be_bytes().to_vec();
+    sent.extend_from_slice(question);
+    stream.write_all(&sent)?;
+    let mut len = [0u8; 2];
+    stream.read_exact(&mut len).map_err(crate::conn::io_error)?;
+    let mut msg = vec![0u8; usize::from(u16::from_be_bytes(len))];
+    stream.read_exact(&mut msg).map_err(crate::conn::io_error)?;
+    let answer = dns::answer(&msg, id, name, kind)?;
+    Ok(dns::Answer { records: answer.records, truncated: false })
+}
+
+/// The name servers this system uses, in its order.
+fn name_servers() -> Vec<IpAddr> {
+    #[cfg(windows)]
+    {
+        windows_name_servers()
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::read_to_string("/etc/resolv.conf").map(|text| dns::resolv_conf(&text)).unwrap_or_default()
+    }
+}
+
+/// Windows keeps its name servers in the registry, for all interfaces and for each, set by
+/// hand or given by DHCP.
+#[cfg(windows)]
+fn windows_name_servers() -> Vec<IpAddr> {
+    use windows_registry::LOCAL_MACHINE;
+    let mut out: Vec<IpAddr> = Vec::new();
+    for base in [r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters", r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters"] {
+        let Ok(params) = LOCAL_MACHINE.open(base) else { continue };
+        let mut texts = vec![params.get_string("NameServer"), params.get_string("DhcpNameServer")];
+        if let Ok(interfaces) = params.open("Interfaces")
+            && let Ok(keys) = interfaces.keys()
+        {
+            for key in keys.take(64) {
+                if let Ok(one) = interfaces.open(&key) {
+                    texts.push(one.get_string("NameServer"));
+                    texts.push(one.get_string("DhcpNameServer"));
+                }
+            }
+        }
+        for ip in texts.into_iter().flatten().flat_map(|text| dns::listed(&text)) {
+            if !out.contains(&ip) && !ip.is_unspecified() {
+                out.push(ip);
+            }
+        }
+    }
+    out
 }

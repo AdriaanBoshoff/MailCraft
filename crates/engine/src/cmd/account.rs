@@ -417,6 +417,8 @@ fn find_settings(s: &mut Session, p: &Value) -> CmdResult {
                 let whence = match f.from {
                     find::Source::Known => "as they are known for its provider",
                     find::Source::Published => "as its domain publishes them",
+                    find::Source::Records => "as its domain's DNS records name them",
+                    find::Source::Exchanger => "for the provider that takes its mail",
                     find::Source::Tried => "from servers that answered",
                 };
                 let settings = json!({ "email": email, "kind": kind, "incoming": server_json(&f.incoming), "outgoing": server_json(&f.outgoing), "user": f.user });

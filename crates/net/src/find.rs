@@ -5,17 +5,26 @@
 //! 2. the settings the address's domain publishes for mail programs, an XML file at
 //!    `https://autoconfig.<domain>/mail/config-v1.1.xml` or under
 //!    `https://<domain>/.well-known/autoconfig/`, fetched over HTTPS only;
-//! 3. the usual names of a domain's mail servers (`imap.`, `mail.`, `smtp.` and the domain
+//! 3. the servers the domain names in its DNS SRV records for mail programs ([RFC 6186],
+//!    with the implicit-TLS services of [RFC 8314] first);
+//! 4. the provider that takes the domain's mail, known by its mail exchangers (MX): a domain
+//!    whose mail goes to Google, Microsoft 365, Yahoo, Fastmail, Zoho, iCloud or Yandex is
+//!    given that provider's servers, which are kept here, never names read from the answer;
+//! 5. the usual names of a domain's mail servers (`imap.`, `mail.`, `smtp.` and the domain
 //!    itself), each greeted over TLS, or made secure with STARTTLS, and signed in to by none.
 //!
 //! The address itself is sent to no one: only its domain is named, in the server names asked
 //! for. What a web server sends is hostile: its size is capped, it is read as XML without
 //! anything fetched for it, and a name or port in it that is not one is passed over. A server
-//! that offers no secure connection is never chosen. Finding servers by DNS SRV records
-//! ([RFC 6186]) is a do-later item: it asks for a resolver this program does not have yet.
+//! that offers no secure connection is never chosen. DNS answers are not signed and can be
+//! changed on the way, so what SRV records name comes with a note to check it; it is only
+//! ever filled into the form, for the owner to keep or change, and its certificate is checked
+//! as any server's is.
 //!
 //! [RFC 6186]: https://www.rfc-editor.org/rfc/rfc6186
+//! [RFC 8314]: https://www.rfc-editor.org/rfc/rfc8314
 
+use crate::dns::{Kind, Record};
 use crate::{Connector, Endpoint, NetError, Protocol, Security, http};
 
 /// The settings file is no larger than this.
@@ -33,6 +42,10 @@ pub enum Source {
     Known,
     /// The settings the domain publishes.
     Published,
+    /// The servers the domain's SRV records name.
+    Records,
+    /// The provider its mail exchangers (MX) belong to.
+    Exchanger,
     /// The usual names, tried: each server chosen greeted us.
     Tried,
 }
@@ -42,6 +55,8 @@ impl Source {
         match self {
             Self::Known => "known",
             Self::Published => "published",
+            Self::Records => "records",
+            Self::Exchanger => "exchanger",
             Self::Tried => "tried",
         }
     }
@@ -117,6 +132,129 @@ const KNOWN: &[(&[&str], (&str, u16, Security), (&str, u16, Security), Option<&s
         Some("Yandex signs in mail programs with an app password"),
     ),
 ];
+
+/// Providers known by the names of their mail exchangers: what each name ends with, and the
+/// provider's IMAP and SMTP servers for a domain of its customer's own.
+const EXCHANGERS: &[(&[&str], (&str, u16, Security), (&str, u16, Security), Option<&str>)] = &[
+    (
+        &["google.com", "googlemail.com"],
+        ("imap.gmail.com", 993, Security::Tls),
+        ("smtp.gmail.com", 465, Security::Tls),
+        Some("Google Workspace signs in mail programs with an app password made in the Google account, or with Google's own sign-in (later)"),
+    ),
+    (
+        &["outlook.com"],
+        ("outlook.office365.com", 993, Security::Tls),
+        ("smtp.office365.com", 587, Security::StartTls),
+        Some("Microsoft 365 signs in mail programs with its own sign-in (later); a password alone may be refused"),
+    ),
+    (
+        &["yahoodns.net"],
+        ("imap.mail.yahoo.com", 993, Security::Tls),
+        ("smtp.mail.yahoo.com", 465, Security::Tls),
+        Some("Yahoo signs in mail programs with an app password made in the Yahoo account"),
+    ),
+    (
+        &["messagingengine.com"],
+        ("imap.fastmail.com", 993, Security::Tls),
+        ("smtp.fastmail.com", 465, Security::Tls),
+        Some("Fastmail signs in mail programs with an app password"),
+    ),
+    (&["zoho.com"], ("imap.zoho.com", 993, Security::Tls), ("smtp.zoho.com", 465, Security::Tls), None),
+    (&["zoho.eu"], ("imap.zoho.eu", 993, Security::Tls), ("smtp.zoho.eu", 465, Security::Tls), None),
+    (
+        &["icloud.com"],
+        ("imap.mail.me.com", 993, Security::Tls),
+        ("smtp.mail.me.com", 587, Security::StartTls),
+        Some("Apple signs in mail programs with an app-specific password made in the Apple account"),
+    ),
+    (
+        &["yandex.net"],
+        ("imap.yandex.com", 993, Security::Tls),
+        ("smtp.yandex.com", 465, Security::Tls),
+        Some("Yandex signs in mail programs with an app password"),
+    ),
+];
+
+/// What the owner is told of servers named by DNS records.
+const RECORDS_NOTE: &str =
+    "These servers are named in the domain's DNS records, which can be changed on the way to this computer: check them before signing in";
+
+/// The services a domain may name for reading mail ([RFC 6186] 3.2, [RFC 8314] 5.1), the
+/// implicit-TLS ones first, then those made secure with STARTTLS; and for sending (3.1).
+const INCOMING_SERVICES: &[(&str, Protocol, Security)] = &[
+    ("_imaps._tcp", Protocol::Imap, Security::Tls),
+    ("_imap._tcp", Protocol::Imap, Security::StartTls),
+    ("_pop3s._tcp", Protocol::Pop3, Security::Tls),
+    ("_pop3._tcp", Protocol::Pop3, Security::StartTls),
+];
+const OUTGOING_SERVICES: &[(&str, Security)] = &[("_submissions._tcp", Security::Tls), ("_submission._tcp", Security::StartTls)];
+
+/// The server SRV records name first: the lowest priority, and of that priority the highest
+/// weight ([RFC 2782]; the weight shares a load among servers, and one is chosen here). A
+/// target of `.` says the service is not offered ([RFC 6186] 3.4), and a name or port that is
+/// not one is passed over.
+///
+/// [RFC 2782]: https://www.rfc-editor.org/rfc/rfc2782
+pub fn first_named(records: &[Record]) -> Option<(String, u16)> {
+    records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Srv { priority, weight, port, target } if *port != 0 && is_host(target) => Some((*priority, *weight, target, *port)),
+            _ => None,
+        })
+        .min_by_key(|(priority, weight, ..)| (*priority, std::cmp::Reverse(*weight)))
+        .map(|(.., target, port)| (target.clone(), port))
+}
+
+/// The servers `domain`'s SRV records name; `None` unless both reading and sending are named.
+fn by_records(with: &dyn Connector, email: &str, domain: &str, stopped: &dyn Fn() -> bool) -> Result<Option<Found>, NetError> {
+    let named = |service: &str| -> Result<Option<(String, u16)>, NetError> {
+        if stopped() {
+            return Err(NetError::Unsupported("stopped".into()));
+        }
+        Ok(with.lookup(&format!("{service}.{domain}"), Kind::Srv).ok().and_then(|records| first_named(&records)))
+    };
+    let mut incoming = None;
+    for (service, protocol, security) in INCOMING_SERVICES {
+        if let Some((host, port)) = named(service)? {
+            incoming = Some((*protocol, Server { host, port, security: *security }));
+            break;
+        }
+    }
+    let Some((protocol, incoming)) = incoming else { return Ok(None) };
+    for (service, security) in OUTGOING_SERVICES {
+        if let Some((host, port)) = named(service)? {
+            let outgoing = Server { host, port, security: *security };
+            return Ok(Some(Found { protocol, incoming, outgoing, user: email.trim().to_string(), from: Source::Records, note: Some(RECORDS_NOTE) }));
+        }
+    }
+    Ok(None)
+}
+
+/// The provider whose mail exchanger comes first among `records`, the lowest preference; its
+/// servers are those kept here.
+pub fn exchanger(records: &[Record], email: &str) -> Option<Found> {
+    let first = records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Mx { preference, exchange } => Some((*preference, exchange)),
+            _ => None,
+        })
+        .min_by_key(|(preference, _)| *preference)?
+        .1;
+    let ends = |suffix: &str| first == suffix || first.strip_suffix(suffix).is_some_and(|rest| rest.ends_with('.'));
+    let (_, inc, out, note) = EXCHANGERS.iter().find(|(suffixes, ..)| suffixes.iter().any(|s| ends(s)))?;
+    let server = |(host, port, security): (&str, u16, Security)| Server { host: host.to_string(), port, security };
+    Some(Found {
+        protocol: Protocol::Imap,
+        incoming: server(*inc),
+        outgoing: server(*out),
+        user: email.trim().to_string(),
+        from: Source::Exchanger,
+        note: *note,
+    })
+}
 
 /// An address's local part and domain, the domain in lower case; `None` for what is not one.
 pub fn parts(email: &str) -> Option<(&str, String)> {
@@ -300,6 +438,15 @@ pub fn find(with: &dyn Connector, email: &str, stopped: &dyn Fn() -> bool) -> Re
         {
             return Ok(found);
         }
+    }
+    if let Some(found) = by_records(with, email, &domain, stopped)? {
+        return Ok(found);
+    }
+    if stopped() {
+        return Err(NetError::Unsupported("stopped".into()));
+    }
+    if let Some(found) = with.lookup(&domain, Kind::Mx).ok().and_then(|records| exchanger(&records, email)) {
+        return Ok(found);
     }
     let (incoming, outgoing) = usual(&domain);
     let first = |protocol: Protocol, servers: Vec<Server>| -> Result<Option<Server>, NetError> {

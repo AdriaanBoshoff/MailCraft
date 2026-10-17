@@ -1,13 +1,13 @@
 # OpenMailClient roadmap
 
-**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14); third-party sign-in is the last milestone (M7) · revision 112 · 2026-10-15
+**Status:** M2 (formatted reading) closed; M1's checks against Outlook still open; M3 (writing `.pst`) closed: a mailbox is written as a `.pst`, changes to an open one are kept when saved, settings are kept between runs; the do-later batch (M3b) closed; files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); changes saved on their own (M3c.3); a changed message's size (M3c.4); files from before M3c.1 opened (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7); M3c closed; accounts (M4) in progress: IMAP, POP3 and SMTP clients (M4.1); TLS and the credential store (M4.2); accounts (M4.3); sending (M4.4); receiving (M4.5); Account Settings (M4.6); data files per account and messages laid out as Outlook lays them out (M4.7); pictures downloaded when asked for (M4.10); attachments opened on a double-click (M4.11); IMAP folders taken down as the server has them, the Sent copy put on the server, and IMAP kept in step both ways (M4.8); a server's own certificate trusted on the owner's word (M4.9); new mail told of and Send/Receive on a timer (M4.9); Show Progress (M4.9); Delay Delivery and Expires After (M4.9); only what changed fetched (M4.12); new mail told of as it comes (M4.12); shown as Outlook shows it (M1.8); IMAP folders followed both ways (M4.12); drafts on the server (M4.12); message places read apart from the window (M4.12); pictures decoded off the window's thread (M4.13); servers found from the address (M4.14) and its domain's DNS records (M4.15); M4 closed; third-party sign-in is the last milestone (M7) · revision 113 · 2026-10-15
 
 ## Headline numbers
 
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 52 of 120 (43%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 482, all passing |
+| Tests | 491, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |
@@ -21,7 +21,7 @@
 | M3 | Writing `.pst`: journalled, crash-safe writes; rules and folder changes persist | closed: a mailbox is saved as a new `.pst`, changes to an open Unicode `.pst` are kept when saved, settings are kept between runs. Journalled changes are in M3b and rules in M5; see "Do later (from M2)". Opened in Outlook Classic (M3c.1) |
 | M3b | The do-later batch from M2 and M3 (see "Do later (from M2)") | closed: unsaved changes are journalled (M3b.1), export copies a `.pst` as stored (M3b.2), panes and window kept (M3b.3), right-to-left text outside the body (M3b.4), print's own text shaped (M3b.5), right-to-left lists and quotations (M3b.6), the journal's loose ends (M3b.7), right-to-left text typed in a field (M3b.8), what was left of a right-to-left paragraph (M3b.9), copying out of a PDF tried in a reader (M3b.10), attachments and search-folder rows of a changed message (M3b.11), a save that does not hold the window (M3b.12), the structure check inside nodes (M3b.13), an export that does not hold the window (M3b.14), the other modules' folders named by id (M3b.15), value kinds, header counters and the keep-original choice (M3b.16), attachments with new contents and ones that cannot be read (M3b.17), cells of another type, the check hearing Stop and fill levels (M3b.18), an export of any mailbox on a thread of its own (M3b.19), the structure check for ANSI and 4K-page files (M3b.20), ANSI data files written and kept as ANSI (M3b.21), Table Style columns, headings and selected row, preview zoom (M3b.22), SVG, WebP and TIFF pictures and animation (M3b.23), several pictures at the sides and paper behind dark see-through ones (M3b.24), boxes inside one another and a colour behind the body (M3b.25), borders round text and rounded corners (M3b.26), RTF highlight colours and list overrides (M3b.27), metafiles in full (M3b.28), a save into the data file where it is (M3b.29) |
 | M3c | Proof in Outlook and 4K-page writing | closed: files we write open in Outlook (M3c.1); 4K-page data files written (M3c.2); saving on its own (M3c.3); the size of a changed message (M3c.4); files from before M3c.1 (M3c.5); hidden items exported from an `.ost` (M3c.6); compressed 4K blocks (M3c.7) |
-| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | in progress: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6); each account in a data file of its own, the live check passed (M4.7) |
+| M4 | Accounts: IMAP, POP3 and SMTP behind an account trait, with an in-process fake server for tests | closed: protocol clients and the fake server (M4.1); TCP, TLS and the credential store (M4.2); accounts in the engine (M4.3); sending (M4.4); receiving (M4.5); Account Settings in the window (M4.6); each account in a data file of its own, the live check passed (M4.7); every IMAP folder kept in step both ways (M4.8); certificates trusted on the owner's word, new mail told of, Show Progress, Delay Delivery (M4.9); pictures on command (M4.10); attachments opened (M4.11); CONDSTORE, QRESYNC, IDLE, folders and drafts on the server (M4.12); pictures off the window's thread (M4.13); servers found from the address (M4.14) and its DNS records (M4.15). OAuth sign-in is M7 |
 | M5 | Calendar, People and Tasks modules | not started |
 | M6 | MCP server, control channel, web build | not started |
 | M7 | Third-party sign-in: Gmail, Outlook.com and Microsoft 365, Yahoo and other providers through OAuth 2.0 (SASL XOAUTH2 and OAUTHBEARER, RFC 7628), signed in through the system's browser with PKCE, tokens kept and renewed in the system's credential store, a provider's servers filled in from its address | not started |
@@ -149,7 +149,8 @@
 96. Done: The account's data file read apart: the first receive of a run reads each message's place on the server on the receive's own thread, from the mailbox as it stands (`Store::apart`), not on the window's; what it learns is remembered when the receive ends (M4.12, `imap_sync::Gather`).
 97. Done: Pictures decoded off the thread that draws the window: a message's pictures are decoded on a thread of their own; drawing waits only a moment for them, and a picture not ready yet stands as an empty frame until it is (M4.13, `pictures::Pictures`).
 98. Done: An account's servers found from its address: from what is known of large providers, the settings its domain publishes for mail programs, or the usual server names greeted without signing in; the address itself is sent to no one (M4.14, `crates/net/src/find.rs`, `account.find`, Find settings in Account Settings).
-99. Next: M4.15: the provider found from the domain's mail exchangers (MX) and its RFC 6186 SRV records, read with a DNS client; then M4 closes.
+99. Done: An account's servers found from the DNS too: the servers its domain's RFC 6186 SRV records name, implicit TLS first, and the provider its mail exchangers (MX) belong to, given that provider's own servers; read with a DNS client of our own that takes hostile answers apart safely (M4.15, `crates/net/src/dns.rs`); M4 closed.
+100. Next: M7: third-party sign-in through OAuth 2.0 (Gmail, Microsoft 365, Yahoo), signed in through the system's browser with PKCE, SASL XOAUTH2 and OAUTHBEARER, tokens kept in the system's credential store.
 
 ## Do later (from M2)
 
@@ -240,9 +241,9 @@ table when it lands. The slots are a plan, and an item moves up when it starts t
 | Attachments opened on a double-click (Open, Save As, Cancel), a program or script only saved | done: M4.11 |
 | An attachment shown in the reading pane on a click (Attachment Preview) without another program | M5, with the item windows |
 | ~~An account's servers found from its address (the provider's published settings, the usual names tried)~~ | done: M4.14 |
-| A domain's provider found from its mail exchangers (MX), and RFC 6186 SRV records (a DNS client is needed) | M4.15 |
+| ~~A domain's provider found from its mail exchangers (MX), and RFC 6186 SRV records (a DNS client is needed)~~ | done: M4.15 |
 | A server's own certificate trusted on the owner's word, and kept for that server only | done: M4.9 |
-| Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M4, after the live check |
+| Signing in with OAuth 2 (XOAUTH2, OAUTHBEARER) for providers that ask for it | M7 |
 | A copy of what was sent put in the IMAP server's Sent folder, for servers that do not keep one themselves | done: M4.8 |
 | The IMAP server's other folders taken down into the account's own data file, as the server has them | done: M4.8 |
 | IMAP kept in step both ways: read, flagged, moved and deleted messages going back to the server | done: M4.8 |
@@ -2003,3 +2004,24 @@ The ranked work list is [docs/gaps.md](docs/gaps.md).
   server (only its domain is named, in the names asked for); no outside directory is asked;
   and the owner is told where the settings came from.
   10 tests.
+- **2026-10-17** - M4.15: an account's servers found from its domain's DNS records; M4 closed.
+  Finding an account's servers (`account.find`, Find settings) now asks the DNS between the
+  settings a domain publishes and the usual names: first the services its SRV records name for
+  mail programs (RFC 6186: `_imaps`, `_imap`, `_pop3s`, `_pop3`, `_submissions`, `_submission`,
+  the implicit-TLS ones of RFC 8314 first; the lowest priority, then the highest weight; a
+  target of "." taken as "not offered"), then the provider its mail exchangers belong to
+  (Google Workspace, Microsoft 365, Yahoo, Fastmail, Zoho, iCloud, Yandex), whose servers are
+  the ones kept here and never names read from the answer.
+  A DNS client of our own (`crates/net/src/dns.rs`, RFC 1035): questions with an id no one can
+  guess, asked over UDP of at most three of the system's name servers (from the registry on
+  Windows, `/etc/resolv.conf` elsewhere), again over TCP when an answer is cut short; only an
+  answer from that server, to that question, is taken. Answers are hostile: every length and
+  count is checked against the bytes there are, compression pointers may only point back and
+  are followed at most 16 times, names are at most 255 bytes of letters, digits, hyphens and
+  underscores, and at most 32 records are kept. Lookups go through the connector, so the fake
+  server answers them in tests.
+  Better than Outlook: DNS answers are not signed, so what SRV records name comes with a note
+  to check it, and is only filled into the form; MX only ever leads to a provider's known
+  servers, so a changed answer cannot send the password to a server of its choosing.
+  OAuth sign-in, the one M4 row left, is M7's. 12 tests (a 20 000-try bounded fuzz of answers
+  among them).

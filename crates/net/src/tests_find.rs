@@ -182,3 +182,79 @@ fn hostile_settings_are_passed_over() {
     );
     assert_eq!(find(&f, email, &|| false).unwrap().from, Source::Tried);
 }
+
+fn with_records(records: &[(&str, crate::dns::Record)], answers_only: &[&str]) -> Fake {
+    Fake::new(State {
+        records: records.iter().map(|(at, r)| (at.to_string(), r.clone())).collect(),
+        answers_only: Some(answers_only.iter().map(|s| s.to_string()).collect()),
+        ..State::default()
+    })
+}
+
+fn srv(priority: u16, weight: u16, port: u16, target: &str) -> crate::dns::Record {
+    crate::dns::Record::Srv { priority, weight, port, target: target.into() }
+}
+
+fn mx(preference: u16, exchange: &str) -> crate::dns::Record {
+    crate::dns::Record::Mx { preference, exchange: exchange.into() }
+}
+
+#[test]
+fn the_servers_a_domains_srv_records_name_are_found_first_by_priority_then_weight() {
+    let f = with_records(
+        &[
+            ("_imaps._tcp.bluebird.example", srv(10, 0, 993, "slow.bluebird.example")),
+            ("_imaps._tcp.bluebird.example", srv(0, 1, 993, "light.bluebird.example")),
+            ("_imaps._tcp.bluebird.example", srv(0, 9, 9993, "heavy.bluebird.example")),
+            ("_submission._tcp.bluebird.example", srv(0, 0, 587, "out.bluebird.example")),
+            // An MX that would name Google is not asked for: the records come first.
+            ("bluebird.example", mx(1, "aspmx.l.google.com")),
+        ],
+        &[],
+    );
+    let found = find(&f, "sam@bluebird.example", &|| false).unwrap();
+    assert_eq!(found.from, Source::Records);
+    assert_eq!(found.protocol, Protocol::Imap);
+    assert_eq!(found.incoming, server("heavy.bluebird.example", 9993, Security::Tls));
+    assert_eq!(found.outgoing, server("out.bluebird.example", 587, Security::StartTls));
+    assert!(found.note.is_some_and(|n| n.contains("check")));
+    let heard = f.state().heard.clone();
+    assert!(heard.contains(&"DNS Srv _submissions._tcp.bluebird.example".to_string()), "{heard:?}");
+    assert!(!heard.iter().any(|h| h.contains("DNS Mx") || h.contains("sam")), "{heard:?}");
+}
+
+#[test]
+fn a_domain_whose_mail_goes_to_a_known_provider_is_given_that_providers_servers() {
+    let f = with_records(
+        &[("bluebird.example", mx(20, "alt1.aspmx.l.google.com")), ("bluebird.example", mx(5, "bluebird-example.mail.protection.outlook.com"))],
+        &[],
+    );
+    let found = find(&f, "sam@bluebird.example", &|| false).unwrap();
+    assert_eq!(found.from, Source::Exchanger);
+    assert_eq!(found.incoming, server("outlook.office365.com", 993, Security::Tls));
+    assert_eq!(found.outgoing, server("smtp.office365.com", 587, Security::StartTls));
+    assert_eq!(found.user, "sam@bluebird.example");
+    assert!(found.note.is_some_and(|n| n.contains("Microsoft 365")));
+    // A name that only looks like a provider's is not one.
+    for odd in ["evilgoogle.com", "google.com.evil.example", "outlook.com-x.example"] {
+        assert!(crate::find::exchanger(&[mx(1, odd)], "sam@bluebird.example").is_none(), "{odd}");
+    }
+}
+
+#[test]
+fn hostile_srv_records_are_passed_over_for_the_usual_servers() {
+    let f = with_records(
+        &[
+            // "." says the service is not offered; the others are no servers at all.
+            ("_imaps._tcp.bluebird.example", srv(0, 0, 0, "")),
+            ("_imap._tcp.bluebird.example", srv(0, 0, 0, "imap.bluebird.example")),
+            ("_pop3s._tcp.bluebird.example", srv(0, 0, 995, "evil host")),
+            ("_pop3._tcp.bluebird.example", srv(0, 0, 110, "-x.example")),
+            ("_submissions._tcp.bluebird.example", srv(0, 0, 465, "smtp.bluebird.example")),
+        ],
+        &["imap.bluebird.example:993", "smtp.bluebird.example:465"],
+    );
+    assert_eq!(find(&f, "sam@bluebird.example", &|| false).unwrap().from, Source::Tried);
+    assert!(crate::find::first_named(&[srv(0, 0, 0, "")]).is_none());
+    assert!(crate::find::first_named(&[mx(0, "mx.bluebird.example")]).is_none());
+}

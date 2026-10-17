@@ -1,6 +1,6 @@
 # Gaps
 
-**Status:** revision 102 · 2026-10-14 · ranked: the top of the list is what hurts most.
+**Status:** revision 103 · 2026-10-14 · ranked: the top of the list is what hurts most.
 
 ## Not built
 
@@ -15,7 +15,7 @@
    is sent is put in the server's Sent folder, and read, flagged, moved and deleted messages go
    both ways (M4.8); only what changed is fetched where the server keeps mod-sequences (CONDSTORE,
    QRESYNC, M4.12); new mail is told of as it comes (IDLE, M4.12); folders renamed, moved and deleted are followed both ways (M4.12); drafts are kept on the server as they are written (M4.12);
-   accounts are set up in the window's Account Settings (M4.6), their servers found from the address (M4.14), and each keeps its mail in a
+   accounts are set up in the window's Account Settings (M4.6), their servers found from the address and its domain's DNS records (M4.14, M4.15), and each keeps its mail in a
    data file of its own (M4.7).
 2. **Changes to a data file are kept only for a Unicode or ANSI `.pst`.** `file.save`
    (M3.4) writes what changed into the file where it is, with what it writes over kept in an undo file beside it until the save is checked and read back (M3b.29), or, for a first save that keeps the file as it was and for a file with much unused space, rewrites the whole file beside itself and swaps it in; what we write, saved whole or into the file, opens in
@@ -91,6 +91,7 @@
 
 ## Revision history
 
+- 103 · 2026-10-17 — M4.15: an account's servers found from its domain's DNS records; M4 closed.
 - 102 · 2026-10-17 — M4.14: an account's servers found from its address.
 - 101 · 2026-10-17 — M4.13: pictures decoded off the thread that draws the window.
 - 100 · 2026-10-17 — M4.12: the places of messages read apart from the window.

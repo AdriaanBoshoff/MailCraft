@@ -13,6 +13,7 @@
 
 pub mod cert;
 mod conn;
+pub mod dns;
 pub mod find;
 pub mod http;
 pub mod imap;
@@ -194,6 +195,10 @@ pub trait Connector: Send + Sync {
     /// The same connection after STARTTLS: TLS over it, the certificate checked as `connect`
     /// checks it for that endpoint.
     fn secure(&self, plain: Box<dyn Stream>, to: &Endpoint) -> Result<Box<dyn Stream>, NetError>;
+    /// The records of `kind` the DNS has for `name`; none when the name does not exist.
+    fn lookup(&self, _name: &str, _kind: dns::Kind) -> Result<Vec<dns::Record>, NetError> {
+        Err(NetError::Unsupported("names cannot be looked up from here".into()))
+    }
 }
 
 /// SASL PLAIN ([RFC 4616]): authorisation identity left empty, the user and the password.
@@ -215,6 +220,8 @@ pub(crate) fn one_line(what: &'static str, text: &str) -> Result<(), NetError> {
 mod tests;
 #[cfg(test)]
 mod tests_cert;
+#[cfg(test)]
+mod tests_dns;
 #[cfg(test)]
 mod tests_find;
 #[cfg(test)]
