@@ -7,7 +7,7 @@
 | Measure | Now |
 |---|---|
 | Catalogued Outlook Classic features with a command | 57 of 121 (47%), see [docs/parity-checklist.md](docs/parity-checklist.md) |
-| Tests | 530, all passing |
+| Tests | 531, all passing |
 | File formats read | `.pst`/`.ost` (ANSI, Unicode, 4K pages), `.msg`, `.oft`, `.eml` |
 | File formats written | `.msg`, `.oft`, `.eml`; a message prints to `.pdf` |
 | Protocols | IMAP, POP3 and SMTP over TLS or STARTTLS; HTTPS for pictures on command and for published account settings |

@@ -2530,3 +2530,17 @@ fn the_print_window_prints_on_the_printer_chosen() {
     assert!(ui.preview.is_none());
     assert!(ui.requests.is_empty(), "no PDF file was asked for");
 }
+
+#[test]
+fn a_pressed_or_focused_button_is_readable_in_every_built_in_theme() {
+    for dark in [false, true] {
+        let t = crate::theme::Tokens::named(dark);
+        let ctx = egui::Context::default();
+        t.apply(&ctx);
+        let w = ctx.style_of(if dark { egui::Theme::Dark } else { egui::Theme::Light }).visuals.widgets.clone();
+        for (state, what) in [(&w.inactive, "at rest"), (&w.hovered, "hovered"), (&w.active, "pressed or focused")] {
+            let ratio = crate::theme::contrast(state.fg_stroke.color, state.weak_bg_fill);
+            assert!(ratio >= 4.5, "a button {what} in the {} theme: {ratio:.1}", if dark { "dark" } else { "light" });
+        }
+    }
+}

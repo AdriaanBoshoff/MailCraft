@@ -96,8 +96,11 @@ impl Tokens {
             w.hovered.weak_bg_fill = self.hover;
             w.hovered.bg_stroke = egui::Stroke::new(1.0, self.accent);
             w.hovered.fg_stroke.color = self.text;
-            w.active.weak_bg_fill = self.accent_soft;
-            w.active.bg_stroke = egui::Stroke::new(1.0, self.accent);
+            // Pressed, or holding the keyboard (as a dialog's Cancel does): the tint of what is
+            // selected, whose text the theme's contrast check keeps readable, and a thicker line.
+            w.active.weak_bg_fill = self.selected;
+            w.active.bg_fill = self.selected;
+            w.active.bg_stroke = egui::Stroke::new(2.0, self.accent);
             w.active.fg_stroke.color = self.text;
             for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
                 state.corner_radius = radius;
