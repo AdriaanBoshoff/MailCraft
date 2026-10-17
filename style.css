@@ -118,6 +118,12 @@ h1 span { color: var(--dim); }
 
 figcaption { color: var(--dim); font-size: 14px; margin-top: 10px; }
 
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 28px; }
+
+.gallery .shot img { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14); }
+
+.gallery a { display: block; }
+
 section { padding: 56px 0; }
 
 .band { background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -178,6 +184,7 @@ footer p { margin: 6px 0; }
 
 @media (max-width: 760px) {
   .split { grid-template-columns: 1fr; }
+  .gallery { grid-template-columns: 1fr; }
   nav a:not(.button) { display: none; }
   .hero { padding-top: 32px; }
 }
